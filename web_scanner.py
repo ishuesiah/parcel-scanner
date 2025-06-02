@@ -9,16 +9,15 @@ from config import MYSQL_CONFIG
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # for flashing messages
 
-# ── Create a MySQL pool ──
 db_pool = mysql.connector.pooling.MySQLConnectionPool(
     pool_name         = "flask_pool",
     pool_size         = 5,
     pool_reset_session= True,
-    host              = MYSQL_HOST['northamerica-northeast1-001.proxy.kinsta.app'],
-    port              = MYSQL_PORT['30603'],
-    user              = MYSQL_USER['hemlockandoak'],
-    password          = MYSQL_PASSWORD['oH2=bU8=pW6-zB9+dL7_'],
-    database          = MYSQL_DATABASE['parcel-scanner']
+    host              = os.environ['MYSQL_HOST'],
+    port              = int(os.environ.get('MYSQL_PORT', 3306)),
+    user              = os.environ['MYSQL_USER'],
+    password          = os.environ['MYSQL_PASSWORD'],
+    database          = os.environ['MYSQL_DATABASE']
 )
 
 # ── Minimal in-memory template ──
