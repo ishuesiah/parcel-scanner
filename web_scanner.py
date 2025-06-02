@@ -14,11 +14,11 @@ db_pool = mysql.connector.pooling.MySQLConnectionPool(
     pool_name         = "flask_pool",
     pool_size         = 5,
     pool_reset_session= True,
-    host              = MYSQL_CONFIG['northamerica-northeast1-001.proxy.kinsta.app'],
-    port              = MYSQL_CONFIG['30603'],
-    user              = MYSQL_CONFIG['hemlockandoak'],
-    password          = MYSQL_CONFIG['oH2=bU8=pW6-zB9+dL7_'],
-    database          = MYSQL_CONFIG['parcel-scanner']
+    host              = MYSQL_HOST['northamerica-northeast1-001.proxy.kinsta.app'],
+    port              = MYSQL_PORT['30603'],
+    user              = MYSQL_USER['hemlockandoak'],
+    password          = MYSQL_PASSWORD['oH2=bU8=pW6-zB9+dL7_'],
+    database          = MYSQL_DATABASE['parcel-scanner']
 )
 
 # ── Minimal in-memory template ──
