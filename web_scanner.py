@@ -84,9 +84,9 @@ def index():
     conn = get_mysql_connection()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
-      SELECT Tracking Number, Order Number, Customer Name, Scan Date, Status, Order ID
+      SELECT tracking_number, order_number, customer_name, scan_date, status, order_id
       FROM scans
-      ORDER BY Scan Date DESC
+      ORDER BY scan_date DESC
       LIMIT 10
     """)
     scans = cursor.fetchall()
@@ -115,7 +115,7 @@ def scan():
         conn = get_mysql_connection()
         cursor = conn.cursor()
         sql = """
-          INSERT INTO scans (Tracking Number, Order Number, Customer Name, Scan Date, Status, Order ID)
+          INSERT INTO scans (tracking_number, order_number, customer_name, scan_date, status, order_id)
           VALUES (%s, %s, %s, %s, %s, %s)
         """
         cursor.execute(sql, (code, order_number, customer_name, scan_time, status, order_id))
