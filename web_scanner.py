@@ -60,10 +60,10 @@ PAGE_TEMPLATE = """
     <tbody>
       {% for row in scans %}
       <tr>
-        <td>{{ row.tracking }}</td>
+        <td>{{ row.tracking_number }}</td>
         <td>{{ row.order_number }}</td>
         <td>{{ row.customer_name }}</td>
-        <td>{{ row.scan_time }}</td>
+        <td>{{ row.scan_date }}</td>
         <td>{{ row.status }}</td>
         <td>{{ row.order_id }}</td>
       </tr>
@@ -118,11 +118,11 @@ def scan():
           INSERT INTO scans (tracking_number, order_number, customer_name, scan_date, status, order_id)
           VALUES (%s, %s, %s, %s, %s, %s)
         """
-        cursor.execute(sql, (tracking_number, order_number, customer_name, scan_date, status, order_id))
+        cursor.execute(sql, (code, order_number, customer_name, scan_date, status, order_id))
         conn.commit()
         cursor.close()
         conn.close()
-        flash(f"Recorded scan: {tracking_number}", "success")
+        flash(f"Recorded scan: {code}", "success")
     except mysql.connector.Error as e:
         flash(f"MySQL Error: {e}", "error")
 
