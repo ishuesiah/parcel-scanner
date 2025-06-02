@@ -118,11 +118,11 @@ def scan():
           INSERT INTO scans (tracking_number, order_number, customer_name, scan_date, status, order_id)
           VALUES (%s, %s, %s, %s, %s, %s)
         """
-        cursor.execute(sql, (code, order_number, customer_name, scan_time, status, order_id))
+        cursor.execute(sql, (tracking_number, order_number, customer_name, scan_date, status, order_id))
         conn.commit()
         cursor.close()
         conn.close()
-        flash(f"Recorded scan: {code}", "success")
+        flash(f"Recorded scan: {tracking_number}", "success")
     except mysql.connector.Error as e:
         flash(f"MySQL Error: {e}", "error")
 
