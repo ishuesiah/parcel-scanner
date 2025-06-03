@@ -1,11 +1,11 @@
 # web_scanner.py
 import os
-import json
-import requests
 from flask import Flask, request, redirect, url_for, render_template_string, flash
 import mysql.connector
 from mysql.connector import pooling
 from datetime import datetime
+from config import MYSQL_CONFIG
+import json
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # for flashing messages
