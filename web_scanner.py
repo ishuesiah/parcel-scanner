@@ -13,7 +13,7 @@ import mysql.connector
 from mysql.connector import pooling
 from datetime import datetime
 
-from shopify_api import ShopifyAPI  # unchanged
+from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -34,8 +34,6 @@ def get_mysql_connection():
     return db_pool.get_connection()
 
 # ── Shared navigation snippet ──
-# web_scanner.py (excerpt)
-
 NAVIGATION = """
 <p>
   <a href="{{ url_for('index') }}">Home</a> |
@@ -45,14 +43,163 @@ NAVIGATION = """
 <hr>
 """
 
+# ── Main page template (New Batch or In-Batch UI) ──
+MAIN_TEMPLATE = NAVIGATION + r'''
+<style>
+  body { font-family: Arial, sans-serif; margin: 20px; }
+  input[type="text"], select {
+    padding: 8px;
+    font-size: 16px;
+    margin-top: 5px;
+    margin-bottom: 10px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 8px;
+  }
+  th {
+    background-color: #f2f2f2;
+    text-align: left;
+  }
+  tr:nth-child(even) {
+    background-color: #fafafa;
+  }
+  tr:hover {
+    background-color: #f1f1f1;
+  }
+  td {
+    vertical-align: top;
+  }
+  .duplicate-row {
+    background-color: #fdecea !important;
+  }
+  .btn {
+    padding: 8px 12px;
+    font-size: 14px;
+    margin-right: 8px;
+    cursor: pointer;
+  }
+  .btn-new {
+    background: #007bff;
+    color: #fff;
+    border: none;
+  }
+  .btn-delete {
+    background: #c00;
+    color: #fff;
+    border: none;
+  }
+  .btn-batch {
+    background: #28a745;
+    color: #fff;
+    border: none;
+  }
+  .flash {
+    color: green;
+    margin-bottom: 10px;
+  }
+</style>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, msg in messages %}
+    <div class="flash">{{ msg }}</div>
+  {% endfor %}
+{% endwith %}
+
+{% if not current_batch %}
+  <h2>Create New Batch</h2>
+  <form action="{{ url_for('new_batch') }}" method="post">
+    <label for="carrier"><strong>Carrier:</strong></label><br>
+    <select name="carrier" id="carrier" required>
+      <option value="">-- Select Carrier --</option>
+      <option value="UPS">UPS</option>
+      <option value="Canada Post">Canada Post</option>
+      <option value="DHL">DHL</option>
+    </select>
+    <br>
+    <button type="submit" class="btn btn-new">Start Batch</button>
+  </form>
+{% else %}
+  <h2>Batch #{{ current_batch.id }}  (Carrier: {{ current_batch.carrier }})</h2>
+  <p>
+    <em>Batch created at: {{ current_batch.created_at }}</em>
+    &nbsp;|&nbsp;
+    <a href="{{ url_for('cancel_batch') }}">Cancel This Batch</a>
+  </p>
+
+  <form action="{{ url_for('scan') }}" method="post" autocomplete="off">
+    <label for="code"><strong>Scan Tracking Number:</strong></label><br>
+    <input type="text" name="code" id="code" autofocus required>
+    <button type="submit" class="btn">Submit</button>
+  </form>
+
+  <h3>Scans in This Batch (Last 10)</h3>
+  <form action="{{ url_for('delete_scans') }}" method="post">
+    <table>
+      <thead>
+        <tr>
+          <th>Select</th>
+          <th>Tracking</th><th>Order #</th><th>Customer</th>
+          <th>Scan Time</th><th>Status</th><th>Order ID</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in scans %}
+          <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
+            <td>
+              <input type="checkbox" name="delete_orders" value="{{ row.order_number }}">
+            </td>
+            <td>{{ row.tracking_number }}</td>
+            <td>{{ row.order_number }}</td>
+            <td>{{ row.customer_name }}</td>
+            <td>{{ row.scan_date }}</td>
+            <td>{{ row.status }}</td>
+            <td>{{ row.order_id }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <br>
+    <button type="submit" class="btn btn-delete">Delete Selected</button>
+  </form>
+
+  <br>
+  <form action="{{ url_for('record_batch') }}" method="post">
+    <button type="submit" class="btn btn-batch">Record Carrier Pick-up</button>
+  </form>
+{% endif %}
+'''
+
+# ── “All Batches” template ──
 ALL_BATCHES_TEMPLATE = NAVIGATION + r'''
 <style>
-  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-  th, td { border: 1px solid #ddd; padding: 8px; }
-  th { background-color: #f2f2f2; text-align: left; }
-  tr:nth-child(even) { background-color: #fafafa; }
-  tr:hover { background-color: #f1f1f1; }
-  td { vertical-align: top; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 8px;
+  }
+  th {
+    background-color: #f2f2f2;
+    text-align: left;
+  }
+  tr:nth-child(even) {
+    background-color: #fafafa;
+  }
+  tr:hover {
+    background-color: #f1f1f1;
+  }
+  td {
+    vertical-align: top;
+  }
 </style>
 
 <h2>All Batches</h2>
@@ -82,19 +229,53 @@ ALL_BATCHES_TEMPLATE = NAVIGATION + r'''
 </table>
 '''
 
+# ── “All Scans” template with search box ──
 ALL_SCANS_TEMPLATE = NAVIGATION + r'''
 <style>
-  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-  th, td { border: 1px solid #ddd; padding: 8px; }
-  th { background-color: #f2f2f2; text-align: left; }
-  tr:nth-child(even) { background-color: #fafafa; }
-  tr:hover { background-color: #f1f1f1; }
-  td { vertical-align: top; }
-  .duplicate-row { background-color: #fdecea !important; }
-  .search-form { margin-top: 10px; margin-bottom: 5px; }
-  .search-form input[type="text"] { padding: 6px; font-size: 14px; width: 200px; }
-  .search-form button { padding: 6px 10px; font-size: 14px; }
-  .search-form a { margin-left: 8px; font-size: 14px; text-decoration: none; color: #007bff; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 8px;
+  }
+  th {
+    background-color: #f2f2f2;
+    text-align: left;
+  }
+  tr:nth-child(even) {
+    background-color: #fafafa;
+  }
+  tr:hover {
+    background-color: #f1f1f1;
+  }
+  td {
+    vertical-align: top;
+  }
+  .duplicate-row {
+    background-color: #fdecea !important;
+  }
+  .search-form {
+    margin-top: 10px;
+    margin-bottom: 5px;
+  }
+  .search-form input[type="text"] {
+    padding: 6px;
+    font-size: 14px;
+    width: 200px;
+  }
+  .search-form button {
+    padding: 6px 10px;
+    font-size: 14px;
+  }
+  .search-form a {
+    margin-left: 8px;
+    font-size: 14px;
+    text-decoration: none;
+    color: #007bff;
+  }
 </style>
 
 <h2>All Scans</h2>
@@ -135,43 +316,6 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
   </tbody>
 </table>
 '''
-
-
-# ── “All Scans” template, with search box ──
-ALL_SCANS_TEMPLATE = NAVIGATION + """
-<h2>All Scans</h2>
-
-<form method="get" action="{{ url_for('all_scans') }}">
-  <label for="order_search"><strong>Search by Order #:</strong></label>
-  <input type="text" name="order_number" id="order_search" value="{{ request.args.get('order_number','') }}">
-  <button type="submit" class="btn">Search</button>
-  {% if request.args.get('order_number') %}
-    &nbsp;<a href="{{ url_for('all_scans') }}">Clear</a>
-  {% endif %}
-</form>
-
-<table>
-  <thead>
-    <tr>
-      <th>Tracking</th><th>Order #</th><th>Customer</th>
-      <th>Scan Time</th><th>Status</th><th>Order ID</th><th>Batch ID</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for s in scans %}
-      <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
-        <td>{{ s.tracking_number }}</td>
-        <td>{{ s.order_number }}</td>
-        <td>{{ s.customer_name }}</td>
-        <td>{{ s.scan_date }}</td>
-        <td>{{ s.status }}</td>
-        <td>{{ s.order_id }}</td>
-        <td>{{ s.batch_id or '' }}</td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
-"""
 
 @app.route("/", methods=["GET"])
 def index():
@@ -390,7 +534,7 @@ def all_batches():
     batches = cursor.fetchall()
     cursor.close()
     conn.close()
-    return render_template_string(ALL_BATCHES_TEMPLATE, batches=batches)
+    return render_template_string(ALL_BATCHES_TEMPLATE, batches=batches, navigation=NAVIGATION)
 
 @app.route("/all_scans", methods=["GET"])
 def all_scans():
@@ -416,7 +560,7 @@ def all_scans():
 
     cursor.close()
     conn.close()
-    return render_template_string(ALL_SCANS_TEMPLATE, scans=scans)
+    return render_template_string(ALL_SCANS_TEMPLATE, scans=scans, navigation=NAVIGATION)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
