@@ -287,10 +287,10 @@ def record_batch():
         # 2) Insert into batches table
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         insert_sql = """
-          INSERT INTO batches (created_at, pkg_count, tracking_numbers)
+          INSERT INTO batches (id, created_at, pkg_count, tracking_numbers)
           VALUES (%s, %s, %s)
         """
-        cursor.execute(insert_sql, (created_at, pkg_count, tracking_csv))
+        cursor.execute(insert_sql, (id, created_at, pkg_count, tracking_csv))
         conn.commit()
         cursor.close()
         conn.close()
