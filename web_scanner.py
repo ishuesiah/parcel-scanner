@@ -126,20 +126,14 @@ def index():
     conn.close()
     return render_template_string(PAGE_TEMPLATE, scans=scans)
 
+
 @app.route('/scan', methods=['POST'])
 def scan():
-    """
-    Handle a new scan:
-     - Check for duplicates
-     - Use ShopifyAPI.get_order_by_tracking(...) to fill in order_number, customer_name, order_id
-     - Insert into scans
-    """
-    code = request.form.get('code', '').strip()
+    code = request.form.get('code','').strip()
     if not code:
-        flash(("error", "No code received."))
+        flash(("error","No code received."))
         return redirect(url_for('index'))
 
-    # Defaults:
     order_number  = "N/A"
     customer_name = "No Shopify"
     order_id      = ""
@@ -149,17 +143,18 @@ def scan():
     # 1) Duplicate check
     conn = get_mysql_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM scans WHERE tracking_number = %s", (code,))
+    cursor.execute("SELECT COUNT(*) FROM scans WHERE tracking_number=%s", (code,))
     if cursor.fetchone()[0] > 0:
         status = "Duplicate"
 
-    # 2) Use your new ShopifyAPI class to look up order details
-    api_key      = os.environ.get("SHOPIFY_API_KEY", "")
-    api_secret   = os.environ.get("SHOPIFY_API_SECRET", "")
-    access_token = os.environ.get("SHOPIFY_ACCESS_TOKEN", "")
-    shop_url     = os.environ.get("SHOPIFY_SHOP_URL", "")
-    
-    shopify_api = ShopifyAPI(api_key, api_secret, access_token, shop_url)
+    # 2) Shopify lookup
+    try:
+        shopify_api = ShopifyAPI()  # no args needed now
+    except RuntimeError as e:
+        # If env vars are missing, you’ll see this flash message
+        flash(("error", f"Shopify config error: {e}"))
+        return redirect(url_for('index'))
+
     info = shopify_api.get_order_by_tracking(code)
     if info.get("order_number") and info["order_number"] != "N/A":
         order_number  = info["order_number"]
@@ -168,7 +163,7 @@ def scan():
         if status != "Duplicate":
             status = "Found"
 
-    # 3) Insert into scans table
+    # 3) Insert into scans
     insert_sql = """
       INSERT INTO scans
         (tracking_number, order_number, customer_name, scan_date, status, order_id)
@@ -180,7 +175,7 @@ def scan():
     conn.close()
 
     flash(("success", f"Recorded scan: {code} (Status: {status})"))
-    return redirect(url_for('index'))
+    return redirect(url_for("index"))
 
 @app.route('/delete_scans', methods=['POST'])
 def delete_scans():
