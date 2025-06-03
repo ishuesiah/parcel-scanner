@@ -18,8 +18,8 @@ class ShopifyAPI:
         # Read straight from Kinsta’s environment
         api_key      = os.environ.get("SHOPIFY_API_KEY", "")
         api_secret   = os.environ.get("SHOPIFY_API_SECRET", "")
-        access_token = os.environ.get("SHOPIFY_ACCESS_TOKEN", "")
-        shop_url     = os.environ.get("SHOPIFY_SHOP_URL", "")
+        access_token = os.environ.get("ACCESS_TOKEN", "")
+        shop_url     = os.environ.get("SHOP_URL", "")
         
         if not access_token or not shop_url:
             raise RuntimeError(
