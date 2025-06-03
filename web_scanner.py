@@ -138,7 +138,7 @@ MAIN_TEMPLATE = NAVIGATION + r'''
     <button type="submit" class="btn">Submit</button>
   </form>
 
-  <h3>Scans in This Batch (Last 10)</h3>
+  <h3>Scans in This Batch</h3>
   <form action="{{ url_for('delete_scans') }}" method="post">
     <table>
       <thead>
@@ -339,12 +339,12 @@ def index():
         flash(("error", "Batch not found. Please start a new batch."))
         return redirect(url_for("index"))
 
+    # Fetch all scans in this batch (no LIMIT)
     cursor.execute("""
       SELECT tracking_number, order_number, customer_name, scan_date, status, order_id
         FROM scans
        WHERE batch_id = %s
        ORDER BY scan_date DESC
-       LIMIT 10
     """, (batch_id,))
     scans = cursor.fetchall()
 
@@ -440,7 +440,7 @@ def scan():
         customer_name = info["customer_name"]
         order_id      = info["order_id"] or ""
         if status != "Duplicate":
-            status = "Original"
+            status = "Found"
 
     cursor.execute("""
       INSERT INTO scans
