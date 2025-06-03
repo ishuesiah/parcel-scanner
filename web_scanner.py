@@ -138,18 +138,25 @@ PAGE_TEMPLATE = """
         </tr>
       </thead>
       <tbody>
-        {% for row in scans %}
-        <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
-          <td><input type="checkbox" name="delete_orders" value="{{ row.order_number }}"></td>
-          <td>{{ row.tracking_number }}</td>
-          <td>{{ row.order_number }}</td>
-          <td>{{ row.customer_name }}</td>
-          <td>{{ row.scan_date }}</td>
-          <td>{{ row.status }}</td>
-          <td>{{ row.order_id }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
+  {% for row in scans %}
+  <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
+    <td>
+      <input
+        type="checkbox"
+        name="delete_orders"
+        value="{{ row.order_number }}"
+      >
+    </td>
+    <td>{{ row.tracking_number }}</td>
+    <td>{{ row.order_number }}</td>
+    <td>{{ row.customer_name }}</td>
+    <td>{{ row.scan_date }}</td>
+    <td>{{ row.status }}</td>
+    <td>{{ row.order_id }}</td>
+  </tr>
+  {% endfor %}
+</tbody>
+
     </table>
     <br>
     <button type="submit" class="btn btn-delete">Delete Selected</button>
@@ -169,17 +176,25 @@ def index():
     """Render the scan form and show the last 10 scans, with duplicates highlighted."""
     conn = get_mysql_connection()
     cursor = conn.cursor(dictionary=True)
-    # 1) Fetch last 10 scans (including an 'id' column)
+
+    # Fetch last 10 scans by order_number rather than id
     cursor.execute("""
-      SELECT id, tracking_number, order_number, customer_name, scan_date, status, order_id
-      FROM scans
-      ORDER BY scan_date DESC
-      LIMIT 10
+      SELECT tracking_number,
+             order_number,
+             customer_name,
+             scan_date,
+             status,
+             order_id
+        FROM scans
+       ORDER BY scan_date DESC
+       LIMIT 10
     """)
     scans = cursor.fetchall()
+
     cursor.close()
     conn.close()
     return render_template_string(PAGE_TEMPLATE, scans=scans)
+
 
 @app.route('/scan', methods=['POST'])
 def scan():
