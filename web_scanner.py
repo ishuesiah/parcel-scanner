@@ -440,7 +440,7 @@ def scan():
         customer_name = info["customer_name"]
         order_id      = info["order_id"] or ""
         if status != "Duplicate":
-            status = "Found"
+            status = "Original"
 
     cursor.execute("""
       INSERT INTO scans
