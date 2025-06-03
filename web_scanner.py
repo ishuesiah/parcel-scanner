@@ -140,7 +140,7 @@ PAGE_TEMPLATE = """
       <tbody>
         {% for row in scans %}
         <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
-          <td><input type="checkbox" name="delete_ids" value="{{ row.id }}"></td>
+          <td><input type="checkbox" name="delete_orders" value="{{ row.order_number }}"></td>
           <td>{{ row.tracking_number }}</td>
           <td>{{ row.order_number }}</td>
           <td>{{ row.customer_name }}</td>
@@ -245,27 +245,31 @@ def scan():
 
 @app.route('/delete_scans', methods=['POST'])
 def delete_scans():
-    """Delete any scans whose checkboxes were selected."""
-    ids_to_delete = request.form.getlist('delete_ids')
-    if not ids_to_delete:
-        flash(("error", "No scans selected for deletion."))
+    """Delete any scans whose checkboxes (by order_number) were selected."""
+    orders_to_delete = request.form.getlist('delete_orders')
+    if not orders_to_delete:
+        flash(("error", "No orders selected for deletion."))
         return redirect(url_for('index'))
 
     try:
         conn = get_mysql_connection()
         cursor = conn.cursor()
-        # Build a placeholder string like (%s, %s, ...) for each id
-        placeholders = ','.join(['%s'] * len(ids_to_delete))
-        sql = f"DELETE FROM scans WHERE id IN ({placeholders})"
-        cursor.execute(sql, ids_to_delete)
+
+        # Build placeholders for each order_number
+        placeholders = ','.join(['%s'] * len(orders_to_delete))
+        sql = f"DELETE FROM scans WHERE order_number IN ({placeholders})"
+        cursor.execute(sql, orders_to_delete)
+
         conn.commit()
         cursor.close()
         conn.close()
-        flash(("success", f"Deleted {len(ids_to_delete)} scan(s)."))
+
+        flash(("success", f"Deleted {len(orders_to_delete)} scan(s) by order number."))
     except mysql.connector.Error as e:
         flash(("error", f"MySQL Error: {e}"))
 
     return redirect(url_for('index'))
+
 
 @app.route('/record_batch', methods=['POST'])
 def record_batch():
