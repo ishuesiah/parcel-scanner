@@ -145,7 +145,7 @@ MAIN_TEMPLATE = NAVIGATION + r'''
         <tr>
           <th>Select</th>
           <th>Tracking</th><th>Order #</th><th>Customer</th>
-          <th>Scan Time</th><th>Status</th><th>Order ID</th>
+          <th>Scan Time</th><th>Status</th><th>Order ID</th><th>Carrier</th>
         </tr>
       </thead>
       <tbody>
@@ -160,6 +160,7 @@ MAIN_TEMPLATE = NAVIGATION + r'''
             <td>{{ row.scan_date }}</td>
             <td>{{ row.status }}</td>
             <td>{{ row.order_id }}</td>
+            <td>{{ row.carrier }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -299,6 +300,7 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
       <th>Status</th>
       <th>Order ID</th>
       <th>Batch ID</th>
+      <th>Carrier</th>
     </tr>
   </thead>
   <tbody>
@@ -311,6 +313,7 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
         <td>{{ s.status }}</td>
         <td>{{ s.order_id }}</td>
         <td>{{ s.batch_id or '' }}</td>
+        <td>{{ s.carrier }}</td>
       </tr>
     {% endfor %}
   </tbody>
@@ -339,12 +342,19 @@ def index():
         flash(("error", "Batch not found. Please start a new batch."))
         return redirect(url_for("index"))
 
-    # Fetch all scans in this batch (no LIMIT)
+    # Fetch all scans in this batch, joining to get carrier
     cursor.execute("""
-      SELECT tracking_number, order_number, customer_name, scan_date, status, order_id
-        FROM scans
-       WHERE batch_id = %s
-       ORDER BY scan_date DESC
+      SELECT s.tracking_number,
+             s.order_number,
+             s.customer_name,
+             s.scan_date,
+             s.status,
+             s.order_id,
+             b.carrier
+        FROM scans s
+        JOIN batches b ON s.batch_id = b.id
+       WHERE s.batch_id = %s
+       ORDER BY s.scan_date DESC
     """, (batch_id,))
     scans = cursor.fetchall()
 
@@ -440,7 +450,7 @@ def scan():
         customer_name = info["customer_name"]
         order_id      = info["order_id"] or ""
         if status != "Duplicate":
-            status = "Original"
+            status = "Found"
 
     cursor.execute("""
       INSERT INTO scans
@@ -545,16 +555,32 @@ def all_scans():
 
     if order_search:
         cursor.execute("""
-          SELECT tracking_number, order_number, customer_name, scan_date, status, order_id, batch_id
-            FROM scans
-           WHERE order_number = %s
-           ORDER BY scan_date DESC
+          SELECT s.tracking_number,
+                 s.order_number,
+                 s.customer_name,
+                 s.scan_date,
+                 s.status,
+                 s.order_id,
+                 s.batch_id,
+                 b.carrier
+            FROM scans s
+            JOIN batches b ON s.batch_id = b.id
+           WHERE s.order_number = %s
+           ORDER BY s.scan_date DESC
         """, (order_search,))
     else:
         cursor.execute("""
-          SELECT tracking_number, order_number, customer_name, scan_date, status, order_id, batch_id
-            FROM scans
-           ORDER BY scan_date DESC
+          SELECT s.tracking_number,
+                 s.order_number,
+                 s.customer_name,
+                 s.scan_date,
+                 s.status,
+                 s.order_id,
+                 s.batch_id,
+                 b.carrier
+            FROM scans s
+            JOIN batches b ON s.batch_id = b.id
+           ORDER BY s.scan_date DESC
         """)
     scans = cursor.fetchall()
 
