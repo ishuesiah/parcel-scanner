@@ -147,8 +147,8 @@ MAIN_TEMPLATE = NAVIGATION + r'''
       <thead>
         <tr>
           <th>Select</th>
-          <th>Tracking</th><th>Order #</th><th>Customer</th>
-          <th>Scan Time</th><th>Status</th><th>Order ID</th><th>Carrier</th>
+          <th>Tracking</th><th>Carrier</th><th>Order #</th><th>Customer</th>
+          <th>Scan Time</th><th>Status</th><th>Order ID</th>
         </tr>
       </thead>
       <tbody>
@@ -158,12 +158,12 @@ MAIN_TEMPLATE = NAVIGATION + r'''
               <input type="checkbox" name="delete_orders" value="{{ row.order_number }}">
             </td>
             <td>{{ row.tracking_number }}</td>
+            <td>{{ row.carrier }}</td>
             <td><a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">{{ row.order_number }}</a></td>
             <td><a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">{{ row.customer_name }}</a></td>
             <td>{{ row.scan_date }}</td>
             <td>{{ row.status }}</td>
             <td>{{ row.order_id }}</td>
-            <td>{{ row.carrier }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -297,19 +297,20 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
   <thead>
     <tr>
       <th>Tracking</th>
+      <th>Carrier</th>
       <th>Order #</th>
       <th>Customer</th>
       <th>Scan Time</th>
       <th>Status</th>
       <th>Order ID</th>
       <th>Batch ID</th>
-      <th>Carrier</th>
     </tr>
   </thead>
   <tbody>
     {% for s in scans %}
       <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
         <td>{{ s.tracking_number }}</td>
+        <td>{{ s.carrier }}</td>
         <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.order_number }}</a></td>
         <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.customer_name }}</a></td>
         <td>{{ s.scan_date }}</td>
@@ -475,7 +476,7 @@ def scan():
         customer_name = info["customer_name"]
         order_id      = info["order_id"] or ""
         if status != "Duplicate":
-            status = "Found"
+            status = "Original"
 
     # Insert including the new carrier column
     cursor.execute("""
