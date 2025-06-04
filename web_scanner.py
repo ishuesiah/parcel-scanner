@@ -342,19 +342,18 @@ def index():
         flash(("error", "Batch not found. Please start a new batch."))
         return redirect(url_for("index"))
 
-    # Fetch all scans in this batch, joining to get carrier
+    # Fetch all scans in this batch, including the new carrier column
     cursor.execute("""
-      SELECT s.tracking_number,
-             s.order_number,
-             s.customer_name,
-             s.scan_date,
-             s.status,
-             s.order_id,
-             b.carrier
-        FROM scans s
-        JOIN batches b ON s.batch_id = b.id
-       WHERE s.batch_id = %s
-       ORDER BY s.scan_date DESC
+      SELECT tracking_number,
+             order_number,
+             customer_name,
+             scan_date,
+             status,
+             order_id,
+             carrier
+        FROM scans
+       WHERE batch_id = %s
+       ORDER BY scan_date DESC
     """, (batch_id,))
     scans = cursor.fetchall()
 
@@ -426,9 +425,18 @@ def scan():
     status        = "Original"
     now_str       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Determine carrier based on prefix
+    if code.startswith("1ZAC"):
+        scan_carrier = "UPS"
+    elif code.startswith("2016"):
+        scan_carrier = "Canada Post"
+    else:
+        scan_carrier = ""  # blank or any default you prefer
+
     conn = get_mysql_connection()
     cursor = conn.cursor()
 
+    # Check duplicate within this batch
     cursor.execute("""
       SELECT COUNT(*) FROM scans
        WHERE tracking_number = %s AND batch_id = %s
@@ -436,6 +444,7 @@ def scan():
     if cursor.fetchone()[0] > 0:
         status = "Duplicate"
 
+    # Shopify lookup (unchanged)
     try:
         shopify_api = ShopifyAPI()
     except RuntimeError as e:
@@ -452,17 +461,18 @@ def scan():
         if status != "Duplicate":
             status = "Found"
 
+    # Insert including the new carrier column
     cursor.execute("""
       INSERT INTO scans
-        (tracking_number, order_number, customer_name, scan_date, status, order_id, batch_id)
-      VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """, (code, order_number, customer_name, now_str, status, order_id, batch_id))
+        (tracking_number, carrier, order_number, customer_name, scan_date, status, order_id, batch_id)
+      VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (code, scan_carrier, order_number, customer_name, now_str, status, order_id, batch_id))
     conn.commit()
 
     cursor.close()
     conn.close()
 
-    flash(("success", f"Recorded scan: {code} (Status: {status})"))
+    flash(("success", f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})"))
     return redirect(url_for("index"))
 
 @app.route("/delete_scans", methods=["POST"])
@@ -556,30 +566,28 @@ def all_scans():
     if order_search:
         cursor.execute("""
           SELECT s.tracking_number,
+                 s.carrier,
                  s.order_number,
                  s.customer_name,
                  s.scan_date,
                  s.status,
                  s.order_id,
-                 s.batch_id,
-                 b.carrier
+                 s.batch_id
             FROM scans s
-            JOIN batches b ON s.batch_id = b.id
            WHERE s.order_number = %s
            ORDER BY s.scan_date DESC
         """, (order_search,))
     else:
         cursor.execute("""
           SELECT s.tracking_number,
+                 s.carrier,
                  s.order_number,
                  s.customer_name,
                  s.scan_date,
                  s.status,
                  s.order_id,
-                 s.batch_id,
-                 b.carrier
+                 s.batch_id
             FROM scans s
-            JOIN batches b ON s.batch_id = b.id
            ORDER BY s.scan_date DESC
         """)
     scans = cursor.fetchall()
