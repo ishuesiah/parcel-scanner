@@ -999,6 +999,19 @@ ALL_SCANS_TEMPLATE = r'''
     td a:hover {
       text-decoration: underline;
     }
+    /* Small delete button styling */
+    .btn-delete-small {
+      padding: 4px 8px;
+      font-size: 0.8rem;
+      background-color: #e74c3c;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .btn-delete-small:hover {
+      opacity: 0.92;
+    }
   </style>
 </head>
 <body>
@@ -1048,6 +1061,7 @@ ALL_SCANS_TEMPLATE = r'''
             <th>Status</th>
             <th>Order ID</th>
             <th>Batch ID</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -1069,6 +1083,13 @@ ALL_SCANS_TEMPLATE = r'''
               <td>{{ s.status }}</td>
               <td>{{ s.order_id }}</td>
               <td>{{ s.batch_id or '' }}</td>
+              <td>
+                <form action="{{ url_for('delete_scan') }}" method="post"
+                      onsubmit="return confirm('Are you sure you want to delete this scan?');">
+                  <input type="hidden" name="scan_id" value="{{ s.id }}">
+                  <button type="submit" class="btn-delete-small">Delete</button>
+                </form>
+              </td>
             </tr>
           {% endfor %}
         </tbody>
@@ -1152,16 +1173,18 @@ def index():
         return redirect(url_for("index"))
 
     cursor.execute("""
-      SELECT tracking_number,
-             carrier,
-             order_number,
-             customer_name,
-             scan_date,
-             status,
-             order_id
-        FROM scans
-       WHERE batch_id = %s
-       ORDER BY scan_date DESC
+      SELECT
+        id,
+        tracking_number,
+        carrier,
+        order_number,
+        customer_name,
+        scan_date,
+        status,
+        order_id
+      FROM scans
+     WHERE batch_id = %s
+     ORDER BY scan_date DESC
     """, (batch_id,))
     scans = cursor.fetchall()
 
@@ -1357,6 +1380,27 @@ def delete_scans():
     return redirect(url_for("index"))
 
 
+@app.route("/delete_scan", methods=["POST"])
+def delete_scan():
+    scan_id = request.form.get("scan_id")
+    if not scan_id:
+        flash(("error", "No scan specified for deletion."))
+        return redirect(url_for("all_scans"))
+
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM scans WHERE id = %s", (scan_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        flash(("success", "Scan deleted successfully."))
+    except mysql.connector.Error as e:
+        flash(("error", f"MySQL Error: {e}"))
+
+    return redirect(url_for("all_scans"))
+
+
 @app.route("/record_batch", methods=["POST"])
 def record_batch():
     batch_id = session.pop("batch_id", None)
@@ -1464,7 +1508,8 @@ def all_scans():
     if order_search:
         like_pattern = f"%{order_search}%"
         cursor.execute("""
-          SELECT tracking_number,
+          SELECT id,
+                 tracking_number,
                  carrier,
                  order_number,
                  customer_name,
@@ -1479,7 +1524,8 @@ def all_scans():
         """, (order_search, like_pattern))
     else:
         cursor.execute("""
-          SELECT tracking_number,
+          SELECT id,
+                 tracking_number,
                  carrier,
                  order_number,
                  customer_name,
