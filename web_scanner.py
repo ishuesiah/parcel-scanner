@@ -1031,71 +1031,71 @@ ALL_SCANS_TEMPLATE = r'''
     <!-- ── END SIDEBAR ── -->
 
     <!-- ── MAIN CONTENT ── -->
-    <div class="main-content">
+<div class="main-content">
 
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% for category, msg in messages %}
-          <div class="flash">{{ msg }}</div>
-        {% endfor %}
-      {% endwith %}
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, msg in messages %}
+      <div class="flash">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
 
-      <h2>All Scans</h2>
+  <h2>All Scans</h2>
 
-      <form class="search-form" method="get" action="{{ url_for('all_scans') }}">
-        <label for="order_search"><strong>Search by Order # or Customer Name:</strong></label>
-        <input type="text" name="order_number" id="order_search" value="{{ request.args.get('order_number','') }}">
-        <button type="submit">Search</button>
-        {% if request.args.get('order_number') %}
-          <a href="{{ url_for('all_scans') }}">Clear</a>
-        {% endif %}
-      </form>
+  <form class="search-form" method="get" action="{{ url_for('all_scans') }}">
+    <label for="order_search"><strong>Search by Order # or Customer Name:</strong></label>
+    <input type="text" name="order_number" id="order_search" value="{{ request.args.get('order_number','') }}">
+    <button type="submit">Search</button>
+    {% if request.args.get('order_number') %}
+      <a href="{{ url_for('all_scans') }}">Clear</a>
+    {% endif %}
+  </form>
 
-      <table>
-        <thead>
-          <tr>
-            <th>Tracking</th>
-            <th>Carrier</th>
-            <th>Order #</th>
-            <th>Customer</th>
-            <th>Scan Time</th>
-            <th>Status</th>
-            <th>Order ID</th>
-            <th>Batch ID</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for s in scans %}
-            <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
-              <td>{{ s.tracking_number }}</td>
-              <td>{{ s.carrier }}</td>
-              <td>
-                <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
-                  {{ s.order_number }}
-                </a>
-              </td>
-              <td>
-                <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
-                  {{ s.customer_name }}
-                </a>
-              </td>
-              <td>{{ s.scan_date }}</td>
-              <td>{{ s.status }}</td>
-              <td>{{ s.order_id }}</td>
-              <td>{{ s.batch_id or '' }}</td>
-              <td>
-                <form action="{{ url_for('delete_scan') }}" method="post"
-                      onsubmit="return confirm('Are you sure you want to delete this scan?');">
-                  <input type="hidden" name="scan_id" value="{{ s.id }}">
-                  <button type="submit" class="btn-delete-small">Delete</button>
-                </form>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+  <table>
+    <thead>
+      <tr>
+        <th>Tracking</th>
+        <th>Carrier</th>
+        <th>Order #</th>
+        <th>Customer</th>
+        <th>Scan Time</th>
+        <th>Status</th>
+        <th>Order ID</th>
+        <th>Batch ID</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in scans %}
+        <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
+          <td>{{ s.tracking_number }}</td>
+          <td>{{ s.carrier }}</td>
+          <td>
+            <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+              {{ s.order_number }}
+            </a>
+          </td>
+          <td>
+            <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+              {{ s.customer_name }}
+            </a>
+          </td>
+          <td>{{ s.scan_date }}</td>
+          <td>{{ s.status }}</td>
+          <td>{{ s.order_id }}</td>
+          <td>{{ s.batch_id or '' }}</td>
+          <td>
+            <form action="{{ url_for('delete_scan') }}" method="post"
+                  onsubmit="return confirm('Are you sure you want to delete this scan?');">
+              <input type="hidden" name="order_id" value="{{ s.order_id }}">
+              <button type="submit" class="btn-delete-small">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 
-    </div> <!-- .main-content -->
+</div> <!-- .main-content -->
 
   </div> <!-- .container -->
 
