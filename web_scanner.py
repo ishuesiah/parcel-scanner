@@ -1083,7 +1083,6 @@ ALL_SCANS_TEMPLATE = r'''
         <th>Status</th>
         <th>Order ID</th>
         <th>Batch ID</th>
-        <th>Action</th>
       </tr>
     </thead>
     <tbody>
