@@ -1,4 +1,5 @@
 # web_scanner.py
+
 import os
 import requests
 from flask import (
@@ -618,7 +619,7 @@ ALL_BATCHES_TEMPLATE = r'''
 
 </body>
 </html>
-
+'''
 
 BATCH_VIEW_TEMPLATE = r'''
 <!doctype html>
@@ -1080,6 +1081,7 @@ ALL_SCANS_TEMPLATE = r'''
 </body>
 </html>
 '''
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ── BEFORE REQUEST: require login ──────────────────────────────────────────────
