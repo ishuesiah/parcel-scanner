@@ -310,8 +310,8 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
     {% for s in scans %}
       <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
         <td>{{ s.tracking_number }}</td>
-        <td><a href="https://{{ shop_url }}/admin/store/hemlock-oak/orders/{{ s.order_id }}" target="_blank">{{ s.order_number }}</a></td>
-        <td><a href="https://{{ shop_url }}/admin/store/hemlock-oak/orders/{{ s.order_id }}" target="_blank">{{ s.customer_name }}</a></td>
+        <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.order_number }}</a></td>
+        <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.customer_name }}</a></td>
         <td>{{ s.scan_date }}</td>
         <td>{{ s.status }}</td>
         <td>{{ s.order_id }}</td>
