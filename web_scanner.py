@@ -159,8 +159,16 @@ MAIN_TEMPLATE = NAVIGATION + r'''
             </td>
             <td>{{ row.tracking_number }}</td>
             <td>{{ row.carrier }}</td>
-            <td><a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">{{ row.order_number }}</a></td>
-            <td><a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">{{ row.customer_name }}</a></td>
+            <td>
+              <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                {{ row.order_number }}
+              </a>
+            </td>
+            <td>
+              <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                {{ row.customer_name }}
+              </a>
+            </td>
             <td>{{ row.scan_date }}</td>
             <td>{{ row.status }}</td>
             <td>{{ row.order_id }}</td>
@@ -180,6 +188,7 @@ MAIN_TEMPLATE = NAVIGATION + r'''
 '''
 
 # ── “All Batches” template ──
+#   Now Batch ID is a clickable link to /view_batch/<batch_id>
 ALL_BATCHES_TEMPLATE = NAVIGATION + r'''
 <style>
   table {
@@ -204,6 +213,13 @@ ALL_BATCHES_TEMPLATE = NAVIGATION + r'''
   td {
     vertical-align: top;
   }
+  a.batch-link {
+    color: #007bff;
+    text-decoration: none;
+  }
+  a.batch-link:hover {
+    text-decoration: underline;
+  }
 </style>
 
 <h2>All Batches</h2>
@@ -220,13 +236,105 @@ ALL_BATCHES_TEMPLATE = NAVIGATION + r'''
   <tbody>
     {% for b in batches %}
       <tr>
-        <td>{{ b.id }}</td>
+        <td>
+          <a class="batch-link" href="{{ url_for('view_batch', batch_id=b.id) }}">
+            {{ b.id }}
+          </a>
+        </td>
         <td>{{ b.carrier }}</td>
         <td>{{ b.created_at }}</td>
         <td>{{ b.pkg_count }}</td>
         <td style="max-width: 400px; word-break: break-word;">
           {{ b.tracking_numbers }}
         </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+'''
+
+# ── “Batch Detail” template (new) ──
+#   Shows one batch’s metadata + all scans in that batch
+BATCH_VIEW_TEMPLATE = NAVIGATION + r'''
+<style>
+  body { font-family: Arial, sans-serif; margin: 20px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 8px;
+  }
+  th {
+    background-color: #f2f2f2;
+    text-align: left;
+  }
+  tr:nth-child(even) {
+    background-color: #fafafa;
+  }
+  tr:hover {
+    background-color: #f1f1f1;
+  }
+  td {
+    vertical-align: top;
+  }
+  .duplicate-row {
+    background-color: #fdecea !important;
+  }
+  .btn {
+    padding: 8px 12px;
+    font-size: 14px;
+    margin-right: 8px;
+    cursor: pointer;
+  }
+  .back-link {
+    margin-bottom: 10px;
+    display: inline-block;
+  }
+</style>
+
+<h2>Batch #{{ batch.id }}  (Carrier: {{ batch.carrier }})</h2>
+<p>
+  <em>Created at: {{ batch.created_at }}</em><br>
+  <em>Parcel Count: {{ batch.pkg_count }}</em><br>
+  <em>Tracking Numbers: {{ batch.tracking_numbers }}</em>
+</p>
+
+<a class="back-link" href="{{ url_for('all_batches') }}">← Back to All Batches</a>
+
+<h3>All Scans in Batch {{ batch.id }}</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Tracking</th>
+      <th>Carrier</th>
+      <th>Order #</th>
+      <th>Customer</th>
+      <th>Scan Time</th>
+      <th>Status</th>
+      <th>Order ID</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in scans %}
+      <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
+        <td>{{ row.tracking_number }}</td>
+        <td>{{ row.carrier }}</td>
+        <td>
+          <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+            {{ row.order_number }}
+          </a>
+        </td>
+        <td>
+          <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+            {{ row.customer_name }}
+          </a>
+        </td>
+        <td>{{ row.scan_date }}</td>
+        <td>{{ row.status }}</td>
+        <td>{{ row.order_id }}</td>
       </tr>
     {% endfor %}
   </tbody>
@@ -311,8 +419,16 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
       <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
         <td>{{ s.tracking_number }}</td>
         <td>{{ s.carrier }}</td>
-        <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.order_number }}</a></td>
-        <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.customer_name }}</a></td>
+        <td>
+          <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+            {{ s.order_number }}
+          </a>
+        </td>
+        <td>
+          <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+            {{ s.customer_name }}
+          </a>
+        </td>
         <td>{{ s.scan_date }}</td>
         <td>{{ s.status }}</td>
         <td>{{ s.order_id }}</td>
@@ -571,6 +687,49 @@ def all_batches():
     cursor.close()
     conn.close()
     return render_template_string(ALL_BATCHES_TEMPLATE, batches=batches, navigation=NAVIGATION)
+
+# ── New route: view a single batch’s detail (+ all scans) ──
+@app.route("/view_batch/<int:batch_id>", methods=["GET"])
+def view_batch(batch_id):
+    conn = get_mysql_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # Fetch batch metadata
+    cursor.execute("""
+      SELECT id, carrier, created_at, pkg_count, tracking_numbers
+        FROM batches
+       WHERE id = %s
+    """, (batch_id,))
+    batch = cursor.fetchone()
+    if not batch:
+        cursor.close()
+        conn.close()
+        flash(("error", f"Batch #{batch_id} not found."))
+        return redirect(url_for("all_batches"))
+
+    # Fetch all scans in that batch
+    cursor.execute("""
+      SELECT tracking_number,
+             carrier,
+             order_number,
+             customer_name,
+             scan_date,
+             status,
+             order_id
+        FROM scans
+       WHERE batch_id = %s
+       ORDER BY scan_date DESC
+    """, (batch_id,))
+    scans = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+    return render_template_string(
+        BATCH_VIEW_TEMPLATE,
+        batch=batch,
+        scans=scans,
+        shop_url=SHOP_URL
+    )
 
 @app.route("/all_scans", methods=["GET"])
 def all_scans():
