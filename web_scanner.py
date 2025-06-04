@@ -41,13 +41,12 @@ SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
 # ── Templates ─────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 MAIN_TEMPLATE = r'''
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>ParcelScan</title>
+  <title>H&O Parcel Scans</title>
   <style>
     /* Reset & Base */
     * {
@@ -76,6 +75,12 @@ MAIN_TEMPLATE = r'''
       display: flex;
       flex-direction: column;
       padding: 24px 16px;
+    }
+    .sidebar h1 {
+      font-size: 1.25rem;
+      font-weight: bold;
+      margin-bottom: 16px;
+      color: #2c3e50;
     }
     .sidebar ul {
       list-style: none;
@@ -217,10 +222,9 @@ MAIN_TEMPLATE = r'''
 
   <div class="container">
 
-  <span>ParcelScan</span>
-
     <!-- ── SIDEBAR ── -->
     <div class="sidebar">
+      <h1>H&amp;O Parcel Scans</h1>
       <ul>
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
@@ -256,6 +260,11 @@ MAIN_TEMPLATE = r'''
       {% else %}
         <div class="batch-header">
           <h2>Batch #{{ current_batch.id }} (Carrier: {{ current_batch.carrier }})</h2>
+          <div class="batch-nav">
+            <a href="#">Live Batch</a>
+            <a href="#">Record Carrier Pick‐up</a>
+            <a href="#">Open Batch</a>
+          </div>
         </div>
 
         <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
@@ -339,7 +348,7 @@ ALL_BATCHES_TEMPLATE = r'''
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>All Batches – ParcelScan</title>
+  <title>All Batches – H&O Parcel Scans</title>
   <style>
     /* Reset & Base */
     * {
@@ -368,6 +377,12 @@ ALL_BATCHES_TEMPLATE = r'''
       display: flex;
       flex-direction: column;
       padding: 24px 16px;
+    }
+    .sidebar h1 {
+      font-size: 1.25rem;
+      font-weight: bold;
+      margin-bottom: 16px;
+      color: #2c3e50;
     }
     .sidebar ul {
       list-style: none;
@@ -444,6 +459,7 @@ ALL_BATCHES_TEMPLATE = r'''
 
     <!-- ── SIDEBAR ── -->
     <div class="sidebar">
+      <h1>H&amp;O Parcel Scans</h1>
       <ul>
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
@@ -505,7 +521,7 @@ BATCH_VIEW_TEMPLATE = r'''
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Batch #{{ batch.id }} – ParcelScan</title>
+  <title>Batch #{{ batch.id }} – H&O Parcel Scans</title>
   <style>
     /* Reset & Base */
     * {
@@ -534,6 +550,12 @@ BATCH_VIEW_TEMPLATE = r'''
       display: flex;
       flex-direction: column;
       padding: 24px 16px;
+    }
+    .sidebar h1 {
+      font-size: 1.25rem;
+      font-weight: bold;
+      margin-bottom: 16px;
+      color: #2c3e50;
     }
     .sidebar ul {
       list-style: none;
@@ -639,6 +661,7 @@ BATCH_VIEW_TEMPLATE = r'''
 
     <!-- ── SIDEBAR ── -->
     <div class="sidebar">
+      <h1>H&amp;O Parcel Scans</h1>
       <ul>
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
@@ -717,7 +740,7 @@ ALL_SCANS_TEMPLATE = r'''
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>All Scans – ParcelScan</title>
+  <title>All Scans – H&O Parcel Scans</title>
   <style>
     /* Reset & Base */
     * {
@@ -746,6 +769,12 @@ ALL_SCANS_TEMPLATE = r'''
       display: flex;
       flex-direction: column;
       padding: 24px 16px;
+    }
+    .sidebar h1 {
+      font-size: 1.25rem;
+      font-weight: bold;
+      margin-bottom: 16px;
+      color: #2c3e50;
     }
     .sidebar ul {
       list-style: none;
@@ -853,6 +882,7 @@ ALL_SCANS_TEMPLATE = r'''
 
     <!-- ── SIDEBAR ── -->
     <div class="sidebar">
+      <h1>H&amp;O Parcel Scans</h1>
       <ul>
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
