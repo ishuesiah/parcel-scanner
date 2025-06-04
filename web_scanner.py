@@ -556,6 +556,19 @@ ALL_BATCHES_TEMPLATE = r'''
     .batch-link:hover {
       text-decoration: underline;
     }
+    /* Small delete button styling */
+    .btn-delete-small {
+      padding: 4px 8px;
+      font-size: 0.8rem;
+      background-color: #e74c3c;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .btn-delete-small:hover {
+      opacity: 0.92;
+    }
   </style>
 </head>
 <body>
@@ -592,6 +605,7 @@ ALL_BATCHES_TEMPLATE = r'''
             <th>Created At</th>
             <th>Pkg Count</th>
             <th>Tracking Numbers</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -608,6 +622,13 @@ ALL_BATCHES_TEMPLATE = r'''
               <td style="max-width: 400px; word-break: break-word;">
                 {{ b.tracking_numbers }}
               </td>
+              <td>
+                <form action="{{ url_for('delete_batch') }}" method="post"
+                      onsubmit="return confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.');">
+                  <input type="hidden" name="batch_id" value="{{ b.id }}">
+                  <button type="submit" class="btn-delete-small">Delete</button>
+                </form>
+              </td>
             </tr>
           {% endfor %}
         </tbody>
@@ -620,6 +641,7 @@ ALL_BATCHES_TEMPLATE = r'''
 </body>
 </html>
 '''
+
 
 BATCH_VIEW_TEMPLATE = r'''
 <!doctype html>
@@ -1243,6 +1265,33 @@ def cancel_batch():
 
     flash(("success", f"Batch #{batch_id} canceled."))
     return redirect(url_for("index"))
+
+@app.route("/delete_batch", methods=["POST"])
+def delete_batch():
+    batch_id = request.form.get("batch_id")
+    if not batch_id:
+        flash(("error", "No batch specified for deletion."))
+        return redirect(url_for("all_batches"))
+
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # First delete any scans associated with this batch:
+        cursor.execute("DELETE FROM scans WHERE batch_id = %s", (batch_id,))
+        # Then delete the batch itself:
+        cursor.execute("DELETE FROM batches WHERE id = %s", (batch_id,))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        flash(("success", f"Batch #{batch_id} and its scans have been deleted."))
+    except mysql.connector.Error as e:
+        flash(("error", f"MySQL Error: {e}"))
+
+    return redirect(url_for("all_batches"))
+
 
 
 @app.route("/scan", methods=["POST"])
