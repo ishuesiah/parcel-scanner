@@ -74,16 +74,20 @@ LOGIN_TEMPLATE = r'''
       font-size: 1.5rem;
       color: #2c3e50;
     }
+    /* Center the input and button by giving them a percentage width and auto margins */
     .login-container input[type="password"] {
-      width: 100%;
+      display: block;
+      width: 80%;
+      margin: 0 auto 16px auto;
       padding: 10px 12px;
-      margin-bottom: 16px;
       font-size: 1rem;
       border: 1px solid #ccc;
       border-radius: 4px;
     }
     .login-container .btn {
-      width: 100%;
+      display: block;
+      width: 80%;
+      margin: 0 auto;
       padding: 10px 0;
       font-size: 1rem;
       background-color: #2d85f8;
@@ -611,6 +615,7 @@ ALL_BATCHES_TEMPLATE = r'''
 </body>
 </html>
 '''
+
 
 BATCH_VIEW_TEMPLATE = r'''
 <!doctype html>
