@@ -317,7 +317,6 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
         <td>{{ s.status }}</td>
         <td>{{ s.order_id }}</td>
         <td>{{ s.batch_id or '' }}</td>
-        <td>{{ s.carrier }}</td>
       </tr>
     {% endfor %}
   </tbody>
