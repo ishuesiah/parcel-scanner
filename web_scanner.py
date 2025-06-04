@@ -44,7 +44,6 @@ APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 # ── Templates ─────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Login page template
 LOGIN_TEMPLATE = r'''
 <!doctype html>
 <html lang="en">
@@ -63,7 +62,7 @@ LOGIN_TEMPLATE = r'''
       justify-content: center;
     }
     .login-container {
-      background: #ffffff;
+      background: #fff;
       padding: 32px 24px;
       border-radius: 8px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.1);
@@ -173,6 +172,16 @@ MAIN_TEMPLATE = r'''
       font-weight: 500;
     }
     .sidebar a:hover {
+      text-decoration: underline;
+    }
+    .sidebar .logout {
+      margin-top: auto;
+      color: #e74c3c;
+      font-size: 0.95rem;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .sidebar .logout:hover {
       text-decoration: underline;
     }
 
@@ -307,6 +316,7 @@ MAIN_TEMPLATE = r'''
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
       </ul>
+      <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
     </div>
     <!-- ── END SIDEBAR ── -->
 
@@ -476,6 +486,16 @@ ALL_BATCHES_TEMPLATE = r'''
     .sidebar a:hover {
       text-decoration: underline;
     }
+    .sidebar .logout {
+      margin-top: auto;
+      color: #e74c3c;
+      font-size: 0.95rem;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .sidebar .logout:hover {
+      text-decoration: underline;
+    }
 
     /* ── MAIN CONTENT ── */
     .main-content {
@@ -541,6 +561,7 @@ ALL_BATCHES_TEMPLATE = r'''
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
       </ul>
+      <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
     </div>
     <!-- ── END SIDEBAR ── -->
 
@@ -590,7 +611,6 @@ ALL_BATCHES_TEMPLATE = r'''
 </body>
 </html>
 '''
-
 
 BATCH_VIEW_TEMPLATE = r'''
 <!doctype html>
@@ -647,6 +667,16 @@ BATCH_VIEW_TEMPLATE = r'''
       font-weight: 500;
     }
     .sidebar a:hover {
+      text-decoration: underline;
+    }
+    .sidebar .logout {
+      margin-top: auto;
+      color: #e74c3c;
+      font-size: 0.95rem;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .sidebar .logout:hover {
       text-decoration: underline;
     }
 
@@ -743,6 +773,7 @@ BATCH_VIEW_TEMPLATE = r'''
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
       </ul>
+      <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
     </div>
     <!-- ── END SIDEBAR ── -->
 
@@ -867,6 +898,16 @@ ALL_SCANS_TEMPLATE = r'''
     .sidebar a:hover {
       text-decoration: underline;
     }
+    .sidebar .logout {
+      margin-top: auto;
+      color: #e74c3c;
+      font-size: 0.95rem;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .sidebar .logout:hover {
+      text-decoration: underline;
+    }
 
     /* ── MAIN CONTENT ── */
     .main-content {
@@ -963,6 +1004,7 @@ ALL_SCANS_TEMPLATE = r'''
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
       </ul>
+      <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
     </div>
     <!-- ── END SIDEBAR ── -->
 
@@ -1039,7 +1081,7 @@ ALL_SCANS_TEMPLATE = r'''
 @app.before_request
 def require_login():
     # Allow access to login page, static files, and favicon
-    if request.endpoint in ("login", "static", None):
+    if request.endpoint in ("login", "static", "favicon"):
         return
     # If not authenticated, redirect to login
     if not session.get("authenticated"):
@@ -1056,11 +1098,20 @@ def login():
     if request.method == "POST":
         pw = request.form.get("password", "")
         if pw == APP_PASSWORD:
+            session.clear()
             session["authenticated"] = True
+            # Ensure the cookie is a session‐cookie (expires on browser close)
+            session.permanent = False
             return redirect(url_for("index"))
         else:
             error_msg = "Invalid password. Please try again."
     return render_template_string(LOGIN_TEMPLATE, error=error_msg)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 @app.route("/", methods=["GET"])
