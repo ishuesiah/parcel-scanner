@@ -147,8 +147,8 @@ MAIN_TEMPLATE = NAVIGATION + r'''
       <thead>
         <tr>
           <th>Select</th>
-          <th>Tracking</th><th>Order #</th><th>Customer</th>
-          <th>Scan Time</th><th>Status</th><th>Order ID</th><th>Carrier</th>
+          <th>Tracking</th><th>Carrier</th><th>Order #</th><th>Customer</th>
+          <th>Scan Time</th><th>Status</th><th>Order ID</th>
         </tr>
       </thead>
       <tbody>
@@ -310,13 +310,13 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
     {% for s in scans %}
       <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
         <td>{{ s.tracking_number }}</td>
+        <td>{{ s.carrier }}</td>
         <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.order_number }}</a></td>
         <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.customer_name }}</a></td>
         <td>{{ s.scan_date }}</td>
         <td>{{ s.status }}</td>
         <td>{{ s.order_id }}</td>
         <td>{{ s.batch_id or '' }}</td>
-        <td>{{ s.carrier }}</td>
       </tr>
     {% endfor %}
   </tbody>
