@@ -36,414 +36,1555 @@ def get_mysql_connection():
 # Read shop URL for building admin links
 SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
 
-# ── Shared navigation snippet ──
-NAVIGATION = """
-<p>
-  <a href="{{ url_for('index') }}">Home</a> |
-  <a href="{{ url_for('all_batches') }}">View All Batches</a> |
-  <a href="{{ url_for('all_scans') }}">View All Scans</a>
-</p>
-<hr>
-"""
 
-# ── Main page template (New Batch or In-Batch UI) ──
-MAIN_TEMPLATE = NAVIGATION + r'''
-<style>
-  body { font-family: Arial, sans-serif; margin: 20px; }
-  input[type="text"], select {
-    padding: 8px;
-    font-size: 16px;
-    margin-top: 5px;
-    margin-bottom: 10px;
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 10px;
-  }
-  th, td {
-    border: 1px solid #ddd;
-    padding: 8px;
-  }
-  th {
-    background-color: #f2f2f2;
-    text-align: left;
-  }
-  tr:nth-child(even) {
-    background-color: #fafafa;
-  }
-  tr:hover {
-    background-color: #f1f1f1;
-  }
-  td {
-    vertical-align: top;
-  }
-  .duplicate-row {
-    background-color: #fdecea !important;
-  }
-  .btn {
-    padding: 8px 12px;
-    font-size: 14px;
-    margin-right: 8px;
-    cursor: pointer;
-  }
-  .btn-new {
-    background: #007bff;
-    color: #fff;
-    border: none;
-  }
-  .btn-delete {
-    background: #c00;
-    color: #fff;
-    border: none;
-  }
-  .btn-batch {
-    background: #28a745;
-    color: #fff;
-    border: none;
-  }
-  .flash {
-    color: green;
-    margin-bottom: 10px;
-  }
-</style>
+# ─────────────────────────────────────────────────────────────────────────────
+# ── Templates ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
-{% with messages = get_flashed_messages(with_categories=true) %}
-  {% for category, msg in messages %}
-    <div class="flash">{{ msg }}</div>
-  {% endfor %}
-{% endwith %}
 
-{% if not current_batch %}
-  <h2>Create New Batch</h2>
-  <form action="{{ url_for('new_batch') }}" method="post">
-    <label for="carrier"><strong>Carrier:</strong></label><br>
-    <select name="carrier" id="carrier" required>
-      <option value="">-- Select Carrier --</option>
-      <option value="UPS">UPS</option>
-      <option value="Canada Post">Canada Post</option>
-      <option value="DHL">DHL</option>
-    </select>
-    <br>
-    <button type="submit" class="btn btn-new">Start Batch</button>
-  </form>
-{% else %}
-  <h2>Batch #{{ current_batch.id }}  (Carrier: {{ current_batch.carrier }})</h2>
-  <p>
-    <em>Batch created at: {{ current_batch.created_at }}</em>
-    &nbsp;|&nbsp;
-    <a href="{{ url_for('cancel_batch') }}">Cancel This Batch</a>
-  </p>
+MAIN_TEMPLATE = r'''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ParcelScan</title>
 
-  <form action="{{ url_for('scan') }}" method="post" autocomplete="off">
-    <label for="code"><strong>Scan Tracking Number:</strong></label><br>
-    <input type="text" name="code" id="code" autofocus required>
-    <button type="submit" class="btn">Submit</button>
-  </form>
+  <style>
+    /* Reset & Base */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      height: 100%;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f5f6fa;
+      color: #333;
+    }
 
-  <h3>Scans in This Batch</h3>
-  <form action="{{ url_for('delete_scans') }}" method="post">
-    <table>
-      <thead>
-        <tr>
-          <th>Select</th>
-          <th>Tracking</th><th>Carrier</th><th>Order #</th><th>Customer</th>
-          <th>Scan Time</th><th>Status</th><th>Order ID</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in scans %}
-          <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
-            <td>
-              <input type="checkbox" name="delete_orders" value="{{ row.order_number }}">
-            </td>
-            <td>{{ row.tracking_number }}</td>
-            <td>{{ row.carrier }}</td>
-            <td>
-              <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
-                {{ row.order_number }}
-              </a>
-            </td>
-            <td>
-              <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
-                {{ row.customer_name }}
-              </a>
-            </td>
-            <td>{{ row.scan_date }}</td>
-            <td>{{ row.status }}</td>
-            <td>{{ row.order_id }}</td>
-          </tr>
+    /* Layout */
+    .container {
+      display: flex;
+      height: 100vh;
+    }
+
+    /* ── SIDEBAR ── */
+    .sidebar {
+      width: 260px;
+      background-color: #ffffff;
+      border-right: 1px solid #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      padding: 24px 16px;
+    }
+    .sidebar .logo {
+      display: flex;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    .sidebar .logo img {
+      width: 32px;
+      height: 32px;
+      margin-right: 8px;
+    }
+    .sidebar .logo span {
+      font-size: 1.25rem;
+      font-weight: bold;
+      color: #2c3e50;
+    }
+    .sidebar .search-box {
+      position: relative;
+      margin-bottom: 24px;
+    }
+    .sidebar .search-box input[type="text"] {
+      width: 100%;
+      padding: 8px 12px 8px 32px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 0.95rem;
+      color: #333;
+    }
+    .sidebar .search-box .search-icon {
+      position: absolute;
+      top: 50%;
+      left: 8px;
+      transform: translateY(-50%);
+      font-size: 1rem;
+      color: #888;
+    }
+    .sidebar .menu-section {
+      margin-bottom: 16px;
+    }
+    .sidebar .menu-section .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      padding: 8px 4px;
+      font-weight: 600;
+      color: #2c3e50;
+    }
+    .sidebar .menu-section .section-header:hover {
+      color: #1a2540;
+    }
+    .sidebar .menu-section .section-header .arrow {
+      font-size: 0.85rem;
+      transition: transform 0.2s ease;
+    }
+    .sidebar .menu-section .section-header.collapsed .arrow {
+      transform: rotate(-90deg);
+    }
+    .sidebar .menu-section .menu-items {
+      list-style: none;
+      margin-top: 8px;
+      padding-left: 4px;
+    }
+    .sidebar .menu-section .menu-items li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 4px;
+      border-radius: 4px;
+      transition: background-color 0.15s ease;
+    }
+    .sidebar .menu-section .menu-items li:hover {
+      background-color: #f0f1f5;
+    }
+    .sidebar .menu-section .menu-items li a {
+      text-decoration: none;
+      color: #34495e;
+      font-size: 0.95rem;
+    }
+    .sidebar .menu-section .menu-items li .badge {
+      background-color: #2d85f8;
+      color: #fff;
+      border-radius: 12px;
+      padding: 2px 8px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .sidebar .menu-section.collapsed .menu-items {
+      display: none;
+    }
+    .sidebar .spacer {
+      flex: 1;
+    }
+    .sidebar .help-link {
+      margin-top: 24px;
+      padding: 8px 4px;
+      font-size: 0.95rem;
+      color: #34495e;
+      text-decoration: none;
+      border-top: 1px solid #e0e0e0;
+    }
+    .sidebar .help-link:hover {
+      background-color: #f0f1f5;
+      color: #1a2540;
+    }
+
+    /* ── MAIN CONTENT ── */
+    .main-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+    }
+    .flash {
+      padding: 10px 14px;
+      margin-bottom: 16px;
+      border-radius: 4px;
+      background-color: #e0f7e9;
+      color: #2f7a45;
+      font-weight: 500;
+      border: 1px solid #b2e6c2;
+    }
+    .batch-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .batch-header h2 {
+      font-size: 1.5rem;
+      color: #2c3e50;
+    }
+    .batch-nav {
+      display: flex;
+      gap: 24px;
+      font-size: 0.95rem;
+    }
+    .batch-nav a {
+      color: #2d85f8;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .batch-nav a:hover {
+      text-decoration: underline;
+    }
+    form label {
+      font-weight: 600;
+      color: #333;
+    }
+    form input[type="text"], form select {
+      width: 300px;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      margin-top: 4px;
+      margin-bottom: 12px;
+      font-size: 0.95rem;
+    }
+    .btn {
+      padding: 8px 12px;
+      font-size: 0.9rem;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .btn-new {
+      background-color: #2d85f8;
+      color: white;
+    }
+    .btn-delete {
+      background-color: #e74c3c;
+      color: white;
+    }
+    .btn-batch {
+      background-color: #27ae60;
+      color: white;
+    }
+    .btn:hover {
+      opacity: 0.92;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px 8px;
+      font-size: 0.93rem;
+      color: #34495e;
+    }
+    th {
+      background-color: #f2f2f2;
+      text-align: left;
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background-color: #fafafa;
+    }
+    tr:hover {
+      background-color: #f1f1f1;
+    }
+    .duplicate-row {
+      background-color: #fdecea !important;
+    }
+    td a {
+      color: #2d85f8;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    td a:hover {
+      text-decoration: underline;
+    }
+    td input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <!-- ── SIDEBAR ── -->
+    <div class="sidebar">
+      <div class="logo">
+        <img src="https://img.icons8.com/clouds/100/000000/parcel--v1.png" alt="Logo" />
+        <span>ParcelScan</span>
+      </div>
+
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" placeholder="Search parcels…" />
+      </div>
+
+      <div class="menu-section" id="live-scans-section">
+        <div class="section-header">
+          <span>Live Scans</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li>
+            <a href="#">UPS Batch 01/11/25</a>
+            <span class="badge">154</span>
+          </li>
+          <li>
+            <a href="#">DHL Batch 01/09/25</a>
+            <span class="badge">10</span>
+          </li>
+          <li>
+            <a href="#">UPS Batch 01/09/25</a>
+            <span class="badge">5</span>
+          </li>
+          <li>
+            <a href="#">CP Batch 01/08/25</a>
+            <span class="badge">30</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="recorded-pickups-section">
+        <div class="section-header">
+          <span>Recorded Pick‐ups</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">Today’s Pick‐ups</a><span class="badge">—</span></li>
+          <li><a href="#">This Week</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="all-scans-section">
+        <div class="section-header">
+          <span>All Scans</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">View All</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="conflicts-section">
+        <div class="section-header">
+          <span>Conflicts</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">View Conflicts</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="spacer"></div>
+      <a href="#" class="help-link">Help</a>
+    </div>
+    <!-- ── END SIDEBAR ── -->
+
+
+    <!-- ── MAIN CONTENT ── -->
+    <div class="main-content">
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, msg in messages %}
+          <div class="flash">{{ msg }}</div>
         {% endfor %}
-      </tbody>
-    </table>
-    <br>
-    <button type="submit" class="btn btn-delete">Delete Selected</button>
-  </form>
+      {% endwith %}
 
-  <br>
-  <form action="{{ url_for('record_batch') }}" method="post">
-    <button type="submit" class="btn btn-batch">Record Carrier Pick-up</button>
-  </form>
-{% endif %}
+      {% if not current_batch %}
+        <h2 style="margin-bottom: 12px; color: #2c3e50;">Create New Batch</h2>
+        <form action="{{ url_for('new_batch') }}" method="post">
+          <label for="carrier"><strong>Carrier:</strong></label><br>
+          <select name="carrier" id="carrier" required>
+            <option value="">-- Select Carrier --</option>
+            <option value="UPS">UPS</option>
+            <option value="Canada Post">Canada Post</option>
+            <option value="DHL">DHL</option>
+          </select>
+          <br>
+          <button type="submit" class="btn btn-new">Start Batch</button>
+        </form>
+
+      {% else %}
+        <div class="batch-header">
+          <h2>Batch #{{ current_batch.id }} (Carrier: {{ current_batch.carrier }})</h2>
+          <div class="batch-nav">
+            <a href="#">Live Batch</a>
+            <a href="#">Record Carrier Pick‐up</a>
+            <a href="#">Open Batch</a>
+          </div>
+        </div>
+
+        <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
+          <em>Batch created at: {{ current_batch.created_at }}</em>
+          &nbsp;|&nbsp;
+          <a href="{{ url_for('cancel_batch') }}" style="color:#e74c3c; text-decoration:none;">
+            Cancel This Batch
+          </a>
+        </p>
+
+        <!-- Scan form -->
+        <form action="{{ url_for('scan') }}" method="post" autocomplete="off">
+          <label for="code"><strong>Scan Tracking Number:</strong></label><br>
+          <input type="text" name="code" id="code" autofocus required>
+          <button type="submit" class="btn" style="margin-left: 8px;">Submit</button>
+        </form>
+
+        <!-- Scans table -->
+        <h3 style="margin-top: 24px; color:#2c3e50;">Scans in This Batch</h3>
+        <form action="{{ url_for('delete_scans') }}" method="post">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 40px;"> </th>
+                <th>Tracking</th>
+                <th>Carrier</th>
+                <th>Order #</th>
+                <th>Customer</th>
+                <th>Scan Time</th>
+                <th>Status</th>
+                <th>Order ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in scans %}
+                <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
+                  <td>
+                    <input type="checkbox" name="delete_orders" value="{{ row.order_number }}">
+                  </td>
+                  <td style="font-weight: 500;">{{ row.tracking_number }}</td>
+                  <td>{{ row.carrier }}</td>
+                  <td>
+                    <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                      {{ row.order_number }}
+                    </a>
+                  </td>
+                  <td>
+                    <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                      {{ row.customer_name }}
+                    </a>
+                  </td>
+                  <td>{{ row.scan_date }}</td>
+                  <td>{{ row.status }}</td>
+                  <td>{{ row.order_id }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          <br>
+          <button type="submit" class="btn btn-delete">Delete Selected</button>
+        </form>
+
+        <br><br>
+        <form action="{{ url_for('record_batch') }}" method="post">
+          <button type="submit" class="btn btn-batch">Record Carrier Pick‐up</button>
+        </form>
+
+      {% endif %}
+
+    </div> <!-- .main-content -->
+
+  </div> <!-- .container -->
+
+  <script>
+    document.querySelectorAll('.menu-section .section-header').forEach(function(header) {
+      header.addEventListener('click', function() {
+        const section = header.parentElement;
+        section.classList.toggle('collapsed');
+      });
+    });
+  </script>
+</body>
+</html>
 '''
 
-# ── “All Batches” template ──
-#   Now Batch ID is a clickable link to /view_batch/<batch_id>
-ALL_BATCHES_TEMPLATE = NAVIGATION + r'''
-<style>
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 10px;
-  }
-  th, td {
-    border: 1px solid #ddd;
-    padding: 8px;
-  }
-  th {
-    background-color: #f2f2f2;
-    text-align: left;
-  }
-  tr:nth-child(even) {
-    background-color: #fafafa;
-  }
-  tr:hover {
-    background-color: #f1f1f1;
-  }
-  td {
-    vertical-align: top;
-  }
-  a.batch-link {
-    color: #007bff;
-    text-decoration: none;
-  }
-  a.batch-link:hover {
-    text-decoration: underline;
-  }
-</style>
 
-<h2>All Batches</h2>
-<table>
-  <thead>
-    <tr>
-      <th>Batch ID</th>
-      <th>Carrier</th>
-      <th>Created At</th>
-      <th>Pkg Count</th>
-      <th>Tracking Numbers</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for b in batches %}
-      <tr>
-        <td>
-          <a class="batch-link" href="{{ url_for('view_batch', batch_id=b.id) }}">
-            {{ b.id }}
-          </a>
-        </td>
-        <td>{{ b.carrier }}</td>
-        <td>{{ b.created_at }}</td>
-        <td>{{ b.pkg_count }}</td>
-        <td style="max-width: 400px; word-break: break-word;">
-          {{ b.tracking_numbers }}
-        </td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
+ALL_BATCHES_TEMPLATE = r'''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>All Batches – ParcelScan</title>
+
+  <style>
+    /* Reset & Base */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      height: 100%;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f5f6fa;
+      color: #333;
+    }
+
+    /* Layout */
+    .container {
+      display: flex;
+      height: 100vh;
+    }
+
+    /* ── SIDEBAR ── */
+    .sidebar {
+      width: 260px;
+      background-color: #ffffff;
+      border-right: 1px solid #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      padding: 24px 16px;
+    }
+    .sidebar .logo {
+      display: flex;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    .sidebar .logo img {
+      width: 32px;
+      height: 32px;
+      margin-right: 8px;
+    }
+    .sidebar .logo span {
+      font-size: 1.25rem;
+      font-weight: bold;
+      color: #2c3e50;
+    }
+    .sidebar .search-box {
+      position: relative;
+      margin-bottom: 24px;
+    }
+    .sidebar .search-box input[type="text"] {
+      width: 100%;
+      padding: 8px 12px 8px 32px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 0.95rem;
+      color: #333;
+    }
+    .sidebar .search-box .search-icon {
+      position: absolute;
+      top: 50%;
+      left: 8px;
+      transform: translateY(-50%);
+      font-size: 1rem;
+      color: #888;
+    }
+    .sidebar .menu-section {
+      margin-bottom: 16px;
+    }
+    .sidebar .menu-section .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      padding: 8px 4px;
+      font-weight: 600;
+      color: #2c3e50;
+    }
+    .sidebar .menu-section .section-header:hover {
+      color: #1a2540;
+    }
+    .sidebar .menu-section .section-header .arrow {
+      font-size: 0.85rem;
+      transition: transform 0.2s ease;
+    }
+    .sidebar .menu-section .section-header.collapsed .arrow {
+      transform: rotate(-90deg);
+    }
+    .sidebar .menu-section .menu-items {
+      list-style: none;
+      margin-top: 8px;
+      padding-left: 4px;
+    }
+    .sidebar .menu-section .menu-items li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 4px;
+      border-radius: 4px;
+      transition: background-color 0.15s ease;
+    }
+    .sidebar .menu-section .menu-items li:hover {
+      background-color: #f0f1f5;
+    }
+    .sidebar .menu-section .menu-items li a {
+      text-decoration: none;
+      color: #34495e;
+      font-size: 0.95rem;
+    }
+    .sidebar .menu-section .menu-items li .badge {
+      background-color: #2d85f8;
+      color: #fff;
+      border-radius: 12px;
+      padding: 2px 8px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .sidebar .menu-section.collapsed .menu-items {
+      display: none;
+    }
+    .sidebar .spacer {
+      flex: 1;
+    }
+    .sidebar .help-link {
+      margin-top: 24px;
+      padding: 8px 4px;
+      font-size: 0.95rem;
+      color: #34495e;
+      text-decoration: none;
+      border-top: 1px solid #e0e0e0;
+    }
+    .sidebar .help-link:hover {
+      background-color: #f0f1f5;
+      color: #1a2540;
+    }
+
+    /* ── MAIN CONTENT ── */
+    .main-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+    }
+    .flash {
+      padding: 10px 14px;
+      margin-bottom: 16px;
+      border-radius: 4px;
+      background-color: #e0f7e9;
+      color: #2f7a45;
+      font-weight: 500;
+      border: 1px solid #b2e6c2;
+    }
+    h2 {
+      font-size: 1.5rem;
+      color: #2c3e50;
+      margin-bottom: 16px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px 8px;
+      font-size: 0.93rem;
+      color: #34495e;
+    }
+    th {
+      background-color: #f2f2f2;
+      text-align: left;
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background-color: #fafafa;
+    }
+    tr:hover {
+      background-color: #f1f1f1;
+    }
+    .batch-link {
+      color: #2d85f8;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .batch-link:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <!-- ── SIDEBAR ── -->
+    <div class="sidebar">
+      <div class="logo">
+        <img src="https://img.icons8.com/clouds/100/000000/parcel--v1.png" alt="Logo" />
+        <span>ParcelScan</span>
+      </div>
+
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" placeholder="Search parcels…" />
+      </div>
+
+      <div class="menu-section" id="live-scans-section">
+        <div class="section-header">
+          <span>Live Scans</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li>
+            <a href="#">UPS Batch 01/11/25</a>
+            <span class="badge">154</span>
+          </li>
+          <li>
+            <a href="#">DHL Batch 01/09/25</a>
+            <span class="badge">10</span>
+          </li>
+          <li>
+            <a href="#">UPS Batch 01/09/25</a>
+            <span class="badge">5</span>
+          </li>
+          <li>
+            <a href="#">CP Batch 01/08/25</a>
+            <span class="badge">30</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="recorded-pickups-section">
+        <div class="section-header">
+          <span>Recorded Pick‐ups</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">Today’s Pick‐ups</a><span class="badge">—</span></li>
+          <li><a href="#">This Week</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="all-scans-section">
+        <div class="section-header">
+          <span>All Scans</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">View All</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="conflicts-section">
+        <div class="section-header">
+          <span>Conflicts</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">View Conflicts</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="spacer"></div>
+      <a href="#" class="help-link">Help</a>
+    </div>
+    <!-- ── END SIDEBAR ── -->
+
+    <!-- ── MAIN CONTENT ── -->
+    <div class="main-content">
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, msg in messages %}
+          <div class="flash">{{ msg }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      <h2>All Batches</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Batch ID</th>
+            <th>Carrier</th>
+            <th>Created At</th>
+            <th>Pkg Count</th>
+            <th>Tracking Numbers</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in batches %}
+            <tr>
+              <td>
+                <a class="batch-link" href="{{ url_for('view_batch', batch_id=b.id) }}">
+                  {{ b.id }}
+                </a>
+              </td>
+              <td>{{ b.carrier }}</td>
+              <td>{{ b.created_at }}</td>
+              <td>{{ b.pkg_count }}</td>
+              <td style="max-width: 400px; word-break: break-word;">
+                {{ b.tracking_numbers }}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+    </div> <!-- .main-content -->
+
+  </div> <!-- .container -->
+
+  <script>
+    document.querySelectorAll('.menu-section .section-header').forEach(function(header) {
+      header.addEventListener('click', function() {
+        const section = header.parentElement;
+        section.classList.toggle('collapsed');
+      });
+    });
+  </script>
+</body>
+</html>
 '''
 
-# ── “Batch Detail” template (new) ──
-#   Shows one batch’s metadata + all scans in that batch
-BATCH_VIEW_TEMPLATE = NAVIGATION + r'''
-<style>
-  body { font-family: Arial, sans-serif; margin: 20px; }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 10px;
-  }
-  th, td {
-    border: 1px solid #ddd;
-    padding: 8px;
-  }
-  th {
-    background-color: #f2f2f2;
-    text-align: left;
-  }
-  tr:nth-child(even) {
-    background-color: #fafafa;
-  }
-  tr:hover {
-    background-color: #f1f1f1;
-  }
-  td {
-    vertical-align: top;
-  }
-  .duplicate-row {
-    background-color: #fdecea !important;
-  }
-  .btn {
-    padding: 8px 12px;
-    font-size: 14px;
-    margin-right: 8px;
-    cursor: pointer;
-  }
-  .back-link {
-    margin-bottom: 10px;
-    display: inline-block;
-  }
-</style>
 
-<h2>Batch #{{ batch.id }}  (Carrier: {{ batch.carrier }})</h2>
-<p>
-  <em>Created at: {{ batch.created_at }}</em><br>
-  <em>Parcel Count: {{ batch.pkg_count }}</em><br>
-  <em>Tracking Numbers: {{ batch.tracking_numbers }}</em>
-</p>
+BATCH_VIEW_TEMPLATE = r'''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Batch #{{ batch.id }} – ParcelScan</title>
 
-<a class="back-link" href="{{ url_for('all_batches') }}">← Back to All Batches</a>
+  <style>
+    /* Reset & Base */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      height: 100%;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f5f6fa;
+      color: #333;
+    }
 
-<h3>All Scans in Batch {{ batch.id }}</h3>
-<table>
-  <thead>
-    <tr>
-      <th>Tracking</th>
-      <th>Carrier</th>
-      <th>Order #</th>
-      <th>Customer</th>
-      <th>Scan Time</th>
-      <th>Status</th>
-      <th>Order ID</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for row in scans %}
-      <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
-        <td>{{ row.tracking_number }}</td>
-        <td>{{ row.carrier }}</td>
-        <td>
-          <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
-            {{ row.order_number }}
-          </a>
-        </td>
-        <td>
-          <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
-            {{ row.customer_name }}
-          </a>
-        </td>
-        <td>{{ row.scan_date }}</td>
-        <td>{{ row.status }}</td>
-        <td>{{ row.order_id }}</td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
+    /* Layout */
+    .container {
+      display: flex;
+      height: 100vh;
+    }
+
+    /* ── SIDEBAR ── */
+    .sidebar {
+      width: 260px;
+      background-color: #ffffff;
+      border-right: 1px solid #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      padding: 24px 16px;
+    }
+    .sidebar .logo {
+      display: flex;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    .sidebar .logo img {
+      width: 32px;
+      height: 32px;
+      margin-right: 8px;
+    }
+    .sidebar .logo span {
+      font-size: 1.25rem;
+      font-weight: bold;
+      color: #2c3e50;
+    }
+    .sidebar .search-box {
+      position: relative;
+      margin-bottom: 24px;
+    }
+    .sidebar .search-box input[type="text"] {
+      width: 100%;
+      padding: 8px 12px 8px 32px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 0.95rem;
+      color: #333;
+    }
+    .sidebar .search-box .search-icon {
+      position: absolute;
+      top: 50%;
+      left: 8px;
+      transform: translateY(-50%);
+      font-size: 1rem;
+      color: #888;
+    }
+    .sidebar .menu-section {
+      margin-bottom: 16px;
+    }
+    .sidebar .menu-section .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      padding: 8px 4px;
+      font-weight: 600;
+      color: #2c3e50;
+    }
+    .sidebar .menu-section .section-header:hover {
+      color: #1a2540;
+    }
+    .sidebar .menu-section .section-header .arrow {
+      font-size: 0.85rem;
+      transition: transform 0.2s ease;
+    }
+    .sidebar .menu-section .section-header.collapsed .arrow {
+      transform: rotate(-90deg);
+    }
+    .sidebar .menu-section .menu-items {
+      list-style: none;
+      margin-top: 8px;
+      padding-left: 4px;
+    }
+    .sidebar .menu-section .menu-items li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 4px;
+      border-radius: 4px;
+      transition: background-color 0.15s ease;
+    }
+    .sidebar .menu-section .menu-items li:hover {
+      background-color: #f0f1f5;
+    }
+    .sidebar .menu-section .menu-items li a {
+      text-decoration: none;
+      color: #34495e;
+      font-size: 0.95rem;
+    }
+    .sidebar .menu-section .menu-items li .badge {
+      background-color: #2d85f8;
+      color: #fff;
+      border-radius: 12px;
+      padding: 2px 8px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .sidebar .menu-section.collapsed .menu-items {
+      display: none;
+    }
+    .sidebar .spacer {
+      flex: 1;
+    }
+    .sidebar .help-link {
+      margin-top: 24px;
+      padding: 8px 4px;
+      font-size: 0.95rem;
+      color: #34495e;
+      text-decoration: none;
+      border-top: 1px solid #e0e0e0;
+    }
+    .sidebar .help-link:hover {
+      background-color: #f0f1f5;
+      color: #1a2540;
+    }
+
+    /* ── MAIN CONTENT ── */
+    .main-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+    }
+    .flash {
+      padding: 10px 14px;
+      margin-bottom: 16px;
+      border-radius: 4px;
+      background-color: #e0f7e9;
+      color: #2f7a45;
+      font-weight: 500;
+      border: 1px solid #b2e6c2;
+    }
+    .batch-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .batch-header h2 {
+      font-size: 1.5rem;
+      color: #2c3e50;
+    }
+    .batch-header .back-link {
+      color: #2d85f8;
+      text-decoration: none;
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+    .batch-header .back-link:hover {
+      text-decoration: underline;
+    }
+    p.meta {
+      color: #666;
+      font-size: 0.9rem;
+      margin-bottom: 16px;
+    }
+    h3 {
+      color: #2c3e50;
+      margin-top: 16px;
+      margin-bottom: 8px;
+      font-size: 1.25rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px 8px;
+      font-size: 0.93rem;
+      color: #34495e;
+    }
+    th {
+      background-color: #f2f2f2;
+      text-align: left;
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background-color: #fafafa;
+    }
+    tr:hover {
+      background-color: #f1f1f1;
+    }
+    .duplicate-row {
+      background-color: #fdecea !important;
+    }
+    td a {
+      color: #2d85f8;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    td a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <!-- ── SIDEBAR ── -->
+    <div class="sidebar">
+      <div class="logo">
+        <img src="https://img.icons8.com/clouds/100/000000/parcel--v1.png" alt="Logo" />
+        <span>ParcelScan</span>
+      </div>
+
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" placeholder="Search parcels…" />
+      </div>
+
+      <div class="menu-section" id="live-scans-section">
+        <div class="section-header">
+          <span>Live Scans</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li>
+            <a href="#">UPS Batch 01/11/25</a>
+            <span class="badge">154</span>
+          </li>
+          <li>
+            <a href="#">DHL Batch 01/09/25</a>
+            <span class="badge">10</span>
+          </li>
+          <li>
+            <a href="#">UPS Batch 01/09/25</a>
+            <span class="badge">5</span>
+          </li>
+          <li>
+            <a href="#">CP Batch 01/08/25</a>
+            <span class="badge">30</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="recorded-pickups-section">
+        <div class="section-header">
+          <span>Recorded Pick‐ups</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">Today’s Pick‐ups</a><span class="badge">—</span></li>
+          <li><a href="#">This Week</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="all-scans-section">
+        <div class="section-header">
+          <span>All Scans</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">View All</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="conflicts-section">
+        <div class="section-header">
+          <span>Conflicts</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">View Conflicts</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="spacer"></div>
+      <a href="#" class="help-link">Help</a>
+    </div>
+    <!-- ── END SIDEBAR ── -->
+
+    <!-- ── MAIN CONTENT ── -->
+    <div class="main-content">
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, msg in messages %}
+          <div class="flash">{{ msg }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      <div class="batch-header">
+        <h2>Batch #{{ batch.id }} (Carrier: {{ batch.carrier }})</h2>
+        <a href="{{ url_for('all_batches') }}" class="back-link">← Back to All Batches</a>
+      </div>
+
+      <p class="meta">
+        <em>Created at: {{ batch.created_at }}</em><br>
+        <em>Parcel Count: {{ batch.pkg_count }}</em><br>
+        <em>Tracking Numbers: {{ batch.tracking_numbers }}</em>
+      </p>
+
+      <h3>All Scans in Batch {{ batch.id }}</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Tracking</th>
+            <th>Carrier</th>
+            <th>Order #</th>
+            <th>Customer</th>
+            <th>Scan Time</th>
+            <th>Status</th>
+            <th>Order ID</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in scans %}
+            <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
+              <td>{{ row.tracking_number }}</td>
+              <td>{{ row.carrier }}</td>
+              <td>
+                <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                  {{ row.order_number }}
+                </a>
+              </td>
+              <td>
+                <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                  {{ row.customer_name }}
+                </a>
+              </td>
+              <td>{{ row.scan_date }}</td>
+              <td>{{ row.status }}</td>
+              <td>{{ row.order_id }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+    </div> <!-- .main-content -->
+
+  </div> <!-- .container -->
+
+  <script>
+    document.querySelectorAll('.menu-section .section-header').forEach(function(header) {
+      header.addEventListener('click', function() {
+        const section = header.parentElement;
+        section.classList.toggle('collapsed');
+      });
+    });
+  </script>
+</body>
+</html>
 '''
 
-# ── “All Scans” template with enhanced search and links ──
-ALL_SCANS_TEMPLATE = NAVIGATION + r'''
-<style>
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 10px;
-  }
-  th, td {
-    border: 1px solid #ddd;
-    padding: 8px;
-  }
-  th {
-    background-color: #f2f2f2;
-    text-align: left;
-  }
-  tr:nth-child(even) {
-    background-color: #fafafa;
-  }
-  tr:hover {
-    background-color: #f1f1f1;
-  }
-  td {
-    vertical-align: top;
-  }
-  .duplicate-row {
-    background-color: #fdecea !important;
-  }
-  .search-form {
-    margin-top: 10px;
-    margin-bottom: 5px;
-  }
-  .search-form input[type="text"] {
-    padding: 6px;
-    font-size: 14px;
-    width: 200px;
-  }
-  .search-form button {
-    padding: 6px 10px;
-    font-size: 14px;
-  }
-  .search-form a {
-    margin-left: 8px;
-    font-size: 14px;
-    text-decoration: none;
-    color: #007bff;
-  }
-</style>
 
-<h2>All Scans</h2>
+ALL_SCANS_TEMPLATE = r'''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>All Scans – ParcelScan</title>
 
-<form class="search-form" method="get" action="{{ url_for('all_scans') }}">
-  <label for="order_search"><strong>Search by Order # or Customer Name:</strong></label>
-  <input type="text" name="order_number" id="order_search" value="{{ request.args.get('order_number','') }}">
-  <button type="submit" class="btn">Search</button>
-  {% if request.args.get('order_number') %}
-    <a href="{{ url_for('all_scans') }}">Clear</a>
-  {% endif %}
-</form>
+  <style>
+    /* Reset & Base */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      height: 100%;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f5f6fa;
+      color: #333;
+    }
 
-<table>
-  <thead>
-    <tr>
-      <th>Tracking</th>
-      <th>Carrier</th>
-      <th>Order #</th>
-      <th>Customer</th>
-      <th>Scan Time</th>
-      <th>Status</th>
-      <th>Order ID</th>
-      <th>Batch ID</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for s in scans %}
-      <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
-        <td>{{ s.tracking_number }}</td>
-        <td>{{ s.carrier }}</td>
-        <td>
-          <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
-            {{ s.order_number }}
-          </a>
-        </td>
-        <td>
-          <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
-            {{ s.customer_name }}
-          </a>
-        </td>
-        <td>{{ s.scan_date }}</td>
-        <td>{{ s.status }}</td>
-        <td>{{ s.order_id }}</td>
-        <td>{{ s.batch_id or '' }}</td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
+    /* Layout */
+    .container {
+      display: flex;
+      height: 100vh;
+    }
+
+    /* ── SIDEBAR ── */
+    .sidebar {
+      width: 260px;
+      background-color: #ffffff;
+      border-right: 1px solid #e0e0e0;
+      display: flex;
+      flex-direction: column;
+      padding: 24px 16px;
+    }
+    .sidebar .logo {
+      display: flex;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    .sidebar .logo img {
+      width: 32px;
+      height: 32px;
+      margin-right: 8px;
+    }
+    .sidebar .logo span {
+      font-size: 1.25rem;
+      font-weight: bold;
+      color: #2c3e50;
+    }
+    .sidebar .search-box {
+      position: relative;
+      margin-bottom: 24px;
+    }
+    .sidebar .search-box input[type="text"] {
+      width: 100%;
+      padding: 8px 12px 8px 32px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 0.95rem;
+      color: #333;
+    }
+    .sidebar .search-box .search-icon {
+      position: absolute;
+      top: 50%;
+      left: 8px;
+      transform: translateY(-50%);
+      font-size: 1rem;
+      color: #888;
+    }
+    .sidebar .menu-section {
+      margin-bottom: 16px;
+    }
+    .sidebar .menu-section .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      padding: 8px 4px;
+      font-weight: 600;
+      color: #2c3e50;
+    }
+    .sidebar .menu-section .section-header:hover {
+      color: #1a2540;
+    }
+    .sidebar .menu-section .section-header .arrow {
+      font-size: 0.85rem;
+      transition: transform 0.2s ease;
+    }
+    .sidebar .menu-section .section-header.collapsed .arrow {
+      transform: rotate(-90deg);
+    }
+    .sidebar .menu-section .menu-items {
+      list-style: none;
+      margin-top: 8px;
+      padding-left: 4px;
+    }
+    .sidebar .menu-section .menu-items li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 4px;
+      border-radius: 4px;
+      transition: background-color 0.15s ease;
+    }
+    .sidebar .menu-section .menu-items li:hover {
+      background-color: #f0f1f5;
+    }
+    .sidebar .menu-section .menu-items li a {
+      text-decoration: none;
+      color: #34495e;
+      font-size: 0.95rem;
+    }
+    .sidebar .menu-section .menu-items li .badge {
+      background-color: #2d85f8;
+      color: #fff;
+      border-radius: 12px;
+      padding: 2px 8px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .sidebar .menu-section.collapsed .menu-items {
+      display: none;
+    }
+    .sidebar .spacer {
+      flex: 1;
+    }
+    .sidebar .help-link {
+      margin-top: 24px;
+      padding: 8px 4px;
+      font-size: 0.95rem;
+      color: #34495e;
+      text-decoration: none;
+      border-top: 1px solid #e0e0e0;
+    }
+    .sidebar .help-link:hover {
+      background-color: #f0f1f5;
+      color: #1a2540;
+    }
+
+    /* ── MAIN CONTENT ── */
+    .main-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+    }
+    .flash {
+      padding: 10px 14px;
+      margin-bottom: 16px;
+      border-radius: 4px;
+      background-color: #e0f7e9;
+      color: #2f7a45;
+      font-weight: 500;
+      border: 1px solid #b2e6c2;
+    }
+    h2 {
+      font-size: 1.5rem;
+      color: #2c3e50;
+      margin-bottom: 16px;
+    }
+    .search-form {
+      margin-top: 10px;
+      margin-bottom: 5px;
+    }
+    .search-form input[type="text"] {
+      padding: 6px;
+      font-size: 14px;
+      width: 200px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    .search-form button {
+      padding: 6px 10px;
+      font-size: 14px;
+      border: none;
+      border-radius: 4px;
+      background-color: #2d85f8;
+      color: #fff;
+      cursor: pointer;
+      margin-left: 6px;
+    }
+    .search-form a {
+      margin-left: 12px;
+      font-size: 14px;
+      text-decoration: none;
+      color: #2d85f8;
+      font-weight: 500;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px 8px;
+      font-size: 0.93rem;
+      color: #34495e;
+    }
+    th {
+      background-color: #f2f2f2;
+      text-align: left;
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background-color: #fafafa;
+    }
+    tr:hover {
+      background-color: #f1f1f1;
+    }
+    .duplicate-row {
+      background-color: #fdecea !important;
+    }
+    td a {
+      color: #2d85f8;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    td a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <!-- ── SIDEBAR ── -->
+    <div class="sidebar">
+      <div class="logo">
+        <img src="https://img.icons8.com/clouds/100/000000/parcel--v1.png" alt="Logo" />
+        <span>ParcelScan</span>
+      </div>
+
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" placeholder="Search parcels…" />
+      </div>
+
+      <div class="menu-section" id="live-scans-section">
+        <div class="section-header">
+          <span>Live Scans</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li>
+            <a href="#">UPS Batch 01/11/25</a>
+            <span class="badge">154</span>
+          </li>
+          <li>
+            <a href="#">DHL Batch 01/09/25</a>
+            <span class="badge">10</span>
+          </li>
+          <li>
+            <a href="#">UPS Batch 01/09/25</a>
+            <span class="badge">5</span>
+          </li>
+          <li>
+            <a href="#">CP Batch 01/08/25</a>
+            <span class="badge">30</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="recorded-pickups-section">
+        <div class="section-header">
+          <span>Recorded Pick‐ups</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">Today’s Pick‐ups</a><span class="badge">—</span></li>
+          <li><a href="#">This Week</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="all-scans-section">
+        <div class="section-header">
+          <span>All Scans</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">View All</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="menu-section collapsed" id="conflicts-section">
+        <div class="section-header">
+          <span>Conflicts</span>
+          <span class="arrow">▾</span>
+        </div>
+        <ul class="menu-items">
+          <li><a href="#">View Conflicts</a><span class="badge">—</span></li>
+        </ul>
+      </div>
+
+      <div class="spacer"></div>
+      <a href="#" class="help-link">Help</a>
+    </div>
+    <!-- ── END SIDEBAR ── -->
+
+    <!-- ── MAIN CONTENT ── -->
+    <div class="main-content">
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, msg in messages %}
+          <div class="flash">{{ msg }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      <h2>All Scans</h2>
+
+      <form class="search-form" method="get" action="{{ url_for('all_scans') }}">
+        <label for="order_search"><strong>Search by Order # or Customer Name:</strong></label>
+        <input type="text" name="order_number" id="order_search" value="{{ request.args.get('order_number','') }}">
+        <button type="submit">Search</button>
+        {% if request.args.get('order_number') %}
+          <a href="{{ url_for('all_scans') }}">Clear</a>
+        {% endif %}
+      </form>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Tracking</th>
+            <th>Carrier</th>
+            <th>Order #</th>
+            <th>Customer</th>
+            <th>Scan Time</th>
+            <th>Status</th>
+            <th>Order ID</th>
+            <th>Batch ID</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in scans %}
+            <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
+              <td>{{ s.tracking_number }}</td>
+              <td>{{ s.carrier }}</td>
+              <td>
+                <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+                  {{ s.order_number }}
+                </a>
+              </td>
+              <td>
+                <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+                  {{ s.customer_name }}
+                </a>
+              </td>
+              <td>{{ s.scan_date }}</td>
+              <td>{{ s.status }}</td>
+              <td>{{ s.order_id }}</td>
+              <td>{{ s.batch_id or '' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+    </div> <!-- .main-content -->
+
+  </div> <!-- .container -->
+
+  <script>
+    document.querySelectorAll('.menu-section .section-header').forEach(function(header) {
+      header.addEventListener('click', function() {
+        const section = header.parentElement;
+        section.classList.toggle('collapsed');
+      });
+    });
+  </script>
+</body>
+</html>
 '''
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 @app.route("/", methods=["GET"])
 def index():
     batch_id = session.get("batch_id")
     if not batch_id:
-        return render_template_string(MAIN_TEMPLATE, current_batch=None, scans=[])
+        # No batch open → show the “Create New Batch” form
+        return render_template_string(
+            MAIN_TEMPLATE,
+            current_batch=None,
+            scans=[],
+            shop_url=SHOP_URL
+        )
 
     conn = get_mysql_connection()
     cursor = conn.cursor(dictionary=True)
@@ -461,7 +1602,7 @@ def index():
         flash(("error", "Batch not found. Please start a new batch."))
         return redirect(url_for("index"))
 
-    # Fetch all scans in this batch, including carrier
+    # Fetch all scans in this batch
     cursor.execute("""
       SELECT tracking_number,
              carrier,
@@ -478,12 +1619,14 @@ def index():
 
     cursor.close()
     conn.close()
+
     return render_template_string(
         MAIN_TEMPLATE,
         current_batch=batch_row,
         scans=scans,
         shop_url=SHOP_URL
     )
+
 
 @app.route("/new_batch", methods=["POST"])
 def new_batch():
@@ -510,6 +1653,7 @@ def new_batch():
     flash(("success", f"Started new {carrier} batch (ID {batch_id}). Scan parcels below."))
     return redirect(url_for("index"))
 
+
 @app.route("/cancel_batch", methods=["GET"])
 def cancel_batch():
     batch_id = session.pop("batch_id", None)
@@ -527,6 +1671,7 @@ def cancel_batch():
     flash(("success", f"Batch #{batch_id} canceled."))
     return redirect(url_for("index"))
 
+
 @app.route("/scan", methods=["POST"])
 def scan():
     code = request.form.get("code", "").strip()
@@ -539,19 +1684,17 @@ def scan():
         flash(("error", "No batch open. Please start a new batch first."))
         return redirect(url_for("index"))
 
-    # Fetch the current batch's carrier from the database
     conn = get_mysql_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT carrier FROM batches WHERE id = %s", (batch_id,))
     batch_carrier = cursor.fetchone()[0] or ""
     cursor.close()
 
-    # If the batch carrier is Canada Post, drop first 7 and last 5 chars
     if batch_carrier == "Canada Post":
-        if len(code) > 12:  # ensure length at least 13
+        if len(code) > 12:
             code = code[7:-5]
         else:
-            code = ""  # invalid format; will lookup as empty
+            code = ""
 
     order_number  = "N/A"
     customer_name = "No Shopify"
@@ -559,7 +1702,6 @@ def scan():
     status        = "Original"
     now_str       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Determine carrier based on the (possibly transformed) code prefix
     if code.startswith("1ZAC"):
         scan_carrier = "UPS"
     elif code.startswith("2016"):
@@ -567,7 +1709,6 @@ def scan():
     else:
         scan_carrier = ""
 
-    # Check duplicate within this batch
     cursor = conn.cursor()
     cursor.execute("""
       SELECT COUNT(*) FROM scans
@@ -576,7 +1717,6 @@ def scan():
     if cursor.fetchone()[0] > 0:
         status = "Duplicate"
 
-    # Shopify lookup
     try:
         shopify_api = ShopifyAPI()
     except RuntimeError as e:
@@ -593,7 +1733,6 @@ def scan():
         if status != "Duplicate":
             status = "Original"
 
-    # Insert including the new carrier column
     cursor.execute("""
       INSERT INTO scans
         (tracking_number, carrier, order_number, customer_name, scan_date, status, order_id, batch_id)
@@ -606,6 +1745,7 @@ def scan():
 
     flash(("success", f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})"))
     return redirect(url_for("index"))
+
 
 @app.route("/delete_scans", methods=["POST"])
 def delete_scans():
@@ -637,6 +1777,7 @@ def delete_scans():
     except mysql.connector.Error as e:
         flash(("error", f"MySQL Error: {e}"))
     return redirect(url_for("index"))
+
 
 @app.route("/record_batch", methods=["POST"])
 def record_batch():
@@ -674,6 +1815,7 @@ def record_batch():
 
     return redirect(url_for("index"))
 
+
 @app.route("/all_batches", methods=["GET"])
 def all_batches():
     conn = get_mysql_connection()
@@ -686,15 +1828,18 @@ def all_batches():
     batches = cursor.fetchall()
     cursor.close()
     conn.close()
-    return render_template_string(ALL_BATCHES_TEMPLATE, batches=batches, navigation=NAVIGATION)
+    return render_template_string(
+        ALL_BATCHES_TEMPLATE,
+        batches=batches,
+        shop_url=SHOP_URL
+    )
 
-# ── New route: view a single batch’s detail (+ all scans) ──
+
 @app.route("/view_batch/<int:batch_id>", methods=["GET"])
 def view_batch(batch_id):
     conn = get_mysql_connection()
     cursor = conn.cursor(dictionary=True)
 
-    # Fetch batch metadata
     cursor.execute("""
       SELECT id, carrier, created_at, pkg_count, tracking_numbers
         FROM batches
@@ -707,7 +1852,6 @@ def view_batch(batch_id):
         flash(("error", f"Batch #{batch_id} not found."))
         return redirect(url_for("all_batches"))
 
-    # Fetch all scans in that batch
     cursor.execute("""
       SELECT tracking_number,
              carrier,
@@ -731,6 +1875,7 @@ def view_batch(batch_id):
         shop_url=SHOP_URL
     )
 
+
 @app.route("/all_scans", methods=["GET"])
 def all_scans():
     order_search = request.args.get("order_number", "").strip()
@@ -739,7 +1884,6 @@ def all_scans():
     cursor = conn.cursor(dictionary=True)
 
     if order_search:
-        # Search by exact order_number OR partial customer_name (case-insensitive)
         like_pattern = f"%{order_search}%"
         cursor.execute("""
           SELECT tracking_number,
@@ -775,9 +1919,9 @@ def all_scans():
     return render_template_string(
         ALL_SCANS_TEMPLATE,
         scans=scans,
-        navigation=NAVIGATION,
         shop_url=SHOP_URL
     )
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
