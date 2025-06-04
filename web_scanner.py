@@ -217,6 +217,8 @@ MAIN_TEMPLATE = r'''
 
   <div class="container">
 
+  <span>ParcelScan</span>
+
     <!-- ── SIDEBAR ── -->
     <div class="sidebar">
       <ul>
