@@ -1,5 +1,6 @@
 # web_scanner.py
 import os
+import requests
 from flask import (
     Flask,
     request,
@@ -12,8 +13,6 @@ from flask import (
 import mysql.connector
 from mysql.connector import pooling
 from datetime import datetime
-
-from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -38,6 +37,10 @@ SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
 
 # Read application password from environment (e.g. set APP_PASSWORD in Kinsta)
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+
+# Read ShipStation credentials from environment
+SHIPSTATION_API_KEY = os.environ.get("SHIPSTATION_API_KEY", "")
+SHIPSTATION_API_SECRET = os.environ.get("SHIPSTATION_API_SECRET", "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -74,7 +77,6 @@ LOGIN_TEMPLATE = r'''
       font-size: 1.5rem;
       color: #2c3e50;
     }
-    /* Center the input and button by giving them a percentage width and auto margins */
     .login-container input[type="password"] {
       display: block;
       width: 80%;
@@ -1228,24 +1230,28 @@ def scan():
         flash(("error", "No batch open. Please start a new batch first."))
         return redirect(url_for("index"))
 
+    # Connect to DB and fetch current batch's carrier
     conn = get_mysql_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT carrier FROM batches WHERE id = %s", (batch_id,))
     batch_carrier = cursor.fetchone()[0] or ""
     cursor.close()
 
+    # Transform code if Canada Post
     if batch_carrier == "Canada Post":
         if len(code) > 12:
             code = code[7:-5]
         else:
             code = ""
 
+    # Default values
     order_number  = "N/A"
-    customer_name = "No Shopify"
+    customer_name = "No ShipStation"
     order_id      = ""
     status        = "Original"
     now_str       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Determine carrier by code prefix
     if code.startswith("1ZAC"):
         scan_carrier = "UPS"
     elif code.startswith("2016"):
@@ -1253,6 +1259,7 @@ def scan():
     else:
         scan_carrier = ""
 
+    # Check for duplicate within this batch
     cursor = conn.cursor()
     cursor.execute("""
       SELECT COUNT(*) FROM scans
@@ -1261,22 +1268,40 @@ def scan():
     if cursor.fetchone()[0] > 0:
         status = "Duplicate"
 
+    # ShipStation API lookup
     try:
-        shopify_api = ShopifyAPI()
-    except RuntimeError as e:
-        flash(("error", f"Shopify config error: {e}"))
-        cursor.close()
+        # Make sure we have API credentials
+        if not SHIPSTATION_API_KEY or not SHIPSTATION_API_SECRET:
+            raise RuntimeError("ShipStation credentials not configured")
+
+        # Query ShipStation shipments endpoint by tracking number
+        url = f"https://ssapi.shipstation.com/shipments?trackingNumber={code}"
+        resp = requests.get(
+            url,
+            auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+            headers={"Accept": "application/json"}
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # ShipStation returns a list of "shipments"
+        shipments = data.get("shipments", [])
+        if shipments:
+            first = shipments[0]
+            order_number = first.get("orderNumber", "N/A")
+            # Attempt to pull customer name -- use shipTo.name if available
+            ship_to = first.get("shipTo", {})
+            customer_name = ship_to.get("name", "No Name")
+            order_id = str(first.get("orderId", ""))  # ShipStation's orderId, cast to string
+            if status != "Duplicate":
+                status = "Original"
+    except Exception as e:
+        flash(("error", f"ShipStation error: {e}"))
         conn.close()
         return redirect(url_for("index"))
 
-    info = shopify_api.get_order_by_tracking(code)
-    if info.get("order_number") and info["order_number"] != "N/A":
-        order_number  = info["order_number"]
-        customer_name = info["customer_name"]
-        order_id      = info["order_id"] or ""
-        if status != "Duplicate":
-            status = "Original"
-
+    # Insert scan record
+    cursor = conn.cursor()
     cursor.execute("""
       INSERT INTO scans
         (tracking_number, carrier, order_number, customer_name, scan_date, status, order_id, batch_id)
