@@ -33,6 +33,9 @@ db_pool = mysql.connector.pooling.MySQLConnectionPool(
 def get_mysql_connection():
     return db_pool.get_connection()
 
+# Read shop URL for building admin links
+SHOP_URL = os.environ.get("SHOPIFY_SHOP_URL", "").rstrip("/")
+
 # ── Shared navigation snippet ──
 NAVIGATION = """
 <p>
@@ -155,8 +158,8 @@ MAIN_TEMPLATE = NAVIGATION + r'''
               <input type="checkbox" name="delete_orders" value="{{ row.order_number }}">
             </td>
             <td>{{ row.tracking_number }}</td>
-            <td>{{ row.order_number }}</td>
-            <td>{{ row.customer_name }}</td>
+            <td><a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">{{ row.order_number }}</a></td>
+            <td><a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">{{ row.customer_name }}</a></td>
             <td>{{ row.scan_date }}</td>
             <td>{{ row.status }}</td>
             <td>{{ row.order_id }}</td>
@@ -230,7 +233,7 @@ ALL_BATCHES_TEMPLATE = NAVIGATION + r'''
 </table>
 '''
 
-# ── “All Scans” template with search box ──
+# ── “All Scans” template with enhanced search and links ──
 ALL_SCANS_TEMPLATE = NAVIGATION + r'''
 <style>
   table {
@@ -282,7 +285,7 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
 <h2>All Scans</h2>
 
 <form class="search-form" method="get" action="{{ url_for('all_scans') }}">
-  <label for="order_search"><strong>Search by Order #:</strong></label>
+  <label for="order_search"><strong>Search by Order # or Customer Name:</strong></label>
   <input type="text" name="order_number" id="order_search" value="{{ request.args.get('order_number','') }}">
   <button type="submit" class="btn">Search</button>
   {% if request.args.get('order_number') %}
@@ -307,8 +310,8 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
     {% for s in scans %}
       <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
         <td>{{ s.tracking_number }}</td>
-        <td>{{ s.order_number }}</td>
-        <td>{{ s.customer_name }}</td>
+        <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.order_number }}</a></td>
+        <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.customer_name }}</a></td>
         <td>{{ s.scan_date }}</td>
         <td>{{ s.status }}</td>
         <td>{{ s.order_id }}</td>
@@ -342,15 +345,15 @@ def index():
         flash(("error", "Batch not found. Please start a new batch."))
         return redirect(url_for("index"))
 
-    # Fetch all scans in this batch, including the new carrier column
+    # Fetch all scans in this batch, including carrier
     cursor.execute("""
       SELECT tracking_number,
+             carrier,
              order_number,
              customer_name,
              scan_date,
              status,
-             order_id,
-             carrier
+             order_id
         FROM scans
        WHERE batch_id = %s
        ORDER BY scan_date DESC
@@ -362,7 +365,8 @@ def index():
     return render_template_string(
         MAIN_TEMPLATE,
         current_batch=batch_row,
-        scans=scans
+        scans=scans,
+        shop_url=SHOP_URL
     )
 
 @app.route("/new_batch", methods=["POST"])
@@ -444,7 +448,7 @@ def scan():
     if cursor.fetchone()[0] > 0:
         status = "Duplicate"
 
-    # Shopify lookup (unchanged)
+    # Shopify lookup
     try:
         shopify_api = ShopifyAPI()
     except RuntimeError as e:
@@ -459,7 +463,7 @@ def scan():
         customer_name = info["customer_name"]
         order_id      = info["order_id"] or ""
         if status != "Duplicate":
-            status = "Found"
+            status = "Original"
 
     # Insert including the new carrier column
     cursor.execute("""
@@ -564,37 +568,45 @@ def all_scans():
     cursor = conn.cursor(dictionary=True)
 
     if order_search:
+        # Search by exact order_number OR partial customer_name (case-insensitive)
+        like_pattern = f"%{order_search}%"
         cursor.execute("""
-          SELECT s.tracking_number,
-                 s.carrier,
-                 s.order_number,
-                 s.customer_name,
-                 s.scan_date,
-                 s.status,
-                 s.order_id,
-                 s.batch_id
-            FROM scans s
-           WHERE s.order_number = %s
-           ORDER BY s.scan_date DESC
-        """, (order_search,))
+          SELECT tracking_number,
+                 carrier,
+                 order_number,
+                 customer_name,
+                 scan_date,
+                 status,
+                 order_id,
+                 batch_id
+            FROM scans
+           WHERE order_number = %s
+              OR LOWER(customer_name) LIKE LOWER(%s)
+           ORDER BY scan_date DESC
+        """, (order_search, like_pattern))
     else:
         cursor.execute("""
-          SELECT s.tracking_number,
-                 s.carrier,
-                 s.order_number,
-                 s.customer_name,
-                 s.scan_date,
-                 s.status,
-                 s.order_id,
-                 s.batch_id
-            FROM scans s
-           ORDER BY s.scan_date DESC
+          SELECT tracking_number,
+                 carrier,
+                 order_number,
+                 customer_name,
+                 scan_date,
+                 status,
+                 order_id,
+                 batch_id
+            FROM scans
+           ORDER BY scan_date DESC
         """)
     scans = cursor.fetchall()
 
     cursor.close()
     conn.close()
-    return render_template_string(ALL_SCANS_TEMPLATE, scans=scans, navigation=NAVIGATION)
+    return render_template_string(
+        ALL_SCANS_TEMPLATE,
+        scans=scans,
+        navigation=NAVIGATION,
+        shop_url=SHOP_URL
+    )
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
