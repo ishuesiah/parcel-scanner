@@ -1382,23 +1382,24 @@ def delete_scans():
 
 @app.route("/delete_scan", methods=["POST"])
 def delete_scan():
-    scan_id = request.form.get("scan_id")
-    if not scan_id:
-        flash(("error", "No scan specified for deletion."))
+    order_id = request.form.get("order_id")
+    if not order_id:
+        flash(("error", "No order_id specified for deletion."))
         return redirect(url_for("all_scans"))
 
     try:
         conn = get_mysql_connection()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM scans WHERE id = %s", (scan_id,))
+        cursor.execute("DELETE FROM scans WHERE order_id = %s", (order_id,))
         conn.commit()
         cursor.close()
         conn.close()
-        flash(("success", "Scan deleted successfully."))
+        flash(("success", f"Deleted scan(s) for order ID {order_id}."))
     except mysql.connector.Error as e:
         flash(("error", f"MySQL Error: {e}"))
 
     return redirect(url_for("all_scans"))
+
 
 
 @app.route("/record_batch", methods=["POST"])
@@ -1508,43 +1509,45 @@ def all_scans():
     if order_search:
         like_pattern = f"%{order_search}%"
         cursor.execute("""
-          SELECT id,
-                 tracking_number,
-                 carrier,
-                 order_number,
-                 customer_name,
-                 scan_date,
-                 status,
-                 order_id,
-                 batch_id
-            FROM scans
-           WHERE order_number = %s
-              OR LOWER(customer_name) LIKE LOWER(%s)
-           ORDER BY scan_date DESC
+          SELECT
+            tracking_number,
+            carrier,
+            order_number,
+            customer_name,
+            scan_date,
+            status,
+            order_id,
+            batch_id
+          FROM scans
+          WHERE order_number = %s
+             OR LOWER(customer_name) LIKE LOWER(%s)
+          ORDER BY scan_date DESC
         """, (order_search, like_pattern))
     else:
         cursor.execute("""
-          SELECT id,
-                 tracking_number,
-                 carrier,
-                 order_number,
-                 customer_name,
-                 scan_date,
-                 status,
-                 order_id,
-                 batch_id
-            FROM scans
-           ORDER BY scan_date DESC
+          SELECT
+            tracking_number,
+            carrier,
+            order_number,
+            customer_name,
+            scan_date,
+            status,
+            order_id,
+            batch_id
+          FROM scans
+          ORDER BY scan_date DESC
         """)
-    scans = cursor.fetchall()
 
+    scans = cursor.fetchall()
     cursor.close()
     conn.close()
+
     return render_template_string(
         ALL_SCANS_TEMPLATE,
         scans=scans,
         shop_url=SHOP_URL
     )
+
 
 
 if __name__ == "__main__":
