@@ -36,10 +36,87 @@ def get_mysql_connection():
 # Read shop URL for building admin links
 SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
 
+# Read application password from environment (e.g. set APP_PASSWORD in Kinsta)
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ── Templates ─────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Login page template
+LOGIN_TEMPLATE = r'''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Login – H&amp;O Parcel Scans</title>
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f5f6fa;
+      color: #333;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-container {
+      background: #ffffff;
+      padding: 32px 24px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      width: 320px;
+      text-align: center;
+    }
+    .login-container h2 {
+      margin-bottom: 24px;
+      font-size: 1.5rem;
+      color: #2c3e50;
+    }
+    .login-container input[type="password"] {
+      width: 100%;
+      padding: 10px 12px;
+      margin-bottom: 16px;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    .login-container .btn {
+      width: 100%;
+      padding: 10px 0;
+      font-size: 1rem;
+      background-color: #2d85f8;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .login-container .btn:hover {
+      opacity: 0.92;
+    }
+    .error {
+      color: #e74c3c;
+      margin-bottom: 16px;
+      font-size: 0.95rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <h2>Please Enter Password</h2>
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
+    <form action="{{ url_for('login') }}" method="post">
+      <input type="password" name="password" placeholder="Password" required autofocus>
+      <button type="submit" class="btn">Log In</button>
+    </form>
+  </div>
+</body>
+</html>
+'''
 
 MAIN_TEMPLATE = r'''
 <!doctype html>
@@ -260,6 +337,11 @@ MAIN_TEMPLATE = r'''
       {% else %}
         <div class="batch-header">
           <h2>Batch #{{ current_batch.id }} (Carrier: {{ current_batch.carrier }})</h2>
+          <div class="batch-nav">
+            <a href="#">Live Batch</a>
+            <a href="#">Record Carrier Pick‐up</a>
+            <a href="#">Open Batch</a>
+          </div>
         </div>
 
         <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
@@ -336,7 +418,6 @@ MAIN_TEMPLATE = r'''
 </body>
 </html>
 '''
-
 
 ALL_BATCHES_TEMPLATE = r'''
 <!doctype html>
@@ -729,7 +810,6 @@ BATCH_VIEW_TEMPLATE = r'''
 </html>
 '''
 
-
 ALL_SCANS_TEMPLATE = r'''
 <!doctype html>
 <html lang="en">
@@ -953,8 +1033,34 @@ ALL_SCANS_TEMPLATE = r'''
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ── BEFORE REQUEST: require login ──────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.before_request
+def require_login():
+    # Allow access to login page, static files, and favicon
+    if request.endpoint in ("login", "static", None):
+        return
+    # If not authenticated, redirect to login
+    if not session.get("authenticated"):
+        return redirect(url_for("login"))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ── Routes ────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error_msg = None
+    if request.method == "POST":
+        pw = request.form.get("password", "")
+        if pw == APP_PASSWORD:
+            session["authenticated"] = True
+            return redirect(url_for("index"))
+        else:
+            error_msg = "Invalid password. Please try again."
+    return render_template_string(LOGIN_TEMPLATE, error=error_msg)
 
 
 @app.route("/", methods=["GET"])
