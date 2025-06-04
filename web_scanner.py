@@ -48,7 +48,6 @@ MAIN_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>ParcelScan</title>
-
   <style>
     /* Reset & Base */
     * {
@@ -71,117 +70,28 @@ MAIN_TEMPLATE = r'''
 
     /* ── SIDEBAR ── */
     .sidebar {
-      width: 260px;
+      width: 240px;
       background-color: #ffffff;
       border-right: 1px solid #e0e0e0;
       display: flex;
       flex-direction: column;
       padding: 24px 16px;
     }
-    .sidebar .logo {
-      display: flex;
-      align-items: center;
-      margin-bottom: 24px;
-    }
-    .sidebar .logo img {
-      width: 32px;
-      height: 32px;
-      margin-right: 8px;
-    }
-    .sidebar .logo span {
-      font-size: 1.25rem;
-      font-weight: bold;
-      color: #2c3e50;
-    }
-    .sidebar .search-box {
-      position: relative;
-      margin-bottom: 24px;
-    }
-    .sidebar .search-box input[type="text"] {
-      width: 100%;
-      padding: 8px 12px 8px 32px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 0.95rem;
-      color: #333;
-    }
-    .sidebar .search-box .search-icon {
-      position: absolute;
-      top: 50%;
-      left: 8px;
-      transform: translateY(-50%);
-      font-size: 1rem;
-      color: #888;
-    }
-    .sidebar .menu-section {
-      margin-bottom: 16px;
-    }
-    .sidebar .menu-section .section-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      cursor: pointer;
-      user-select: none;
-      padding: 8px 4px;
-      font-weight: 600;
-      color: #2c3e50;
-    }
-    .sidebar .menu-section .section-header:hover {
-      color: #1a2540;
-    }
-    .sidebar .menu-section .section-header .arrow {
-      font-size: 0.85rem;
-      transition: transform 0.2s ease;
-    }
-    .sidebar .menu-section .section-header.collapsed .arrow {
-      transform: rotate(-90deg);
-    }
-    .sidebar .menu-section .menu-items {
+    .sidebar ul {
       list-style: none;
       margin-top: 8px;
-      padding-left: 4px;
     }
-    .sidebar .menu-section .menu-items li {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 4px;
-      border-radius: 4px;
-      transition: background-color 0.15s ease;
+    .sidebar li {
+      margin-bottom: 16px;
     }
-    .sidebar .menu-section .menu-items li:hover {
-      background-color: #f0f1f5;
-    }
-    .sidebar .menu-section .menu-items li a {
+    .sidebar a {
       text-decoration: none;
-      color: #34495e;
-      font-size: 0.95rem;
+      color: #2d85f8;
+      font-size: 1rem;
+      font-weight: 500;
     }
-    .sidebar .menu-section .menu-items li .badge {
-      background-color: #2d85f8;
-      color: #fff;
-      border-radius: 12px;
-      padding: 2px 8px;
-      font-size: 0.75rem;
-      font-weight: 600;
-    }
-    .sidebar .menu-section.collapsed .menu-items {
-      display: none;
-    }
-    .sidebar .spacer {
-      flex: 1;
-    }
-    .sidebar .help-link {
-      margin-top: 24px;
-      padding: 8px 4px;
-      font-size: 0.95rem;
-      color: #34495e;
-      text-decoration: none;
-      border-top: 1px solid #e0e0e0;
-    }
-    .sidebar .help-link:hover {
-      background-color: #f0f1f5;
-      color: #1a2540;
+    .sidebar a:hover {
+      text-decoration: underline;
     }
 
     /* ── MAIN CONTENT ── */
@@ -199,29 +109,10 @@ MAIN_TEMPLATE = r'''
       font-weight: 500;
       border: 1px solid #b2e6c2;
     }
-    .batch-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      margin-bottom: 16px;
-    }
-    .batch-header h2 {
+    h2 {
       font-size: 1.5rem;
       color: #2c3e50;
-    }
-    .batch-nav {
-      display: flex;
-      gap: 24px;
-      font-size: 0.95rem;
-    }
-    .batch-nav a {
-      color: #2d85f8;
-      text-decoration: none;
-      font-weight: 500;
-    }
-    .batch-nav a:hover {
-      text-decoration: underline;
+      margin-bottom: 16px;
     }
     form label {
       font-weight: 600;
@@ -296,6 +187,30 @@ MAIN_TEMPLATE = r'''
       width: 16px;
       height: 16px;
     }
+    .batch-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .batch-header h2 {
+      font-size: 1.5rem;
+      color: #2c3e50;
+    }
+    .batch-nav {
+      display: flex;
+      gap: 24px;
+      font-size: 0.95rem;
+    }
+    .batch-nav a {
+      color: #2d85f8;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .batch-nav a:hover {
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
@@ -304,74 +219,11 @@ MAIN_TEMPLATE = r'''
 
     <!-- ── SIDEBAR ── -->
     <div class="sidebar">
-      <div class="logo">
-        <img src="https://img.icons8.com/clouds/100/000000/parcel--v1.png" alt="Logo" />
-        <span>ParcelScan</span>
-      </div>
-
-      <div class="search-box">
-        <span class="search-icon">🔍</span>
-        <input type="text" placeholder="Search parcels…" />
-      </div>
-
-      <div class="menu-section" id="live-scans-section">
-        <div class="section-header">
-          <span>Live Scans</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li>
-            <a href="#">UPS Batch 01/11/25</a>
-            <span class="badge">154</span>
-          </li>
-          <li>
-            <a href="#">DHL Batch 01/09/25</a>
-            <span class="badge">10</span>
-          </li>
-          <li>
-            <a href="#">UPS Batch 01/09/25</a>
-            <span class="badge">5</span>
-          </li>
-          <li>
-            <a href="#">CP Batch 01/08/25</a>
-            <span class="badge">30</span>
-          </li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="recorded-pickups-section">
-        <div class="section-header">
-          <span>Recorded Pick‐ups</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">Today’s Pick‐ups</a><span class="badge">—</span></li>
-          <li><a href="#">This Week</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="all-scans-section">
-        <div class="section-header">
-          <span>All Scans</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">View All</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="conflicts-section">
-        <div class="section-header">
-          <span>Conflicts</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">View Conflicts</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="spacer"></div>
-      <a href="#" class="help-link">Help</a>
+      <ul>
+        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
+        <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+      </ul>
     </div>
     <!-- ── END SIDEBAR ── -->
 
@@ -386,7 +238,7 @@ MAIN_TEMPLATE = r'''
       {% endwith %}
 
       {% if not current_batch %}
-        <h2 style="margin-bottom: 12px; color: #2c3e50;">Create New Batch</h2>
+        <h2>Create New Batch</h2>
         <form action="{{ url_for('new_batch') }}" method="post">
           <label for="carrier"><strong>Carrier:</strong></label><br>
           <select name="carrier" id="carrier" required>
@@ -480,14 +332,6 @@ MAIN_TEMPLATE = r'''
 
   </div> <!-- .container -->
 
-  <script>
-    document.querySelectorAll('.menu-section .section-header').forEach(function(header) {
-      header.addEventListener('click', function() {
-        const section = header.parentElement;
-        section.classList.toggle('collapsed');
-      });
-    });
-  </script>
 </body>
 </html>
 '''
@@ -499,7 +343,6 @@ ALL_BATCHES_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>All Batches – ParcelScan</title>
-
   <style>
     /* Reset & Base */
     * {
@@ -522,117 +365,28 @@ ALL_BATCHES_TEMPLATE = r'''
 
     /* ── SIDEBAR ── */
     .sidebar {
-      width: 260px;
+      width: 240px;
       background-color: #ffffff;
       border-right: 1px solid #e0e0e0;
       display: flex;
       flex-direction: column;
       padding: 24px 16px;
     }
-    .sidebar .logo {
-      display: flex;
-      align-items: center;
-      margin-bottom: 24px;
-    }
-    .sidebar .logo img {
-      width: 32px;
-      height: 32px;
-      margin-right: 8px;
-    }
-    .sidebar .logo span {
-      font-size: 1.25rem;
-      font-weight: bold;
-      color: #2c3e50;
-    }
-    .sidebar .search-box {
-      position: relative;
-      margin-bottom: 24px;
-    }
-    .sidebar .search-box input[type="text"] {
-      width: 100%;
-      padding: 8px 12px 8px 32px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 0.95rem;
-      color: #333;
-    }
-    .sidebar .search-box .search-icon {
-      position: absolute;
-      top: 50%;
-      left: 8px;
-      transform: translateY(-50%);
-      font-size: 1rem;
-      color: #888;
-    }
-    .sidebar .menu-section {
-      margin-bottom: 16px;
-    }
-    .sidebar .menu-section .section-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      cursor: pointer;
-      user-select: none;
-      padding: 8px 4px;
-      font-weight: 600;
-      color: #2c3e50;
-    }
-    .sidebar .menu-section .section-header:hover {
-      color: #1a2540;
-    }
-    .sidebar .menu-section .section-header .arrow {
-      font-size: 0.85rem;
-      transition: transform 0.2s ease;
-    }
-    .sidebar .menu-section .section-header.collapsed .arrow {
-      transform: rotate(-90deg);
-    }
-    .sidebar .menu-section .menu-items {
+    .sidebar ul {
       list-style: none;
       margin-top: 8px;
-      padding-left: 4px;
     }
-    .sidebar .menu-section .menu-items li {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 4px;
-      border-radius: 4px;
-      transition: background-color 0.15s ease;
+    .sidebar li {
+      margin-bottom: 16px;
     }
-    .sidebar .menu-section .menu-items li:hover {
-      background-color: #f0f1f5;
-    }
-    .sidebar .menu-section .menu-items li a {
+    .sidebar a {
       text-decoration: none;
-      color: #34495e;
-      font-size: 0.95rem;
+      color: #2d85f8;
+      font-size: 1rem;
+      font-weight: 500;
     }
-    .sidebar .menu-section .menu-items li .badge {
-      background-color: #2d85f8;
-      color: #fff;
-      border-radius: 12px;
-      padding: 2px 8px;
-      font-size: 0.75rem;
-      font-weight: 600;
-    }
-    .sidebar .menu-section.collapsed .menu-items {
-      display: none;
-    }
-    .sidebar .spacer {
-      flex: 1;
-    }
-    .sidebar .help-link {
-      margin-top: 24px;
-      padding: 8px 4px;
-      font-size: 0.95rem;
-      color: #34495e;
-      text-decoration: none;
-      border-top: 1px solid #e0e0e0;
-    }
-    .sidebar .help-link:hover {
-      background-color: #f0f1f5;
-      color: #1a2540;
+    .sidebar a:hover {
+      text-decoration: underline;
     }
 
     /* ── MAIN CONTENT ── */
@@ -693,74 +447,11 @@ ALL_BATCHES_TEMPLATE = r'''
 
     <!-- ── SIDEBAR ── -->
     <div class="sidebar">
-      <div class="logo">
-        <img src="https://img.icons8.com/clouds/100/000000/parcel--v1.png" alt="Logo" />
-        <span>ParcelScan</span>
-      </div>
-
-      <div class="search-box">
-        <span class="search-icon">🔍</span>
-        <input type="text" placeholder="Search parcels…" />
-      </div>
-
-      <div class="menu-section" id="live-scans-section">
-        <div class="section-header">
-          <span>Live Scans</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li>
-            <a href="#">UPS Batch 01/11/25</a>
-            <span class="badge">154</span>
-          </li>
-          <li>
-            <a href="#">DHL Batch 01/09/25</a>
-            <span class="badge">10</span>
-          </li>
-          <li>
-            <a href="#">UPS Batch 01/09/25</a>
-            <span class="badge">5</span>
-          </li>
-          <li>
-            <a href="#">CP Batch 01/08/25</a>
-            <span class="badge">30</span>
-          </li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="recorded-pickups-section">
-        <div class="section-header">
-          <span>Recorded Pick‐ups</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">Today’s Pick‐ups</a><span class="badge">—</span></li>
-          <li><a href="#">This Week</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="all-scans-section">
-        <div class="section-header">
-          <span>All Scans</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">View All</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="conflicts-section">
-        <div class="section-header">
-          <span>Conflicts</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">View Conflicts</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="spacer"></div>
-      <a href="#" class="help-link">Help</a>
+      <ul>
+        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
+        <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+      </ul>
     </div>
     <!-- ── END SIDEBAR ── -->
 
@@ -807,14 +498,6 @@ ALL_BATCHES_TEMPLATE = r'''
 
   </div> <!-- .container -->
 
-  <script>
-    document.querySelectorAll('.menu-section .section-header').forEach(function(header) {
-      header.addEventListener('click', function() {
-        const section = header.parentElement;
-        section.classList.toggle('collapsed');
-      });
-    });
-  </script>
 </body>
 </html>
 '''
@@ -826,7 +509,6 @@ BATCH_VIEW_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>Batch #{{ batch.id }} – ParcelScan</title>
-
   <style>
     /* Reset & Base */
     * {
@@ -849,117 +531,28 @@ BATCH_VIEW_TEMPLATE = r'''
 
     /* ── SIDEBAR ── */
     .sidebar {
-      width: 260px;
+      width: 240px;
       background-color: #ffffff;
       border-right: 1px solid #e0e0e0;
       display: flex;
       flex-direction: column;
       padding: 24px 16px;
     }
-    .sidebar .logo {
-      display: flex;
-      align-items: center;
-      margin-bottom: 24px;
-    }
-    .sidebar .logo img {
-      width: 32px;
-      height: 32px;
-      margin-right: 8px;
-    }
-    .sidebar .logo span {
-      font-size: 1.25rem;
-      font-weight: bold;
-      color: #2c3e50;
-    }
-    .sidebar .search-box {
-      position: relative;
-      margin-bottom: 24px;
-    }
-    .sidebar .search-box input[type="text"] {
-      width: 100%;
-      padding: 8px 12px 8px 32px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 0.95rem;
-      color: #333;
-    }
-    .sidebar .search-box .search-icon {
-      position: absolute;
-      top: 50%;
-      left: 8px;
-      transform: translateY(-50%);
-      font-size: 1rem;
-      color: #888;
-    }
-    .sidebar .menu-section {
-      margin-bottom: 16px;
-    }
-    .sidebar .menu-section .section-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      cursor: pointer;
-      user-select: none;
-      padding: 8px 4px;
-      font-weight: 600;
-      color: #2c3e50;
-    }
-    .sidebar .menu-section .section-header:hover {
-      color: #1a2540;
-    }
-    .sidebar .menu-section .section-header .arrow {
-      font-size: 0.85rem;
-      transition: transform 0.2s ease;
-    }
-    .sidebar .menu-section .section-header.collapsed .arrow {
-      transform: rotate(-90deg);
-    }
-    .sidebar .menu-section .menu-items {
+    .sidebar ul {
       list-style: none;
       margin-top: 8px;
-      padding-left: 4px;
     }
-    .sidebar .menu-section .menu-items li {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 4px;
-      border-radius: 4px;
-      transition: background-color 0.15s ease;
+    .sidebar li {
+      margin-bottom: 16px;
     }
-    .sidebar .menu-section .menu-items li:hover {
-      background-color: #f0f1f5;
-    }
-    .sidebar .menu-section .menu-items li a {
+    .sidebar a {
       text-decoration: none;
-      color: #34495e;
-      font-size: 0.95rem;
+      color: #2d85f8;
+      font-size: 1rem;
+      font-weight: 500;
     }
-    .sidebar .menu-section .menu-items li .badge {
-      background-color: #2d85f8;
-      color: #fff;
-      border-radius: 12px;
-      padding: 2px 8px;
-      font-size: 0.75rem;
-      font-weight: 600;
-    }
-    .sidebar .menu-section.collapsed .menu-items {
-      display: none;
-    }
-    .sidebar .spacer {
-      flex: 1;
-    }
-    .sidebar .help-link {
-      margin-top: 24px;
-      padding: 8px 4px;
-      font-size: 0.95rem;
-      color: #34495e;
-      text-decoration: none;
-      border-top: 1px solid #e0e0e0;
-    }
-    .sidebar .help-link:hover {
-      background-color: #f0f1f5;
-      color: #1a2540;
+    .sidebar a:hover {
+      text-decoration: underline;
     }
 
     /* ── MAIN CONTENT ── */
@@ -1049,74 +642,11 @@ BATCH_VIEW_TEMPLATE = r'''
 
     <!-- ── SIDEBAR ── -->
     <div class="sidebar">
-      <div class="logo">
-        <img src="https://img.icons8.com/clouds/100/000000/parcel--v1.png" alt="Logo" />
-        <span>ParcelScan</span>
-      </div>
-
-      <div class="search-box">
-        <span class="search-icon">🔍</span>
-        <input type="text" placeholder="Search parcels…" />
-      </div>
-
-      <div class="menu-section" id="live-scans-section">
-        <div class="section-header">
-          <span>Live Scans</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li>
-            <a href="#">UPS Batch 01/11/25</a>
-            <span class="badge">154</span>
-          </li>
-          <li>
-            <a href="#">DHL Batch 01/09/25</a>
-            <span class="badge">10</span>
-          </li>
-          <li>
-            <a href="#">UPS Batch 01/09/25</a>
-            <span class="badge">5</span>
-          </li>
-          <li>
-            <a href="#">CP Batch 01/08/25</a>
-            <span class="badge">30</span>
-          </li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="recorded-pickups-section">
-        <div class="section-header">
-          <span>Recorded Pick‐ups</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">Today’s Pick‐ups</a><span class="badge">—</span></li>
-          <li><a href="#">This Week</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="all-scans-section">
-        <div class="section-header">
-          <span>All Scans</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">View All</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="conflicts-section">
-        <div class="section-header">
-          <span>Conflicts</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">View Conflicts</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="spacer"></div>
-      <a href="#" class="help-link">Help</a>
+      <ul>
+        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
+        <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+      </ul>
     </div>
     <!-- ── END SIDEBAR ── -->
 
@@ -1180,14 +710,6 @@ BATCH_VIEW_TEMPLATE = r'''
 
   </div> <!-- .container -->
 
-  <script>
-    document.querySelectorAll('.menu-section .section-header').forEach(function(header) {
-      header.addEventListener('click', function() {
-        const section = header.parentElement;
-        section.classList.toggle('collapsed');
-      });
-    });
-  </script>
 </body>
 </html>
 '''
@@ -1199,7 +721,6 @@ ALL_SCANS_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>All Scans – ParcelScan</title>
-
   <style>
     /* Reset & Base */
     * {
@@ -1222,117 +743,28 @@ ALL_SCANS_TEMPLATE = r'''
 
     /* ── SIDEBAR ── */
     .sidebar {
-      width: 260px;
+      width: 240px;
       background-color: #ffffff;
       border-right: 1px solid #e0e0e0;
       display: flex;
       flex-direction: column;
       padding: 24px 16px;
     }
-    .sidebar .logo {
-      display: flex;
-      align-items: center;
-      margin-bottom: 24px;
-    }
-    .sidebar .logo img {
-      width: 32px;
-      height: 32px;
-      margin-right: 8px;
-    }
-    .sidebar .logo span {
-      font-size: 1.25rem;
-      font-weight: bold;
-      color: #2c3e50;
-    }
-    .sidebar .search-box {
-      position: relative;
-      margin-bottom: 24px;
-    }
-    .sidebar .search-box input[type="text"] {
-      width: 100%;
-      padding: 8px 12px 8px 32px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 0.95rem;
-      color: #333;
-    }
-    .sidebar .search-box .search-icon {
-      position: absolute;
-      top: 50%;
-      left: 8px;
-      transform: translateY(-50%);
-      font-size: 1rem;
-      color: #888;
-    }
-    .sidebar .menu-section {
-      margin-bottom: 16px;
-    }
-    .sidebar .menu-section .section-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      cursor: pointer;
-      user-select: none;
-      padding: 8px 4px;
-      font-weight: 600;
-      color: #2c3e50;
-    }
-    .sidebar .menu-section .section-header:hover {
-      color: #1a2540;
-    }
-    .sidebar .menu-section .section-header .arrow {
-      font-size: 0.85rem;
-      transition: transform 0.2s ease;
-    }
-    .sidebar .menu-section .section-header.collapsed .arrow {
-      transform: rotate(-90deg);
-    }
-    .sidebar .menu-section .menu-items {
+    .sidebar ul {
       list-style: none;
       margin-top: 8px;
-      padding-left: 4px;
     }
-    .sidebar .menu-section .menu-items li {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 6px 4px;
-      border-radius: 4px;
-      transition: background-color 0.15s ease;
+    .sidebar li {
+      margin-bottom: 16px;
     }
-    .sidebar .menu-section .menu-items li:hover {
-      background-color: #f0f1f5;
-    }
-    .sidebar .menu-section .menu-items li a {
+    .sidebar a {
       text-decoration: none;
-      color: #34495e;
-      font-size: 0.95rem;
+      color: #2d85f8;
+      font-size: 1rem;
+      font-weight: 500;
     }
-    .sidebar .menu-section .menu-items li .badge {
-      background-color: #2d85f8;
-      color: #fff;
-      border-radius: 12px;
-      padding: 2px 8px;
-      font-size: 0.75rem;
-      font-weight: 600;
-    }
-    .sidebar .menu-section.collapsed .menu-items {
-      display: none;
-    }
-    .sidebar .spacer {
-      flex: 1;
-    }
-    .sidebar .help-link {
-      margin-top: 24px;
-      padding: 8px 4px;
-      font-size: 0.95rem;
-      color: #34495e;
-      text-decoration: none;
-      border-top: 1px solid #e0e0e0;
-    }
-    .sidebar .help-link:hover {
-      background-color: #f0f1f5;
-      color: #1a2540;
+    .sidebar a:hover {
+      text-decoration: underline;
     }
 
     /* ── MAIN CONTENT ── */
@@ -1424,74 +856,11 @@ ALL_SCANS_TEMPLATE = r'''
 
     <!-- ── SIDEBAR ── -->
     <div class="sidebar">
-      <div class="logo">
-        <img src="https://img.icons8.com/clouds/100/000000/parcel--v1.png" alt="Logo" />
-        <span>ParcelScan</span>
-      </div>
-
-      <div class="search-box">
-        <span class="search-icon">🔍</span>
-        <input type="text" placeholder="Search parcels…" />
-      </div>
-
-      <div class="menu-section" id="live-scans-section">
-        <div class="section-header">
-          <span>Live Scans</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li>
-            <a href="#">UPS Batch 01/11/25</a>
-            <span class="badge">154</span>
-          </li>
-          <li>
-            <a href="#">DHL Batch 01/09/25</a>
-            <span class="badge">10</span>
-          </li>
-          <li>
-            <a href="#">UPS Batch 01/09/25</a>
-            <span class="badge">5</span>
-          </li>
-          <li>
-            <a href="#">CP Batch 01/08/25</a>
-            <span class="badge">30</span>
-          </li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="recorded-pickups-section">
-        <div class="section-header">
-          <span>Recorded Pick‐ups</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">Today’s Pick‐ups</a><span class="badge">—</span></li>
-          <li><a href="#">This Week</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="all-scans-section">
-        <div class="section-header">
-          <span>All Scans</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">View All</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="menu-section collapsed" id="conflicts-section">
-        <div class="section-header">
-          <span>Conflicts</span>
-          <span class="arrow">▾</span>
-        </div>
-        <ul class="menu-items">
-          <li><a href="#">View Conflicts</a><span class="badge">—</span></li>
-        </ul>
-      </div>
-
-      <div class="spacer"></div>
-      <a href="#" class="help-link">Help</a>
+      <ul>
+        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
+        <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+      </ul>
     </div>
     <!-- ── END SIDEBAR ── -->
 
@@ -1556,14 +925,6 @@ ALL_SCANS_TEMPLATE = r'''
 
   </div> <!-- .container -->
 
-  <script>
-    document.querySelectorAll('.menu-section .section-header').forEach(function(header) {
-      header.addEventListener('click', function() {
-        const section = header.parentElement;
-        section.classList.toggle('collapsed');
-      });
-    });
-  </script>
 </body>
 </html>
 '''
@@ -1578,7 +939,7 @@ ALL_SCANS_TEMPLATE = r'''
 def index():
     batch_id = session.get("batch_id")
     if not batch_id:
-        # No batch open → show the “Create New Batch” form
+        # No batch open → show “Create New Batch”
         return render_template_string(
             MAIN_TEMPLATE,
             current_batch=None,
@@ -1602,7 +963,6 @@ def index():
         flash(("error", "Batch not found. Please start a new batch."))
         return redirect(url_for("index"))
 
-    # Fetch all scans in this batch
     cursor.execute("""
       SELECT tracking_number,
              carrier,
