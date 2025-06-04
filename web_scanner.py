@@ -1172,9 +1172,8 @@ def index():
         flash(("error", "Batch not found. Please start a new batch."))
         return redirect(url_for("index"))
 
-    cursor.execute("""
+     cursor.execute("""
       SELECT
-        id,
         tracking_number,
         carrier,
         order_number,
@@ -1190,10 +1189,9 @@ def index():
 
     cursor.close()
     conn.close()
-
     return render_template_string(
-        MAIN_TEMPLATE,
-        current_batch=batch_row,
+        BATCH_VIEW_TEMPLATE,
+        batch=batch,
         scans=scans,
         shop_url=SHOP_URL
     )
