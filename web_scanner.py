@@ -34,7 +34,7 @@ def get_mysql_connection():
     return db_pool.get_connection()
 
 # Read shop URL for building admin links
-SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
+SHOP_URL = os.environ.get("SHOPIFY_SHOP_URL", "").rstrip("/")
 
 # ── Shared navigation snippet ──
 NAVIGATION = """
@@ -147,8 +147,8 @@ MAIN_TEMPLATE = NAVIGATION + r'''
       <thead>
         <tr>
           <th>Select</th>
-          <th>Tracking</th><th>Carrier</th><th>Order #</th><th>Customer</th>
-          <th>Scan Time</th><th>Status</th><th>Order ID</th>
+          <th>Tracking</th><th>Order #</th><th>Customer</th>
+          <th>Scan Time</th><th>Status</th><th>Order ID</th><th>Carrier</th>
         </tr>
       </thead>
       <tbody>
@@ -158,12 +158,12 @@ MAIN_TEMPLATE = NAVIGATION + r'''
               <input type="checkbox" name="delete_orders" value="{{ row.order_number }}">
             </td>
             <td>{{ row.tracking_number }}</td>
-            <td>{{ row.carrier }}</td>
             <td><a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">{{ row.order_number }}</a></td>
             <td><a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">{{ row.customer_name }}</a></td>
             <td>{{ row.scan_date }}</td>
             <td>{{ row.status }}</td>
             <td>{{ row.order_id }}</td>
+            <td>{{ row.carrier }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -297,26 +297,26 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
   <thead>
     <tr>
       <th>Tracking</th>
-      <th>Carrier</th>
       <th>Order #</th>
       <th>Customer</th>
       <th>Scan Time</th>
       <th>Status</th>
       <th>Order ID</th>
       <th>Batch ID</th>
+      <th>Carrier</th>
     </tr>
   </thead>
   <tbody>
     {% for s in scans %}
       <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
         <td>{{ s.tracking_number }}</td>
-        <td>{{ s.carrier }}</td>
         <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.order_number }}</a></td>
         <td><a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">{{ s.customer_name }}</a></td>
         <td>{{ s.scan_date }}</td>
         <td>{{ s.status }}</td>
         <td>{{ s.order_id }}</td>
         <td>{{ s.batch_id or '' }}</td>
+        <td>{{ s.carrier }}</td>
       </tr>
     {% endfor %}
   </tbody>
@@ -423,24 +423,36 @@ def scan():
         flash(("error", "No batch open. Please start a new batch first."))
         return redirect(url_for("index"))
 
+    # Fetch the current batch's carrier from the database
+    conn = get_mysql_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT carrier FROM batches WHERE id = %s", (batch_id,))
+    batch_carrier = cursor.fetchone()[0] or ""
+    cursor.close()
+
+    # If the batch carrier is Canada Post, drop first 7 and last 5 chars
+    if batch_carrier == "Canada Post":
+        if len(code) > 12:  # ensure length at least 13
+            code = code[7:-5]
+        else:
+            code = ""  # invalid format; will lookup as empty
+
     order_number  = "N/A"
     customer_name = "No Shopify"
     order_id      = ""
     status        = "Original"
     now_str       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Determine carrier based on prefix
+    # Determine carrier based on the (possibly transformed) code prefix
     if code.startswith("1ZAC"):
         scan_carrier = "UPS"
     elif code.startswith("2016"):
         scan_carrier = "Canada Post"
     else:
-        scan_carrier = ""  # blank or any default you prefer
-
-    conn = get_mysql_connection()
-    cursor = conn.cursor()
+        scan_carrier = ""
 
     # Check duplicate within this batch
+    cursor = conn.cursor()
     cursor.execute("""
       SELECT COUNT(*) FROM scans
        WHERE tracking_number = %s AND batch_id = %s
@@ -463,7 +475,7 @@ def scan():
         customer_name = info["customer_name"]
         order_id      = info["order_id"] or ""
         if status != "Duplicate":
-            status = "Original"
+            status = "Found"
 
     # Insert including the new carrier column
     cursor.execute("""
