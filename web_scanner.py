@@ -1159,6 +1159,7 @@ def index():
     conn = get_mysql_connection()
     cursor = conn.cursor(dictionary=True)
 
+    # Fetch batch metadata
     cursor.execute("""
       SELECT id, created_at, carrier
         FROM batches
@@ -1172,7 +1173,8 @@ def index():
         flash(("error", "Batch not found. Please start a new batch."))
         return redirect(url_for("index"))
 
-     cursor.execute("""
+    # Fetch all scans in this batch (no 'id' column)
+    cursor.execute("""
       SELECT
         tracking_number,
         carrier,
@@ -1189,12 +1191,14 @@ def index():
 
     cursor.close()
     conn.close()
+
     return render_template_string(
-        BATCH_VIEW_TEMPLATE,
-        batch=batch,
+        MAIN_TEMPLATE,
+        current_batch=batch_row,
         scans=scans,
         shop_url=SHOP_URL
     )
+
 
 
 @app.route("/new_batch", methods=["POST"])
