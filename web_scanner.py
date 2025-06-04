@@ -158,12 +158,12 @@ MAIN_TEMPLATE = NAVIGATION + r'''
               <input type="checkbox" name="delete_orders" value="{{ row.order_number }}">
             </td>
             <td>{{ row.tracking_number }}</td>
+            <td>{{ row.carrier }}</td>
             <td><a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">{{ row.order_number }}</a></td>
             <td><a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">{{ row.customer_name }}</a></td>
             <td>{{ row.scan_date }}</td>
             <td>{{ row.status }}</td>
             <td>{{ row.order_id }}</td>
-            <td>{{ row.carrier }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -297,13 +297,13 @@ ALL_SCANS_TEMPLATE = NAVIGATION + r'''
   <thead>
     <tr>
       <th>Tracking</th>
+      <th>Carrier</th>
       <th>Order #</th>
       <th>Customer</th>
       <th>Scan Time</th>
       <th>Status</th>
       <th>Order ID</th>
       <th>Batch ID</th>
-      <th>Carrier</th>
     </tr>
   </thead>
   <tbody>
