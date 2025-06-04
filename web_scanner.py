@@ -34,7 +34,7 @@ def get_mysql_connection():
     return db_pool.get_connection()
 
 # Read shop URL for building admin links
-SHOP_URL = os.environ.get("SHOPIFY_SHOP_URL", "").rstrip("/")
+SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
 
 # ── Shared navigation snippet ──
 NAVIGATION = """
