@@ -1126,19 +1126,28 @@ ALL_SCANS_TEMPLATE = r'''
 
   </div> <!-- .container -->
 
-   <script>
-    window.onbeforeunload = function(e) {
-      return "Please log out before leaving the app.";
-    };
-    document.addEventListener('DOMContentLoaded', function() {
-      var logoutLink = document.querySelector('.logout');
-      if (logoutLink) {
-        logoutLink.addEventListener('click', function(){
-          window.onbeforeunload = null;
-        });
-      }
+<script>
+  // define the handler so we can remove it later
+  function requireLogoutPrompt(e) {
+    e.preventDefault();
+    // Chrome requires setting returnValue
+    e.returnValue = "";
+  }
+
+  // register the prompt on page load
+  window.addEventListener("beforeunload", requireLogoutPrompt);
+
+  // disable the prompt when they click “Log Out”
+  document.addEventListener("DOMContentLoaded", function() {
+    const logoutLink = document.querySelector(".logout");
+    if (!logoutLink) return;
+
+    logoutLink.addEventListener("click", function() {
+      window.removeEventListener("beforeunload", requireLogoutPrompt);
     });
-  </script>
+  });
+</script>
+
 
 </body>
 </html>
