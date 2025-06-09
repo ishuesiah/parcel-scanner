@@ -356,11 +356,6 @@ MAIN_TEMPLATE = r'''
       {% else %}
         <div class="batch-header">
           <h2>Batch #{{ current_batch.id }} (Carrier: {{ current_batch.carrier }})</h2>
-          <div class="batch-nav">
-            <a href="#">Live Batch</a>
-            <a href="#">Record Carrier Pick‐up</a>
-            <a href="#">Open Batch</a>
-          </div>
         </div>
 
         <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
