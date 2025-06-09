@@ -31,7 +31,7 @@ app.config.update(
 # Read SECRET_KEY from the environment (and fail loudly if missing)
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
 
-INACTIVITY_TIMEOUT = 30 * 60  # 30 minutes in seconds
+INACTIVITY_TIMEOUT = 60 * 60  # 30 minutes in seconds
 
 
 # ── MySQL connection pool ──
@@ -370,7 +370,11 @@ MAIN_TEMPLATE = r'''
       {% else %}
         <div class="batch-header">
           <h2>Batch #{{ current_batch.id }} (Carrier: {{ current_batch.carrier }})</h2>
+          <p style="margin-top:4px; color:#666; font-size:0.9rem;">
+            Scans count: {{ scans|length }}
+          </p>
         </div>
+
 
         <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
           <em>Batch created at: {{ current_batch.created_at }}</em>
@@ -614,7 +618,7 @@ ALL_BATCHES_TEMPLATE = r'''
             <th>Created At</th>
             <th>Pkg Count</th>
             <th>Tracking Numbers</th>
-            <th>Action</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -637,6 +641,9 @@ ALL_BATCHES_TEMPLATE = r'''
                   <input type="hidden" name="batch_id" value="{{ b.id }}">
                   <button type="submit" class="btn-delete-small">Delete</button>
                 </form>
+                <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="batch-link" style="margin-left:8px;">
+                  Edit
+                </a>
               </td>
             </tr>
           {% endfor %}
@@ -650,6 +657,7 @@ ALL_BATCHES_TEMPLATE = r'''
 </body>
 </html>
 '''
+
 
 
 BATCH_VIEW_TEMPLATE = r'''
@@ -1293,6 +1301,26 @@ def new_batch():
 
     flash(("success", f"Started new {carrier} batch (ID {batch_id}). Scan parcels below."))
     return redirect(url_for("index"))
+
+@app.route("/edit_batch/<int:batch_id>", methods=["GET"])
+def edit_batch(batch_id):
+    # make sure the batch exists
+    conn = get_mysql_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM batches WHERE id = %s", (batch_id,))
+    if not cursor.fetchone():
+        flash(("error", f"Batch #{batch_id} not found."))
+        cursor.close()
+        conn.close()
+        return redirect(url_for("all_batches"))
+    cursor.close()
+    conn.close()
+
+    # stash it back in session so index() shows the scan UI
+    session["batch_id"] = batch_id
+    flash(("success", f"Editing batch #{batch_id}."))
+    return redirect(url_for("index"))
+
 
 
 @app.route("/cancel_batch", methods=["GET"])
