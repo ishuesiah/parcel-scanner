@@ -3,6 +3,7 @@
 import os
 import requests
 import bcrypt
+import time
 from flask import (
     Flask,
     request,
@@ -29,6 +30,8 @@ app.config.update(
 
 # Read SECRET_KEY from the environment (and fail loudly if missing)
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
+
+INACTIVITY_TIMEOUT = 30 * 60  # 30 minutes in seconds
 
 
 # ── MySQL connection pool ──
@@ -1160,12 +1163,26 @@ ALL_SCANS_TEMPLATE = r'''
 
 @app.before_request
 def require_login():
-    # Allow access to login page and static files
+    # always allow login & static assets
     if request.endpoint in ("login", "static", "favicon"):
         return
-    # If not authenticated, redirect to login
+
+    last = session.get("last_active")
+    now  = time.time()
+
+    # if they’ve been idle too long, clear session & go to login
+    if last and (now - last) > INACTIVITY_TIMEOUT:
+        session.clear()
+        flash(("error", "Logged out due to 30m inactivity."))
+        return redirect(url_for("login"))
+
+    # stamp this request’s activity
+    session["last_active"] = now
+
+    # then enforce that they must be authenticated
     if not session.get("authenticated"):
         return redirect(url_for("login"))
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1177,16 +1194,16 @@ def login():
     error_msg = None
     if request.method == "POST":
         entered = request.form.get("password", "").encode()
-        # bcrypt.checkpw returns True if entered, when hashed with the salt,
-        # matches the stored PASSWORD_HASH
         if bcrypt.checkpw(entered, PASSWORD_HASH):
             session.clear()
             session["authenticated"] = True
-            session.permanent = False
+            session["last_active"]  = time.time()
             return redirect(url_for("index"))
         else:
             error_msg = "Invalid password. Please try again."
     return render_template_string(LOGIN_TEMPLATE, error=error_msg)
+
+
 
 
 @app.route("/logout")
