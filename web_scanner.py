@@ -19,7 +19,7 @@ from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this f
 
 app = Flask(__name__)
 # Read SECRET_KEY from the environment (and fail loudly if missing)
-app.secret_key = os.environ["SECRET_KEY"]
+app.secret_key = os.environ["FLASK_SECRET_KEY"]
 
 
 # ── MySQL connection pool ──
