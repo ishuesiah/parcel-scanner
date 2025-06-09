@@ -1126,6 +1126,20 @@ ALL_SCANS_TEMPLATE = r'''
 
   </div> <!-- .container -->
 
+   <script>
+    window.onbeforeunload = function(e) {
+      return "Please log out before leaving the app.";
+    };
+    document.addEventListener('DOMContentLoaded', function() {
+      var logoutLink = document.querySelector('.logout');
+      if (logoutLink) {
+        logoutLink.addEventListener('click', function(){
+          window.onbeforeunload = null;
+        });
+      }
+    });
+  </script>
+
 </body>
 </html>
 '''
