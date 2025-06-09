@@ -2,6 +2,7 @@
 
 import os
 import requests
+import bcrypt
 from flask import (
     Flask,
     request,
