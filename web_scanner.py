@@ -18,7 +18,9 @@ from datetime import datetime
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+# Read SECRET_KEY from the environment (and fail loudly if missing)
+app.secret_key = os.environ["SECRET_KEY"]
+
 
 # ── MySQL connection pool ──
 db_pool = mysql.connector.pooling.MySQLConnectionPool(
