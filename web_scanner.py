@@ -18,6 +18,14 @@ from datetime import datetime
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 
 app = Flask(__name__)
+
+# ── Secure session cookie settings ──
+app.config.update(
+    SESSION_COOKIE_SECURE=True,    # only send cookie over HTTPS
+    SESSION_COOKIE_HTTPONLY=True,  # JS can’t read the cookie
+    SESSION_COOKIE_SAMESITE='Lax'  # basic CSRF protection on cookies
+)
+
 # Read SECRET_KEY from the environment (and fail loudly if missing)
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
 
