@@ -49,7 +49,7 @@ def get_mysql_connection():
 SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
 
 # Read application password from environment (e.g. set APP_PASSWORD in Kinsta)
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+PASSWORD_HASH = os.environ["APP_PASSWORD_HASH"].encode()
 
 # Read ShipStation credentials from environment
 SHIPSTATION_API_KEY = os.environ.get("SHIPSTATION_API_KEY", "")
@@ -1152,11 +1152,12 @@ def require_login():
 def login():
     error_msg = None
     if request.method == "POST":
-        pw = request.form.get("password", "")
-        if pw == APP_PASSWORD:
+        entered = request.form.get("password", "").encode()
+        # bcrypt.checkpw returns True if entered, when hashed with the salt,
+        # matches the stored PASSWORD_HASH
+        if bcrypt.checkpw(entered, PASSWORD_HASH):
             session.clear()
             session["authenticated"] = True
-            # Ensure the cookie is a session‐cookie (expires on browser close)
             session.permanent = False
             return redirect(url_for("index"))
         else:
