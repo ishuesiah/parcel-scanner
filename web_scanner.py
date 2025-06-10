@@ -1436,9 +1436,11 @@ def scan():
         conn.close()
         return redirect(url_for("index"))
 
-    # ── Fallback: prefix-based if ShipStation didn’t identify it ──
+    # ── Fallback: detect DHL by 10-char code, then UPS/Canada Post ──
     if not scan_carrier:
-        if code.startswith("1ZAC"):
+        if len(code) == 10:
+            scan_carrier = "DHL"
+        elif code.startswith("1ZAC"):
             scan_carrier = "UPS"
         elif code.startswith("2016"):
             scan_carrier = "Canada Post"
@@ -1479,6 +1481,7 @@ def scan():
 
     flash(("success", f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})"))
     return redirect(url_for("index"))
+
 
 
 
