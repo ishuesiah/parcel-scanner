@@ -1380,45 +1380,29 @@ def scan():
         flash(("error", "No batch open. Please start a new batch first."))
         return redirect(url_for("index"))
 
-    # Fetch the current batch's carrier from the database
+    # Get the batch’s configured carrier
     conn = get_mysql_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT carrier FROM batches WHERE id = %s", (batch_id,))
     batch_carrier = cursor.fetchone()[0] or ""
     cursor.close()
 
-    # If the batch carrier is Canada Post, drop first 7 and last 5 chars
+    # Normalize Canada Post codes
     if batch_carrier == "Canada Post":
-        if len(code) > 12:  # ensure length at least 13
+        if len(code) > 12:
             code = code[7:-5]
         else:
-            code = ""  # invalid format; will lookup as empty
+            code = ""
 
+    # Defaults
     order_number  = "N/A"
     customer_name = "No ShipStation"
     order_id      = ""
     status        = "Original"
     now_str       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    scan_carrier  = ""
 
-    # Determine carrier based on the (possibly transformed) code prefix
-    if code.startswith("1ZAC"):
-        scan_carrier = "UPS"
-    elif code.startswith("2016"):
-        scan_carrier = "Canada Post"
-    else:
-        scan_carrier = ""
-
-    # Check duplicate within this batch
-    cursor = conn.cursor()
-    cursor.execute("""
-      SELECT COUNT(*) FROM scans
-       WHERE tracking_number = %s AND batch_id = %s
-    """, (code, batch_id))
-    if cursor.fetchone()[0] > 0:
-        status = "Duplicate"
-    cursor.close()
-
-    # ShipStation API lookup for order_number & customer_name
+    # ── ShipStation lookup (including carrierCode) ──
     try:
         if not SHIPSTATION_API_KEY or not SHIPSTATION_API_SECRET:
             raise RuntimeError("ShipStation credentials not configured")
@@ -1432,45 +1416,70 @@ def scan():
         resp.raise_for_status()
         data = resp.json()
         shipments = data.get("shipments", [])
+
         if shipments:
             first = shipments[0]
-            order_number = first.get("orderNumber", "N/A")
-            ship_to = first.get("shipTo", {})
-            customer_name = ship_to.get("name", "No Name")
-            # If not a duplicate, keep status as "Original"
-            if status != "Duplicate":
-                status = "Original"
+            order_number  = first.get("orderNumber", "N/A")
+            customer_name = first.get("shipTo", {}).get("name", "No Name")
+
+            # Map ShipStation’s carrierCode to your display names
+            carrier_code = first.get("carrierCode", "").lower()
+            carrier_map = {
+                "ups":        "UPS",
+                "canadapost": "Canada Post",
+                "dhl":        "DHL",
+            }
+            scan_carrier = carrier_map.get(carrier_code, "")
+
     except Exception as e:
         flash(("error", f"ShipStation error: {e}"))
         conn.close()
         return redirect(url_for("index"))
 
-    # Shopify API lookup for order_id (using the same tracking code)
+    # ── Fallback: prefix-based if ShipStation didn’t identify it ──
+    if not scan_carrier:
+        if code.startswith("1ZAC"):
+            scan_carrier = "UPS"
+        elif code.startswith("2016"):
+            scan_carrier = "Canada Post"
+
+    # ── Duplicate check ──
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM scans WHERE tracking_number = %s AND batch_id = %s",
+        (code, batch_id)
+    )
+    if cursor.fetchone()[0] > 0:
+        status = "Duplicate"
+    cursor.close()
+
+    # ── Shopify lookup for order_id ──
     try:
         shopify_api = ShopifyAPI()
         info = shopify_api.get_order_by_tracking(code)
-        if info.get("order_id"):
-            order_id = info["order_id"]
-        # If status isn't a duplicate, we keep "Original"
+        order_id = info.get("order_id", "")
     except Exception as e:
         flash(("error", f"Shopify lookup error: {e}"))
-        # We still proceed, just order_id may be blank
-        order_id = ""
 
-    # Insert including the new carrier column
+    # ── Insert the scan record ──
     cursor = conn.cursor()
-    cursor.execute("""
-      INSERT INTO scans
-        (tracking_number, carrier, order_number, customer_name, scan_date, status, order_id, batch_id)
-      VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    """, (code, scan_carrier, order_number, customer_name, now_str, status, order_id, batch_id))
+    cursor.execute(
+        """
+        INSERT INTO scans
+          (tracking_number, carrier, order_number, customer_name,
+           scan_date, status, order_id, batch_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (code, scan_carrier, order_number, customer_name,
+         now_str, status, order_id, batch_id)
+    )
     conn.commit()
-
     cursor.close()
     conn.close()
 
     flash(("success", f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})"))
     return redirect(url_for("index"))
+
 
 
 @app.route("/delete_scans", methods=["POST"])
