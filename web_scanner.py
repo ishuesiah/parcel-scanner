@@ -362,6 +362,7 @@ MAIN_TEMPLATE = r'''
             <option value="UPS">UPS</option>
             <option value="Canada Post">Canada Post</option>
             <option value="DHL">DHL</option>
+            <option value="Purolator">Purolator</option>
           </select>
           <br>
           <button type="submit" class="btn btn-new">Start Batch</button>
@@ -1280,7 +1281,7 @@ def index():
 @app.route("/new_batch", methods=["POST"])
 def new_batch():
     carrier = request.form.get("carrier", "").strip()
-    if carrier not in ("UPS", "Canada Post", "DHL"):
+    if carrier not in ("UPS", "Canada Post", "DHL", "Purolator"):
         flash(("error", "Please select a valid carrier."))
         return redirect(url_for("index"))
 
@@ -1428,6 +1429,7 @@ def scan():
                 "ups":        "UPS",
                 "canadapost": "Canada Post",
                 "dhl":        "DHL",
+                "purolator":  "Purolator",
             }
             scan_carrier = carrier_map.get(carrier_code, "")
 
@@ -1438,7 +1440,9 @@ def scan():
 
     # ── Fallback: detect DHL by 10-char code, then UPS/Canada Post ──
     if not scan_carrier:
-        if len(code) == 10:
+        if len(code) == 12:
+            scan_carrier = "Purolator"
+        elif len(code) == 10:
             scan_carrier = "DHL"
         elif code.startswith("1ZAC"):
             scan_carrier = "UPS"
