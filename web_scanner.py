@@ -1394,7 +1394,13 @@ def scan():
             code = code[7:-5]
         else:
             code = ""
-
+            
+    # Normalize Purolator codes
+    if batch_carrier == "Purolator":
+        if len(code) = 34:
+            code = code[11:-11]
+        else:
+            code = ""
     # Defaults
     order_number  = "N/A"
     customer_name = "No ShipStation"
