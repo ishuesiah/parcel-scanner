@@ -1396,8 +1396,8 @@ def scan():
             code = ""
             
     # Normalize Purolator codes
-    if batch_carrier = "Purolator":
-        if len(code) = 34:
+    if batch_carrier == "Purolator":
+        if len(code) == 34:
             code = code[11:-11]
         else:
             code = ""
