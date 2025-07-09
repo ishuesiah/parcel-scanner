@@ -412,7 +412,7 @@ MAIN_TEMPLATE = r'''
               {% for row in scans %}
                 <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
                   <td>
-                    <input type="hidden" name="scan_id"  value="{{ s.id }}">
+                    <input type="hidden" name="scan_id"  value="{{ row.id }}">
                   </td>
                   <td style="font-weight: 500;">{{ row.tracking_number }}</td>
                   <td>{{ row.carrier }}</td>
