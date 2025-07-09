@@ -1125,7 +1125,7 @@ ALL_SCANS_TEMPLATE = r'''
           <td>
             <form action="{{ url_for('delete_scan') }}" method="post"
                   onsubmit="return confirm('Are you sure you want to delete this scan?');">
-              <input type="hidden" name="order_id" value="{{ s.order_id }}">
+              <input type="hidden" name="scan_id"  value="{{ s.id }}">
               <button type="submit" class="btn-delete-small">Delete</button>
             </form>
           </td>
@@ -1253,6 +1253,7 @@ def index():
     # Fetch all scans in this batch (no 'id' column)
     cursor.execute("""
       SELECT
+        id,
         tracking_number,
         carrier,
         order_number,
@@ -1529,24 +1530,23 @@ def delete_scans():
 
 @app.route("/delete_scan", methods=["POST"])
 def delete_scan():
-    order_id = request.form.get("order_id")
-    if not order_id:
-        flash(("error", "No order_id specified for deletion."))
+    scan_id = request.form.get("scan_id")
+    if not scan_id:
+        flash(("error", "No scan specified for deletion."))
         return redirect(url_for("all_scans"))
 
     try:
         conn = get_mysql_connection()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM scans WHERE order_id = %s", (order_id,))
+        cursor.execute("DELETE FROM scans WHERE id = %s", (scan_id,))
         conn.commit()
         cursor.close()
         conn.close()
-        flash(("success", f"Deleted scan(s) for order ID {order_id}."))
+        flash(("success", f"Deleted scan #{scan_id}."))
     except mysql.connector.Error as e:
         flash(("error", f"MySQL Error: {e}"))
 
     return redirect(url_for("all_scans"))
-
 
 
 @app.route("/record_batch", methods=["POST"])
