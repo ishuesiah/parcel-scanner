@@ -412,7 +412,7 @@ MAIN_TEMPLATE = r'''
               {% for row in scans %}
                 <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
                   <td>
-                    <input type="checkbox" name="delete_orders" value="{{ row.order_number }}">
+                    <input type="checkbox" name="delete_scan_ids" value="{{ row.id }}">
                   </td>
                   <td style="font-weight: 500;">{{ row.tracking_number }}</td>
                   <td>{{ row.carrier }}</td>
@@ -1503,29 +1503,31 @@ def delete_scans():
         flash(("error", "No batch open."))
         return redirect(url_for("index"))
 
-    orders_to_delete = request.form.getlist("delete_orders")
-    if not orders_to_delete:
-        flash(("error", "No orders selected for deletion."))
+    scan_ids = request.form.getlist("delete_scan_ids")
+    if not scan_ids:
+        flash(("error", "No scans selected for deletion."))
         return redirect(url_for("index"))
 
     try:
         conn = get_mysql_connection()
         cursor = conn.cursor()
-        placeholders = ",".join(["%s"] * len(orders_to_delete))
-        sql = f"""
-          DELETE FROM scans
-           WHERE order_number IN ({placeholders})
-             AND batch_id = %s
-        """
-        params = orders_to_delete + [batch_id]
+
+        # Build placeholders: (%s,%s,...)
+        placeholders = ",".join(["%s"] * len(scan_ids))
+        sql = f"DELETE FROM scans WHERE id IN ({placeholders}) AND batch_id = %s"
+        params = scan_ids + [batch_id]
+
         cursor.execute(sql, params)
         conn.commit()
         cursor.close()
         conn.close()
-        flash(("success", f"Deleted {len(orders_to_delete)} scan(s)."))
+
+        flash(("success", f"Deleted {len(scan_ids)} scan(s)."))
     except mysql.connector.Error as e:
         flash(("error", f"MySQL Error: {e}"))
+
     return redirect(url_for("index"))
+
 
 
 @app.route("/delete_scan", methods=["POST"])
