@@ -1455,8 +1455,9 @@ def scan():
             scan_carrier = "UPS"
         elif code.startswith("2016"):
             scan_carrier = "Canada Post"
-        elif code.startswith("LA") || len(code) == 30:
+        elif code.startswith("LA") or len(code) == 30:
             scan_carrier = "USPS"
+
 
     # ── Duplicate check ──
     cursor = conn.cursor()
