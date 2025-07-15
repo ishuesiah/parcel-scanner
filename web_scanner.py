@@ -1391,7 +1391,7 @@ def scan():
 
     # Normalize Canada Post codes
     if batch_carrier == "Canada Post":
-        if len(code) > 12:
+        if code.startswith("2016"):
             code = code[7:-5]
         else:
             code = ""
@@ -1455,6 +1455,8 @@ def scan():
             scan_carrier = "UPS"
         elif code.startswith("2016"):
             scan_carrier = "Canada Post"
+        elif code.startswith("LA") || len(code) == 30:
+            scan_carrier = "USPS"
 
     # ── Duplicate check ──
     cursor = conn.cursor()
