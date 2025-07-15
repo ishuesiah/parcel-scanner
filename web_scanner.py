@@ -1411,6 +1411,7 @@ def scan():
     scan_carrier  = ""
 
     # ── ShipStation lookup (including carrierCode) ──
+    shipments = []
     try:
         if not SHIPSTATION_API_KEY or not SHIPSTATION_API_SECRET:
             raise RuntimeError("ShipStation credentials not configured")
@@ -1430,7 +1431,6 @@ def scan():
             order_number  = first.get("orderNumber", "N/A")
             customer_name = first.get("shipTo", {}).get("name", "No Name")
 
-            # Map ShipStation’s carrierCode to your display names
             carrier_code = first.get("carrierCode", "").lower()
             carrier_map = {
                 "ups":        "UPS",
@@ -1439,11 +1439,23 @@ def scan():
                 "purolator":  "Purolator",
             }
             scan_carrier = carrier_map.get(carrier_code, "")
-
     except Exception as e:
         flash(("error", f"ShipStation error: {e}"))
         conn.close()
         return redirect(url_for("index"))
+
+    # ── Fallback: if ShipStation found nothing, hit Shopify instead ──
+    if not shipments:
+        try:
+            shopify_api = ShopifyAPI()
+            info = shopify_api.get_order_by_tracking(code)
+            # your ShopifyAPI should return at least these keys:
+            order_number  = info.get("order_number", "N/A")
+            customer_name = info.get("customer_name", "Unknown")
+            order_id      = info.get("order_id", "")
+        except Exception as e:
+            flash(("error", f"Shopify lookup error: {e}"))
+
 
     # ── Fallback: detect DHL by 10-char code, then UPS/Canada Post ──
     if not scan_carrier:
