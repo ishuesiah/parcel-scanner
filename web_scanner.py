@@ -1411,7 +1411,7 @@ def scan():
     scan_carrier  = ""
 
     # ── ShipStation lookup (including carrierCode) ──
-       shipments = []
+    shipments = []
     # ── ShipStation lookup ──
     try:
         if not SHIPSTATION_API_KEY or not SHIPSTATION_API_SECRET:
