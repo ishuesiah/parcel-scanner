@@ -1387,7 +1387,7 @@ def scan():
     cursor = conn.cursor()
     cursor.execute("SELECT carrier FROM batches WHERE id = %s", (batch_id,))
     batch_carrier = cursor.fetchone()[0] or ""
-    cursor.close()
+    cursor.close() 
 
     # Normalize Canada Post codes
     if batch_carrier == "Canada Post":
