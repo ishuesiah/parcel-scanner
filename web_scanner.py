@@ -1411,16 +1411,19 @@ def scan():
     scan_carrier  = ""
 
     # ── ShipStation lookup (including carrierCode) ──
-    shipments = []
+       shipments = []
+    # ── ShipStation lookup ──
     try:
         if not SHIPSTATION_API_KEY or not SHIPSTATION_API_SECRET:
+            # credentials are truly missing—this is fatal
             raise RuntimeError("ShipStation credentials not configured")
 
         url = f"https://ssapi.shipstation.com/shipments?trackingNumber={code}"
         resp = requests.get(
             url,
             auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-            headers={"Accept": "application/json"}
+            headers={"Accept": "application/json"},
+            timeout=5
         )
         resp.raise_for_status()
         data = resp.json()
@@ -1430,8 +1433,8 @@ def scan():
             first = shipments[0]
             order_number  = first.get("orderNumber", "N/A")
             customer_name = first.get("shipTo", {}).get("name", "No Name")
+            carrier_code  = first.get("carrierCode", "").lower()
 
-            carrier_code = first.get("carrierCode", "").lower()
             carrier_map = {
                 "ups":        "UPS",
                 "canadapost": "Canada Post",
@@ -1439,22 +1442,31 @@ def scan():
                 "purolator":  "Purolator",
             }
             scan_carrier = carrier_map.get(carrier_code, "")
-    except Exception as e:
-        flash(("error", f"ShipStation error: {e}"))
+
+    except RuntimeError as e:
+        # truly fatal (no credentials)
+        flash(("error", str(e)))
         conn.close()
         return redirect(url_for("index"))
+    except requests.RequestException as e:
+        # network/HTTP errors—warn but continue to fallback
+        flash(("warning", f"ShipStation request failed: {e}"))
+    except ValueError as e:
+        # JSON decode errors, etc.—warn but continue
+        flash(("warning", f"ShipStation returned bad data: {e}"))
+    # no generic "except Exception": let truly unexpected errors bubble up
 
-    # ── Fallback: if ShipStation found nothing, hit Shopify instead ──
+    # ── Fallback: if no shipments from ShipStation, query Shopify ──
     if not shipments:
         try:
             shopify_api = ShopifyAPI()
             info = shopify_api.get_order_by_tracking(code)
-            # your ShopifyAPI should return at least these keys:
             order_number  = info.get("order_number", "N/A")
             customer_name = info.get("customer_name", "Unknown")
             order_id      = info.get("order_id", "")
         except Exception as e:
             flash(("error", f"Shopify lookup error: {e}"))
+
 
 
     # ── Fallback: detect DHL by 10-char code, then UPS/Canada Post ──
