@@ -1391,9 +1391,9 @@ def scan():
 
     # Normalize Canada Post codes
     if batch_carrier == "Canada Post":
-            code = code[7:-5]
-        else:
-            code = ""
+        code = code[7:-5]
+    else:
+        code = ""
             
     # Normalize Purolator codes
     if batch_carrier == "Purolator":
