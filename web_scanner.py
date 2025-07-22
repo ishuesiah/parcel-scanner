@@ -1391,7 +1391,6 @@ def scan():
 
     # Normalize Canada Post codes
     if batch_carrier == "Canada Post":
-        if code.startswith("2016"):
             code = code[7:-5]
         else:
             code = ""
