@@ -1390,14 +1390,13 @@ def scan():
     cursor.close() 
 
     # Normalize Canada Post codes
-# Normalize tracking codes per carrier
 if batch_carrier == "Canada Post":
-    if len(code) >= 12:  # basic sanity check
+    if len(code) >= 12:
         code = code[7:-5]
 elif batch_carrier == "Purolator":
     if len(code) == 34:
         code = code[11:-11]
-else:
+# else: leave code unchanged
     # Do NOT wipe the code for UPS, DHL, etc.
     code = code  # Keep as-is
     # Defaults
