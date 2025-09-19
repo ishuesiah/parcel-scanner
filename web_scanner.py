@@ -1454,15 +1454,28 @@ def scan():
     # no generic "except Exception": let truly unexpected errors bubble up
 
     # ── Fallback: if no shipments from ShipStation, query Shopify ──
-    if not shipments:
-        try:
-            shopify_api = ShopifyAPI()
-            info = shopify_api.get_order_by_tracking(code)
-            order_number  = info.get("order_number", "N/A")
-            customer_name = info.get("customer_name", "Unknown")
-            order_id      = info.get("order_id", "")
-        except Exception as e:
-            flash(("error", f"Shopify lookup error: {e}"))
+# In the /scan route, combine the logic:
+order_id = ""
+shopify_info = {}
+
+# Only call Shopify once, after ShipStation
+if not shipments:
+    try:
+        shopify_api = get_shopify_api()  # Use singleton
+        shopify_info = shopify_api.get_order_by_tracking(code)
+        order_number = shopify_info.get("order_number", "N/A")
+        customer_name = shopify_info.get("customer_name", "Unknown")
+        order_id = shopify_info.get("order_id", "")
+    except Exception as e:
+        flash(("error", f"Shopify lookup error: {e}"))
+else:
+    # If we got ShipStation data, still get order_id from Shopify
+    try:
+        shopify_api = get_shopify_api()
+        shopify_info = shopify_api.get_order_by_tracking(code)
+        order_id = shopify_info.get("order_id", "")
+    except Exception as e:
+        pass  # Don't fail the whole scan
 
 
 
