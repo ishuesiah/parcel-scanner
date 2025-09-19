@@ -1505,7 +1505,14 @@ else:
 
     # ── Shopify lookup for order_id ──
     try:
-        shopify_api = ShopifyAPI()
+
+_shopify_api = None
+
+def get_shopify_api():
+    global _shopify_api
+    if _shopify_api is None:
+        _shopify_api = ShopifyAPI()
+    return _shopify_api
         info = shopify_api.get_order_by_tracking(code)
         order_id = info.get("order_id", "")
     except Exception as e:
