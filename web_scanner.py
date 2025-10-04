@@ -16,8 +16,14 @@ from flask import (
 import mysql.connector
 from mysql.connector import pooling
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+import re
 
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
+
+# ─────────────────────────────────────────────────────────────────────────────
+# App & Config
+# ─────────────────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
 
@@ -32,7 +38,6 @@ app.config.update(
 app.secret_key = os.environ["FLASK_SECRET_KEY"]
 
 INACTIVITY_TIMEOUT = 60 * 60  # 30 minutes in seconds
-
 
 # ── MySQL connection pool ──
 db_pool = mysql.connector.pooling.MySQLConnectionPool(
@@ -59,9 +64,23 @@ PASSWORD_HASH = os.environ["APP_PASSWORD_HASH"].encode()
 SHIPSTATION_API_KEY = os.environ.get("SHIPSTATION_API_KEY", "")
 SHIPSTATION_API_SECRET = os.environ.get("SHIPSTATION_API_SECRET", "")
 
+# ── Async / lookup config ──
+executor = ThreadPoolExecutor(max_workers=4)
+SHIPSTATION_TIMEOUT = 1.8  # seconds
+SHOPIFY_LOOKUP_ENABLED = True
+CACHE_TTL_SECONDS = 12 * 60 * 60  # 12 hours
+
+# ── Shopify singleton ──
+_shopify_api = None
+def get_shopify_api():
+    global _shopify_api
+    if _shopify_api is None:
+        _shopify_api = ShopifyAPI()
+    return _shopify_api
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ── Templates ─────────────────────────────────────────────────────────────────
+# Templates
 # ─────────────────────────────────────────────────────────────────────────────
 
 LOGIN_TEMPLATE = r'''
@@ -148,183 +167,48 @@ MAIN_TEMPLATE = r'''
   <title>H&O Parcel Scans</title>
   <style>
     /* Reset & Base */
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-    html, body {
-      height: 100%;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa;
-      color: #333;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f6fa; color: #333; }
 
     /* Layout */
-    .container {
-      display: flex;
-      height: 100vh;
-    }
+    .container { display: flex; height: 100vh; }
 
     /* ── SIDEBAR ── */
-    .sidebar {
-      width: 240px;
-      background-color: #ffffff;
-      border-right: 1px solid #e0e0e0;
-      display: flex;
-      flex-direction: column;
-      padding: 24px 16px;
-    }
-    .sidebar h1 {
-      font-size: 1.25rem;
-      font-weight: bold;
-      margin-bottom: 16px;
-      color: #2c3e50;
-    }
-    .sidebar ul {
-      list-style: none;
-      margin-top: 8px;
-    }
-    .sidebar li {
-      margin-bottom: 16px;
-    }
-    .sidebar a {
-      text-decoration: none;
-      color: #2d85f8;
-      font-size: 1rem;
-      font-weight: 500;
-    }
-    .sidebar a:hover {
-      text-decoration: underline;
-    }
-    .sidebar .logout {
-      margin-top: auto;
-      color: #e74c3c;
-      font-size: 0.95rem;
-      cursor: pointer;
-      text-decoration: none;
-    }
-    .sidebar .logout:hover {
-      text-decoration: underline;
-    }
+    .sidebar { width: 240px; background-color: #ffffff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; padding: 24px 16px; }
+    .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
+    .sidebar ul { list-style: none; margin-top: 8px; }
+    .sidebar li { margin-bottom: 16px; }
+    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a:hover { text-decoration: underline; }
+    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; cursor: pointer; text-decoration: none; }
+    .sidebar .logout:hover { text-decoration: underline; }
 
     /* ── MAIN CONTENT ── */
-    .main-content {
-      flex: 1;
-      overflow-y: auto;
-      padding: 24px;
-    }
-    .flash {
-      padding: 10px 14px;
-      margin-bottom: 16px;
-      border-radius: 4px;
-      background-color: #e0f7e9;
-      color: #2f7a45;
-      font-weight: 500;
-      border: 1px solid #b2e6c2;
-    }
-    h2 {
-      font-size: 1.5rem;
-      color: #2c3e50;
-      margin-bottom: 16px;
-    }
-    form label {
-      font-weight: 600;
-      color: #333;
-    }
-    form input[type="text"], form select {
-      width: 300px;
-      padding: 8px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      margin-top: 4px;
-      margin-bottom: 12px;
-      font-size: 0.95rem;
-    }
-    .btn {
-      padding: 8px 12px;
-      font-size: 0.9rem;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-    .btn-new {
-      background-color: #2d85f8;
-      color: white;
-    }
-    .btn-delete {
-      background-color: #e74c3c;
-      color: white;
-    }
-    .btn-batch {
-      background-color: #27ae60;
-      color: white;
-    }
-    .btn:hover {
-      opacity: 0.92;
-    }
+    .main-content { flex: 1; overflow-y: auto; padding: 24px; }
+    .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; background-color: #e0f7e9; color: #2f7a45; font-weight: 500; border: 1px solid #b2e6c2; }
+    h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
+    form label { font-weight: 600; color: #333; }
+    form input[type="text"], form select { width: 300px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-top: 4px; margin-bottom: 12px; font-size: 0.95rem; }
+    .btn { padding: 8px 12px; font-size: 0.9rem; border: none; border-radius: 4px; cursor: pointer; }
+    .btn-new { background-color: #2d85f8; color: white; }
+    .btn-delete { background-color: #e74c3c; color: white; }
+    .btn-batch { background-color: #27ae60; color: white; }
+    .btn:hover { opacity: 0.92; }
 
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 12px;
-    }
-    th, td {
-      border: 1px solid #ddd;
-      padding: 10px 8px;
-      font-size: 0.93rem;
-      color: #34495e;
-    }
-    th {
-      background-color: #f2f2f2;
-      text-align: left;
-      font-weight: 600;
-    }
-    tr:nth-child(even) {
-      background-color: #fafafa;
-    }
-    tr:hover {
-      background-color: #f1f1f1;
-    }
-    .duplicate-row {
-      background-color: #fdecea !important;
-    }
-    td a {
-      color: #2d85f8;
-      text-decoration: none;
-      font-weight: 500;
-    }
-    td a:hover {
-      text-decoration: underline;
-    }
-    td input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-    }
-    .batch-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      margin-bottom: 16px;
-    }
-    .batch-header h2 {
-      font-size: 1.5rem;
-      color: #2c3e50;
-    }
-    .batch-nav {
-      display: flex;
-      gap: 24px;
-      font-size: 0.95rem;
-    }
-    .batch-nav a {
-      color: #2d85f8;
-      text-decoration: none;
-      font-weight: 500;
-    }
-    .batch-nav a:hover {
-      text-decoration: underline;
-    }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
+    th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
+    tr:nth-child(even) { background-color: #fafafa; }
+    tr:hover { background-color: #f1f1f1; }
+    .duplicate-row { background-color: #fdecea !important; }
+    td a { color: #2d85f8; text-decoration: none; font-weight: 500; }
+    td a:hover { text-decoration: underline; }
+    td input[type="checkbox"] { width: 16px; height: 16px; }
+    .batch-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
+    .batch-header h2 { font-size: 1.5rem; color: #2c3e50; }
+    .batch-nav { display: flex; gap: 24px; font-size: 0.95rem; }
+    .batch-nav a { color: #2d85f8; text-decoration: none; font-weight: 500; }
+    .batch-nav a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -342,7 +226,6 @@ MAIN_TEMPLATE = r'''
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
     </div>
     <!-- ── END SIDEBAR ── -->
-
 
     <!-- ── MAIN CONTENT ── -->
     <div class="main-content">
@@ -375,7 +258,6 @@ MAIN_TEMPLATE = r'''
             Scans count: {{ scans|length }}
           </p>
         </div>
-
 
         <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
           <em>Batch created at: {{ current_batch.created_at }}</em>
@@ -411,9 +293,7 @@ MAIN_TEMPLATE = r'''
             <tbody>
               {% for row in scans %}
                 <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
-                  <td>
-                    <input type="checkbox" name="delete_scan_ids" value="{{ row.id }}">
-                  </td>
+                  <td><input type="checkbox" name="delete_scan_ids" value="{{ row.id }}"></td>
                   <td style="font-weight: 500;">{{ row.tracking_number }}</td>
                   <td>{{ row.carrier }}</td>
                   <td>
@@ -459,137 +339,34 @@ ALL_BATCHES_TEMPLATE = r'''
   <meta charset="utf-8">
   <title>All Batches – H&O Parcel Scans</title>
   <style>
-    /* Reset & Base */
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-    html, body {
-      height: 100%;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa;
-      color: #333;
-    }
-
-    /* Layout */
-    .container {
-      display: flex;
-      height: 100vh;
-    }
-
-    /* ── SIDEBAR ── */
-    .sidebar {
-      width: 240px;
-      background-color: #ffffff;
-      border-right: 1px solid #e0e0e0;
-      display: flex;
-      flex-direction: column;
-      padding: 24px 16px;
-    }
-    .sidebar h1 {
-      font-size: 1.25rem;
-      font-weight: bold;
-      margin-bottom: 16px;
-      color: #2c3e50;
-    }
-    .sidebar ul {
-      list-style: none;
-      margin-top: 8px;
-    }
-    .sidebar li {
-      margin-bottom: 16px;
-    }
-    .sidebar a {
-      text-decoration: none;
-      color: #2d85f8;
-      font-size: 1rem;
-      font-weight: 500;
-    }
-    .sidebar a:hover {
-      text-decoration: underline;
-    }
-    .sidebar .logout {
-      margin-top: auto;
-      color: #e74c3c;
-      font-size: 0.95rem;
-      cursor: pointer;
-      text-decoration: none;
-    }
-    .sidebar .logout:hover {
-      text-decoration: underline;
-    }
-
-    /* ── MAIN CONTENT ── */
-    .main-content {
-      flex: 1;
-      overflow-y: auto;
-      padding: 24px;
-    }
-    .flash {
-      padding: 10px 14px;
-      margin-bottom: 16px;
-      border-radius: 4px;
-      background-color: #e0f7e9;
-      color: #2f7a45;
-      font-weight: 500;
-      border: 1px solid #b2e6c2;
-    }
-    h2 {
-      font-size: 1.5rem;
-      color: #2c3e50;
-      margin-bottom: 16px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 12px;
-    }
-    th, td {
-      border: 1px solid #ddd;
-      padding: 10px 8px;
-      font-size: 0.93rem;
-      color: #34495e;
-    }
-    th {
-      background-color: #f2f2f2;
-      text-align: left;
-      font-weight: 600;
-    }
-    tr:nth-child(even) {
-      background-color: #fafafa;
-    }
-    tr:hover {
-      background-color: #f1f1f1;
-    }
-    .batch-link {
-      color: #2d85f8;
-      text-decoration: none;
-      font-weight: 500;
-    }
-    .batch-link:hover {
-      text-decoration: underline;
-    }
-    /* Small delete button styling */
-    .btn-delete-small {
-      padding: 4px 8px;
-      font-size: 0.8rem;
-      background-color: #e74c3c;
-      color: #fff;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-    .btn-delete-small:hover {
-      opacity: 0.92;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f6fa; color: #333; }
+    .container { display: flex; height: 100vh; }
+    .sidebar { width: 240px; background-color: #ffffff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; padding: 24px 16px; }
+    .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
+    .sidebar ul { list-style: none; margin-top: 8px; }
+    .sidebar li { margin-bottom: 16px; }
+    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a:hover { text-decoration: underline; }
+    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; cursor: pointer; text-decoration: none; }
+    .sidebar .logout:hover { text-decoration: underline; }
+    .main-content { flex: 1; overflow-y: auto; padding: 24px; }
+    .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; background-color: #e0f7e9; color: #2f7a45; font-weight: 500; border: 1px solid #b2e6c2; }
+    h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
+    th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
+    tr:nth-child(even) { background-color: #fafafa; }
+    tr:hover { background-color: #f1f1f1; }
+    .batch-link { color: #2d85f8; text-decoration: none; font-weight: 500; }
+    .batch-link:hover { text-decoration: underline; }
+    .btn-delete-small { padding: 4px 8px; font-size: 0.8rem; background-color: #e74c3c; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    .btn-delete-small:hover { opacity: 0.92; }
   </style>
 </head>
 <body>
 
   <div class="container">
-
-    <!-- ── SIDEBAR ── -->
     <div class="sidebar">
       <h1>H&amp;O Parcel Scans</h1>
       <ul>
@@ -599,11 +376,8 @@ ALL_BATCHES_TEMPLATE = r'''
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
     </div>
-    <!-- ── END SIDEBAR ── -->
 
-    <!-- ── MAIN CONTENT ── -->
     <div class="main-content">
-
       {% with messages = get_flashed_messages(with_categories=true) %}
         {% for category, msg in messages %}
           <div class="flash">{{ msg }}</div>
@@ -633,33 +407,26 @@ ALL_BATCHES_TEMPLATE = r'''
               <td>{{ b.carrier }}</td>
               <td>{{ b.created_at }}</td>
               <td>{{ b.pkg_count }}</td>
-              <td style="max-width: 400px; word-break: break-word;">
-                {{ b.tracking_numbers }}
-              </td>
+              <td style="max-width: 400px; word-break: break-word;">{{ b.tracking_numbers }}</td>
               <td>
                 <form action="{{ url_for('delete_batch') }}" method="post"
                       onsubmit="return confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.');">
                   <input type="hidden" name="batch_id" value="{{ b.id }}">
                   <button type="submit" class="btn-delete-small">Delete</button>
                 </form>
-                <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="batch-link" style="margin-left:8px;">
-                  Edit
-                </a>
+                <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="batch-link" style="margin-left:8px;">Edit</a>
               </td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
 
-    </div> <!-- .main-content -->
-
-  </div> <!-- .container -->
+    </div>
+  </div>
 
 </body>
 </html>
 '''
-
-
 
 BATCH_VIEW_TEMPLATE = r'''
 <!doctype html>
@@ -668,153 +435,39 @@ BATCH_VIEW_TEMPLATE = r'''
   <meta charset="utf-8">
   <title>Batch #{{ batch.id }} – H&O Parcel Scans</title>
   <style>
-    /* Reset & Base */
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-    html, body {
-      height: 100%;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa;
-      color: #333;
-    }
-
-    /* Layout */
-    .container {
-      display: flex;
-      height: 100vh;
-    }
-
-    /* ── SIDEBAR ── */
-    .sidebar {
-      width: 240px;
-      background-color: #ffffff;
-      border-right: 1px solid #e0e0e0;
-      display: flex;
-      flex-direction: column;
-      padding: 24px 16px;
-    }
-    .sidebar h1 {
-      font-size: 1.25rem;
-      font-weight: bold;
-      margin-bottom: 16px;
-      color: #2c3e50;
-    }
-    .sidebar ul {
-      list-style: none;
-      margin-top: 8px;
-    }
-    .sidebar li {
-      margin-bottom: 16px;
-    }
-    .sidebar a {
-      text-decoration: none;
-      color: #2d85f8;
-      font-size: 1rem;
-      font-weight: 500;
-    }
-    .sidebar a:hover {
-      text-decoration: underline;
-    }
-    .sidebar .logout {
-      margin-top: auto;
-      color: #e74c3c;
-      font-size: 0.95rem;
-      cursor: pointer;
-      text-decoration: none;
-    }
-    .sidebar .logout:hover {
-      text-decoration: underline;
-    }
-
-    /* ── MAIN CONTENT ── */
-    .main-content {
-      flex: 1;
-      overflow-y: auto;
-      padding: 24px;
-    }
-    .flash {
-      padding: 10px 14px;
-      margin-bottom: 16px;
-      border-radius: 4px;
-      background-color: #e0f7e9;
-      color: #2f7a45;
-      font-weight: 500;
-      border: 1px solid #b2e6c2;
-    }
-    .batch-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      margin-bottom: 16px;
-    }
-    .batch-header h2 {
-      font-size: 1.5rem;
-      color: #2c3e50;
-    }
-    .batch-header .back-link {
-      color: #2d85f8;
-      text-decoration: none;
-      font-size: 0.95rem;
-      font-weight: 500;
-    }
-    .batch-header .back-link:hover {
-      text-decoration: underline;
-    }
-    p.meta {
-      color: #666;
-      font-size: 0.9rem;
-      margin-bottom: 16px;
-    }
-    h3 {
-      color: #2c3e50;
-      margin-top: 16px;
-      margin-bottom: 8px;
-      font-size: 1.25rem;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 12px;
-    }
-    th, td {
-      border: 1px solid #ddd;
-      padding: 10px 8px;
-      font-size: 0.93rem;
-      color: #34495e;
-    }
-    th {
-      background-color: #f2f2f2;
-      text-align: left;
-      font-weight: 600;
-    }
-    tr:nth-child(even) {
-      background-color: #fafafa;
-    }
-    tr:hover {
-      background-color: #f1f1f1;
-    }
-    .duplicate-row {
-      background-color: #fdecea !important;
-    }
-    td a {
-      color: #2d85f8;
-      text-decoration: none;
-      font-weight: 500;
-    }
-    td a:hover {
-      text-decoration: underline;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f6fa; color: #333; }
+    .container { display: flex; height: 100vh; }
+    .sidebar { width: 240px; background-color: #ffffff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; padding: 24px 16px; }
+    .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
+    .sidebar ul { list-style: none; margin-top: 8px; }
+    .sidebar li { margin-bottom: 16px; }
+    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a:hover { text-decoration: underline; }
+    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; cursor: pointer; text-decoration: none; }
+    .sidebar .logout:hover { text-decoration: underline; }
+    .main-content { flex: 1; overflow-y: auto; padding: 24px; }
+    .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; background-color: #e0f7e9; color: #2f7a45; font-weight: 500; border: 1px solid #b2e6c2; }
+    .batch-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
+    .batch-header h2 { font-size: 1.5rem; color: #2c3e50; }
+    .batch-header .back-link { color: #2d85f8; text-decoration: none; font-size: 0.95rem; font-weight: 500; }
+    .batch-header .back-link:hover { text-decoration: underline; }
+    p.meta { color: #666; font-size: 0.9rem; margin-bottom: 16px; }
+    h3 { color: #2c3e50; margin-top: 16px; margin-bottom: 8px; font-size: 1.25rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
+    th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
+    tr:nth-child(even) { background-color: #fafafa; }
+    tr:hover { background-color: #f1f1f1; }
+    .duplicate-row { background-color: #fdecea !important; }
+    td a { color: #2d85f8; text-decoration: none; font-weight: 500; }
+    td a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
 
   <div class="container">
 
-    <!-- ── SIDEBAR ── -->
     <div class="sidebar">
       <h1>H&amp;O Parcel Scans</h1>
       <ul>
@@ -824,9 +477,7 @@ BATCH_VIEW_TEMPLATE = r'''
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
     </div>
-    <!-- ── END SIDEBAR ── -->
 
-    <!-- ── MAIN CONTENT ── -->
     <div class="main-content">
 
       {% with messages = get_flashed_messages(with_categories=true) %}
@@ -882,9 +533,9 @@ BATCH_VIEW_TEMPLATE = r'''
         </tbody>
       </table>
 
-    </div> <!-- .main-content -->
+    </div>
 
-  </div> <!-- .container -->
+  </div>
 
 </body>
 </html>
@@ -897,168 +548,40 @@ ALL_SCANS_TEMPLATE = r'''
   <meta charset="utf-8">
   <title>All Scans – H&O Parcel Scans</title>
   <style>
-    /* Reset & Base */
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-    html, body {
-      height: 100%;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa;
-      color: #333;
-    }
-
-    /* Layout */
-    .container {
-      display: flex;
-      height: 100vh;
-    }
-
-    /* ── SIDEBAR ── */
-    .sidebar {
-      width: 240px;
-      background-color: #ffffff;
-      border-right: 1px solid #e0e0e0;
-      display: flex;
-      flex-direction: column;
-      padding: 24px 16px;
-    }
-    .sidebar h1 {
-      font-size: 1.25rem;
-      font-weight: bold;
-      margin-bottom: 16px;
-      color: #2c3e50;
-    }
-    .sidebar ul {
-      list-style: none;
-      margin-top: 8px;
-    }
-    .sidebar li {
-      margin-bottom: 16px;
-    }
-    .sidebar a {
-      text-decoration: none;
-      color: #2d85f8;
-      font-size: 1rem;
-      font-weight: 500;
-    }
-    .sidebar a:hover {
-      text-decoration: underline;
-    }
-    .sidebar .logout {
-      margin-top: auto;
-      color: #e74c3c;
-      font-size: 0.95rem;
-      cursor: pointer;
-      text-decoration: none;
-    }
-    .sidebar .logout:hover {
-      text-decoration: underline;
-    }
-
-    /* ── MAIN CONTENT ── */
-    .main-content {
-      flex: 1;
-      overflow-y: auto;
-      padding: 24px;
-    }
-    .flash {
-      padding: 10px 14px;
-      margin-bottom: 16px;
-      border-radius: 4px;
-      background-color: #e0f7e9;
-      color: #2f7a45;
-      font-weight: 500;
-      border: 1px solid #b2e6c2;
-    }
-    h2 {
-      font-size: 1.5rem;
-      color: #2c3e50;
-      margin-bottom: 16px;
-    }
-    .search-form {
-      margin-top: 10px;
-      margin-bottom: 5px;
-    }
-    .search-form input[type="text"] {
-      padding: 6px;
-      font-size: 14px;
-      width: 200px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-    }
-    .search-form button {
-      padding: 6px 10px;
-      font-size: 14px;
-      border: none;
-      border-radius: 4px;
-      background-color: #2d85f8;
-      color: #fff;
-      cursor: pointer;
-      margin-left: 6px;
-    }
-    .search-form a {
-      margin-left: 12px;
-      font-size: 14px;
-      text-decoration: none;
-      color: #2d85f8;
-      font-weight: 500;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 12px;
-    }
-    th, td {
-      border: 1px solid #ddd;
-      padding: 10px 8px;
-      font-size: 0.93rem;
-      color: #34495e;
-    }
-    th {
-      background-color: #f2f2f2;
-      text-align: left;
-      font-weight: 600;
-    }
-    tr:nth-child(even) {
-      background-color: #fafafa;
-    }
-    tr:hover {
-      background-color: #f1f1f1;
-    }
-    .duplicate-row {
-      background-color: #fdecea !important;
-    }
-    td a {
-      color: #2d85f8;
-      text-decoration: none;
-      font-weight: 500;
-    }
-    td a:hover {
-      text-decoration: underline;
-    }
-    /* Small delete button styling */
-    .btn-delete-small {
-      padding: 4px 8px;
-      font-size: 0.8rem;
-      background-color: #e74c3c;
-      color: #fff;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-    .btn-delete-small:hover {
-      opacity: 0.92;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f6fa; color: #333; }
+    .container { display: flex; height: 100vh; }
+    .sidebar { width: 240px; background-color: #ffffff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; padding: 24px 16px; }
+    .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
+    .sidebar ul { list-style: none; margin-top: 8px; }
+    .sidebar li { margin-bottom: 16px; }
+    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a:hover { text-decoration: underline; }
+    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; cursor: pointer; text-decoration: none; }
+    .sidebar .logout:hover { text-decoration: underline; }
+    .main-content { flex: 1; overflow-y: auto; padding: 24px; }
+    .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; background-color: #e0f7e9; color: #2f7a45; font-weight: 500; border: 1px solid #b2e6c2; }
+    h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
+    .search-form { margin-top: 10px; margin-bottom: 5px; }
+    .search-form input[type="text"] { padding: 6px; font-size: 14px; width: 200px; border: 1px solid #ccc; border-radius: 4px; }
+    .search-form button { padding: 6px 10px; font-size: 14px; border: none; border-radius: 4px; background-color: #2d85f8; color: #fff; cursor: pointer; margin-left: 6px; }
+    .search-form a { margin-left: 12px; font-size: 14px; text-decoration: none; color: #2d85f8; font-weight: 500; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
+    th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
+    tr:nth-child(even) { background-color: #fafafa; }
+    tr:hover { background-color: #f1f1f1; }
+    .duplicate-row { background-color: #fdecea !important; }
+    td a { color: #2d85f8; text-decoration: none; font-weight: 500; }
+    td a:hover { text-decoration: underline; }
+    .btn-delete-small { padding: 4px 8px; font-size: 0.8rem; background-color: #e74c3c; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    .btn-delete-small:hover { opacity: 0.92; }
   </style>
 </head>
 <body>
 
   <div class="container">
 
-    <!-- ── SIDEBAR ── -->
     <div class="sidebar">
       <h1>H&amp;O Parcel Scans</h1>
       <ul>
@@ -1068,98 +591,89 @@ ALL_SCANS_TEMPLATE = r'''
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
     </div>
-    <!-- ── END SIDEBAR ── -->
 
-    <!-- ── MAIN CONTENT ── -->
-<div class="main-content">
+    <div class="main-content">
 
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for category, msg in messages %}
-      <div class="flash">{{ msg }}</div>
-    {% endfor %}
-  {% endwith %}
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, msg in messages %}
+          <div class="flash">{{ msg }}</div>
+        {% endfor %}
+      {% endwith %}
 
-  <h2>All Scans</h2>
+      <h2>All Scans</h2>
 
-  <form class="search-form" method="get" action="{{ url_for('all_scans') }}">
-    <label for="order_search"><strong>Search by Order # or Customer Name:</strong></label>
-    <input type="text" name="order_number" id="order_search" value="{{ request.args.get('order_number','') }}">
-    <button type="submit">Search</button>
-    {% if request.args.get('order_number') %}
-      <a href="{{ url_for('all_scans') }}">Clear</a>
-    {% endif %}
-  </form>
+      <form class="search-form" method="get" action="{{ url_for('all_scans') }}">
+        <label for="order_search"><strong>Search by Order # or Customer Name:</strong></label>
+        <input type="text" name="order_number" id="order_search" value="{{ request.args.get('order_number','') }}">
+        <button type="submit">Search</button>
+        {% if request.args.get('order_number') %}
+          <a href="{{ url_for('all_scans') }}">Clear</a>
+        {% endif %}
+      </form>
 
-  <table>
-    <thead>
-      <tr>
-        <th>Tracking</th>
-        <th>Carrier</th>
-        <th>Order #</th>
-        <th>Customer</th>
-        <th>Scan Time</th>
-        <th>Status</th>
-        <th>Order ID</th>
-        <th>Batch ID</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for s in scans %}
-        <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
-          <td>{{ s.tracking_number }}</td>
-          <td>{{ s.carrier }}</td>
-          <td>
-            <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
-              {{ s.order_number }}
-            </a>
-          </td>
-          <td>
-            <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
-              {{ s.customer_name }}
-            </a>
-          </td>
-          <td>{{ s.scan_date }}</td>
-          <td>{{ s.status }}</td>
-          <td>{{ s.order_id }}</td>
-          <td>{{ s.batch_id or '' }}</td>
-          <td>
-            <form action="{{ url_for('delete_scan') }}" method="post"
-                  onsubmit="return confirm('Are you sure you want to delete this scan?');">
-              <input type="hidden" name="scan_id"  value="{{ s.id }}">
-              <button type="submit" class="btn-delete-small">Delete</button>
-            </form>
-          </td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+      <table>
+        <thead>
+          <tr>
+            <th>Tracking</th>
+            <th>Carrier</th>
+            <th>Order #</th>
+            <th>Customer</th>
+            <th>Scan Time</th>
+            <th>Status</th>
+            <th>Order ID</th>
+            <th>Batch ID</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in scans %}
+            <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
+              <td>{{ s.tracking_number }}</td>
+              <td>{{ s.carrier }}</td>
+              <td>
+                <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+                  {{ s.order_number }}
+                </a>
+              </td>
+              <td>
+                <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+                  {{ s.customer_name }}
+                </a>
+              </td>
+              <td>{{ s.scan_date }}</td>
+              <td>{{ s.status }}</td>
+              <td>{{ s.order_id }}</td>
+              <td>{{ s.batch_id or '' }}</td>
+              <td>
+                <form action="{{ url_for('delete_scan') }}" method="post"
+                      onsubmit="return confirm('Are you sure you want to delete this scan?');">
+                  <input type="hidden" name="scan_id"  value="{{ s.id }}">
+                  <button type="submit" class="btn-delete-small">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
 
-</div> <!-- .main-content -->
+    </div>
 
-  </div> <!-- .container -->
+  </div>
 
 <script>
-  // define the handler so we can remove it later
   function requireLogoutPrompt(e) {
     e.preventDefault();
-    // Chrome requires setting returnValue
     e.returnValue = "";
   }
-
-  // register the prompt on page load
   window.addEventListener("beforeunload", requireLogoutPrompt);
-
-  // disable the prompt when they click “Log Out”
   document.addEventListener("DOMContentLoaded", function() {
     const logoutLink = document.querySelector(".logout");
     if (!logoutLink) return;
-
     logoutLink.addEventListener("click", function() {
       window.removeEventListener("beforeunload", requireLogoutPrompt);
     });
   });
 </script>
-
 
 </body>
 </html>
@@ -1167,7 +681,176 @@ ALL_SCANS_TEMPLATE = r'''
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ── BEFORE REQUEST: require login ──────────────────────────────────────────────
+# Helpers: carrier heuristics & caching
+# ─────────────────────────────────────────────────────────────────────────────
+
+CARRIER_PATTERNS = [
+    ("UPS",        lambda code: code.upper().startswith("1Z")),
+    ("DHL",        lambda code: len(code) == 10 and code.isdigit()),
+    ("Purolator",  lambda code: len(code) == 12 and code.isdigit()),
+    ("Canada Post",lambda code: code.startswith("2016") or len(code) in (16, 22, 34)),
+    ("USPS",       lambda code: code.startswith("LA") or len(code) == 30),
+]
+
+def quick_detect_carrier(code: str) -> str:
+    c = (code or "").strip()
+    for name, fn in CARRIER_PATTERNS:
+        try:
+            if fn(c):
+                return name
+        except Exception:
+            pass
+    return ""
+
+def get_cached_tracking(code: str):
+    try:
+        conn = get_mysql_connection()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("""
+          SELECT tracking_number, found, order_number, customer_name, order_id, carrier,
+                 UNIX_TIMESTAMP(updated_at) AS ts
+            FROM tracking_cache
+           WHERE tracking_number = %s
+        """, (code,))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if not row:
+            return None
+        if time.time() - row["ts"] > CACHE_TTL_SECONDS:
+            return None
+        return row
+    except Exception:
+        return None
+
+def set_cached_tracking(code: str, found: bool, payload: dict):
+    try:
+        conn = get_mysql_connection()
+        cur = conn.cursor()
+        cur.execute("""
+          INSERT INTO tracking_cache
+            (tracking_number, found, order_number, customer_name, order_id, carrier, source)
+          VALUES (%s,%s,%s,%s,%s,%s,%s)
+          ON DUPLICATE KEY UPDATE
+            found=VALUES(found),
+            order_number=VALUES(order_number),
+            customer_name=VALUES(customer_name),
+            order_id=VALUES(order_id),
+            carrier=VALUES(carrier),
+            source=VALUES(source),
+            updated_at=CURRENT_TIMESTAMP
+        """, (
+            code, 1 if found else 0,
+            payload.get("order_number"),
+            payload.get("customer_name"),
+            payload.get("order_id"),
+            payload.get("carrier"),
+            payload.get("source", "")
+        ))
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception:
+        pass
+
+def lookup_tracking(code: str):
+    """
+    Try ShipStation quickly, then Shopify, with caching.
+    Returns dict {order_number, customer_name, order_id, carrier, source} or {}.
+    """
+    # Cache first
+    cached = get_cached_tracking(code)
+    if cached:
+        if cached["found"]:
+            return {
+                "order_number": cached.get("order_number") or "N/A",
+                "customer_name": cached.get("customer_name") or "Unknown",
+                "order_id": cached.get("order_id") or "",
+                "carrier": cached.get("carrier") or "",
+                "source": "cache"
+            }
+        else:
+            return {}
+
+    out = {}
+    # ShipStation
+    try:
+        if not (SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET):
+            raise RuntimeError("ShipStation credentials not configured")
+        url = f"https://ssapi.shipstation.com/shipments?trackingNumber={code}"
+        resp = requests.get(
+            url,
+            auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+            headers={"Accept": "application/json"},
+            timeout=SHIPSTATION_TIMEOUT
+        )
+        resp.raise_for_status()
+        data = resp.json() or {}
+        shipments = data.get("shipments", []) or []
+        if shipments:
+            first = shipments[0]
+            out["order_number"]  = first.get("orderNumber", "N/A")
+            out["customer_name"] = (first.get("shipTo") or {}).get("name", "No Name")
+            carrier_code = (first.get("carrierCode") or "").lower()
+            out["carrier"] = {
+                "ups": "UPS",
+                "canadapost": "Canada Post",
+                "dhl": "DHL",
+                "purolator": "Purolator",
+                "usps": "USPS"
+            }.get(carrier_code, "")
+            out["source"] = "shipstation"
+    except Exception:
+        pass
+
+    # Shopify (only if needed)
+    if SHOPIFY_LOOKUP_ENABLED and ("order_number" not in out or "order_id" not in out):
+        try:
+            shopify_api = get_shopify_api()
+            info = shopify_api.get_order_by_tracking(code)
+            if info:
+                out.setdefault("order_number", info.get("order_number", "N/A"))
+                out.setdefault("customer_name", info.get("customer_name", "Unknown"))
+                out["order_id"] = info.get("order_id", "")
+                out.setdefault("source", "shopify")
+        except Exception:
+            pass
+
+    # Fallback carrier heuristic
+    if not out.get("carrier"):
+        out["carrier"] = quick_detect_carrier(code)
+
+    # Cache
+    if out.get("order_number") or out.get("order_id"):
+        set_cached_tracking(code, True, out)
+    else:
+        set_cached_tracking(code, False, {"carrier": out.get("carrier"), "source": "negative"})
+
+    return out
+
+def enrich_scan_async(scan_id: int, code: str):
+    info = lookup_tracking(code)
+    try:
+        conn = get_mysql_connection()
+        cur = conn.cursor()
+        order_number  = info.get("order_number", "N/A")
+        customer_name = info.get("customer_name", "Unknown")
+        order_id      = info.get("order_id", "")
+        carrier       = info.get("carrier", "")
+        cur.execute("""
+          UPDATE scans
+             SET order_number=%s,
+                 customer_name=%s,
+                 order_id=%s,
+                 carrier=%s
+           WHERE id=%s
+        """, (order_number, customer_name, order_id, carrier, scan_id))
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BEFORE REQUEST: require login
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.before_request
@@ -1193,9 +876,8 @@ def require_login():
         return redirect(url_for("login"))
 
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# ── Routes ────────────────────────────────────────────────────────────────────
+# Routes
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route("/login", methods=["GET", "POST"])
@@ -1212,14 +894,10 @@ def login():
             error_msg = "Invalid password. Please try again."
     return render_template_string(LOGIN_TEMPLATE, error=error_msg)
 
-
-
-
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("login"))
-
 
 @app.route("/", methods=["GET"])
 def index():
@@ -1250,7 +928,7 @@ def index():
         flash(("error", "Batch not found. Please start a new batch."))
         return redirect(url_for("index"))
 
-    # Fetch all scans in this batch (no 'id' column)
+    # Fetch all scans in this batch
     cursor.execute("""
       SELECT
         id,
@@ -1276,8 +954,6 @@ def index():
         scans=scans,
         shop_url=SHOP_URL
     )
-
-
 
 @app.route("/new_batch", methods=["POST"])
 def new_batch():
@@ -1323,8 +999,6 @@ def edit_batch(batch_id):
     flash(("success", f"Editing batch #{batch_id}."))
     return redirect(url_for("index"))
 
-
-
 @app.route("/cancel_batch", methods=["GET"])
 def cancel_batch():
     batch_id = session.pop("batch_id", None)
@@ -1368,8 +1042,9 @@ def delete_batch():
 
     return redirect(url_for("all_batches"))
 
-
-
+# ─────────────────────────────────────────────────────────────────────────────
+# FAST /scan: insert immediately, enrich in background
+# ─────────────────────────────────────────────────────────────────────────────
 @app.route("/scan", methods=["POST"])
 def scan():
     code = request.form.get("code", "").strip()
@@ -1382,163 +1057,54 @@ def scan():
         flash(("error", "No batch open. Please start a new batch first."))
         return redirect(url_for("index"))
 
-    # Get the batch’s configured carrier
     conn = get_mysql_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT carrier FROM batches WHERE id = %s", (batch_id,))
-    batch_carrier = cursor.fetchone()[0] or ""
-    cursor.close() 
+    # Get batch's configured carrier
+    cur = conn.cursor()
+    cur.execute("SELECT carrier FROM batches WHERE id = %s", (batch_id,))
+    row = cur.fetchone()
+    batch_carrier = (row[0] if row else "") or ""
+    cur.close()
 
-    # Normalize Canada Post codes
-    if batch_carrier == "Canada Post":
-        if len(code) >= 12:
-            code = code[7:-5]
-    elif batch_carrier == "Purolator":
-        if len(code) == 34:
-            code = code[11:-11]
-# else: leave code unchanged
-    # Do NOT wipe the code for UPS, DHL, etc.
-    code = code  # Keep as-is
-    # Defaults
-    order_number  = "N/A"
-    customer_name = "No ShipStation"
-    order_id      = ""
-    status        = "Original"
-    now_str       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    scan_carrier  = ""
+    # Normalize code for certain carriers
+    if batch_carrier == "Canada Post" and len(code) >= 12:
+        code = code[7:-5]
+    elif batch_carrier == "Purolator" and len(code) == 34:
+        code = code[11:-11]
 
-    # ── ShipStation lookup (including carrierCode) ──
-    shipments = []
-    # ── ShipStation lookup ──
+    # Duplicate check (lightweight)
     try:
-        if not SHIPSTATION_API_KEY or not SHIPSTATION_API_SECRET:
-            # credentials are truly missing—this is fatal
-            raise RuntimeError("ShipStation credentials not configured")
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM scans WHERE batch_id=%s AND tracking_number=%s LIMIT 1", (batch_id, code))
+        duplicate = cur.fetchone() is not None
+        cur.close()
+    except Exception:
+        duplicate = False
 
-        url = f"https://ssapi.shipstation.com/shipments?trackingNumber={code}"
-        resp = requests.get(
-            url,
-            auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-            headers={"Accept": "application/json"},
-            timeout=5
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        shipments = data.get("shipments", [])
+    status = "Duplicate" if duplicate else "Original"
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        if shipments:
-            first = shipments[0]
-            order_number  = first.get("orderNumber", "N/A")
-            customer_name = first.get("shipTo", {}).get("name", "No Name")
-            carrier_code  = first.get("carrierCode", "").lower()
+    # Immediate insert (instant UI feedback)
+    order_number  = "N/A" if status == "Duplicate" else "Lookup pending"
+    customer_name = "N/A" if status == "Duplicate" else "Lookup pending"
+    detected_carrier = quick_detect_carrier(code) or batch_carrier
 
-            carrier_map = {
-                "ups":        "UPS",
-                "canadapost": "Canada Post",
-                "dhl":        "DHL",
-                "purolator":  "Purolator",
-            }
-            scan_carrier = carrier_map.get(carrier_code, "")
-
-    except RuntimeError as e:
-        # truly fatal (no credentials)
-        flash(("error", str(e)))
-        conn.close()
-        return redirect(url_for("index"))
-    except requests.RequestException as e:
-        # network/HTTP errors—warn but continue to fallback
-        flash(("warning", f"ShipStation request failed: {e}"))
-    except ValueError as e:
-        # JSON decode errors, etc.—warn but continue
-        flash(("warning", f"ShipStation returned bad data: {e}"))
-    # no generic "except Exception": let truly unexpected errors bubble up
-
-    # ── Fallback: if no shipments from ShipStation, query Shopify ──
-# In the /scan route, combine the logic:
-order_id = ""
-shopify_info = {}
-
-# Only call Shopify once, after ShipStation
-if not shipments:
-    try:
-        shopify_api = get_shopify_api()  # Use singleton
-        shopify_info = shopify_api.get_order_by_tracking(code)
-        order_number = shopify_info.get("order_number", "N/A")
-        customer_name = shopify_info.get("customer_name", "Unknown")
-        order_id = shopify_info.get("order_id", "")
-    except Exception as e:
-        flash(("error", f"Shopify lookup error: {e}"))
-else:
-    # If we got ShipStation data, still get order_id from Shopify
-    try:
-        shopify_api = get_shopify_api()
-        shopify_info = shopify_api.get_order_by_tracking(code)
-        order_id = shopify_info.get("order_id", "")
-    except Exception as e:
-        pass  # Don't fail the whole scan
-
-
-
-    # ── Fallback: detect DHL by 10-char code, then UPS/Canada Post ──
-    if not scan_carrier:
-        if len(code) == 12:
-            scan_carrier = "Purolator"
-        elif len(code) == 10:
-            scan_carrier = "DHL"
-        elif code.startswith("1ZAC"):
-            scan_carrier = "UPS"
-        elif code.startswith("2016"):
-            scan_carrier = "Canada Post"
-        elif code.startswith("LA") or len(code) == 30:
-            scan_carrier = "USPS"
-
-
-    # ── Duplicate check ──
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT COUNT(*) FROM scans WHERE tracking_number = %s AND batch_id = %s",
-        (code, batch_id)
-    )
-    if cursor.fetchone()[0] > 0:
-        status = "Duplicate"
-    cursor.close()
-
-    # ── Shopify lookup for order_id ──
-    try:
-
-_shopify_api = None
-
-def get_shopify_api():
-    global _shopify_api
-    if _shopify_api is None:
-        _shopify_api = ShopifyAPI()
-    return _shopify_api
-        info = shopify_api.get_order_by_tracking(code)
-        order_id = info.get("order_id", "")
-    except Exception as e:
-        flash(("error", f"Shopify lookup error: {e}"))
-
-    # ── Insert the scan record ──
-    cursor = conn.cursor()
-    cursor.execute(
-        """
+    cur = conn.cursor()
+    cur.execute("""
         INSERT INTO scans
           (tracking_number, carrier, order_number, customer_name,
            scan_date, status, order_id, batch_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        (code, scan_carrier, order_number, customer_name,
-         now_str, status, order_id, batch_id)
-    )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+    """, (code, detected_carrier, order_number, customer_name, now_str, status, "", batch_id))
+    scan_id = cur.lastrowid
     conn.commit()
-    cursor.close()
-    conn.close()
+    cur.close(); conn.close()
 
-    flash(("success", f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})"))
+    # Kick off enrichment in background for non-duplicates
+    if status != "Duplicate":
+        executor.submit(enrich_scan_async, scan_id, code)
+
+    flash(("success", f"Recorded scan: {code} (Status: {status}, Carrier: {detected_carrier or '—'})"))
     return redirect(url_for("index"))
-
-
-
 
 @app.route("/delete_scans", methods=["POST"])
 def delete_scans():
@@ -1572,8 +1138,6 @@ def delete_scans():
 
     return redirect(url_for("index"))
 
-
-
 @app.route("/delete_scan", methods=["POST"])
 def delete_scan():
     scan_id = request.form.get("scan_id")
@@ -1593,7 +1157,6 @@ def delete_scan():
         flash(("error", f"MySQL Error: {e}"))
 
     return redirect(url_for("all_scans"))
-
 
 @app.route("/record_batch", methods=["POST"])
 def record_batch():
@@ -1631,7 +1194,6 @@ def record_batch():
 
     return redirect(url_for("index"))
 
-
 @app.route("/all_batches", methods=["GET"])
 def all_batches():
     conn = get_mysql_connection()
@@ -1649,7 +1211,6 @@ def all_batches():
         batches=batches,
         shop_url=SHOP_URL
     )
-
 
 @app.route("/view_batch/<int:batch_id>", methods=["GET"])
 def view_batch(batch_id):
@@ -1691,7 +1252,6 @@ def view_batch(batch_id):
         shop_url=SHOP_URL
     )
 
-
 @app.route("/all_scans", methods=["GET"])
 def all_scans():
     order_search = request.args.get("order_number", "").strip()
@@ -1703,6 +1263,7 @@ def all_scans():
         like_pattern = f"%{order_search}%"
         cursor.execute("""
           SELECT
+            id,
             tracking_number,
             carrier,
             order_number,
@@ -1719,6 +1280,7 @@ def all_scans():
     else:
         cursor.execute("""
           SELECT
+            id,
             tracking_number,
             carrier,
             order_number,
@@ -1742,6 +1304,7 @@ def all_scans():
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
