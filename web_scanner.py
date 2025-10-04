@@ -1505,7 +1505,6 @@ else:
 
     # ── Shopify lookup for order_id ──
     try:
-
 _shopify_api = None
 
 def get_shopify_api():
