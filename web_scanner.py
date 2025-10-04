@@ -42,7 +42,7 @@ INACTIVITY_TIMEOUT = 60 * 60  # 30 minutes in seconds
 # ── MySQL connection pool ──
 db_pool = mysql.connector.pooling.MySQLConnectionPool(
     pool_name="flask_pool",
-    pool_size=5,
+    pool_size=20,
     pool_reset_session=True,
     host=os.environ["MYSQL_HOST"],
     port=int(os.environ.get("MYSQL_PORT", 30603)),
