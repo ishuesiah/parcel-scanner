@@ -351,6 +351,9 @@ MAIN_TEMPLATE = r'''
             <h2>Batch #{{ current_batch.id }} ({{ current_batch.carrier }})</h2>
             <p><em>Created: {{ current_batch.created_at }}</em></p>
             <p>Scans in batch: <strong id="scan-count">{{ scans|length }}</strong></p>
+            <p style="font-size: 0.85rem; color: #666; margin-top: 4px;">
+              💡 Tip: Order details load in background. Refresh page to see updated info.
+            </p>
           </div>
           <div class="batch-actions">
             <a href="#" onclick="return confirmCancelBatch();">Cancel This Batch</a>
@@ -456,12 +459,11 @@ MAIN_TEMPLATE = r'''
       const code = codeInput.value.trim();
       if (!code) return;
 
-      // Disable button and show spinner
-      scanBtn.disabled = true;
+      // Show processing but DON'T disable button
       scanSpinner.style.display = 'inline-block';
       
-      // Show processing status
-      scanStatus.textContent = `Processing: ${code}...`;
+      // Show immediate feedback
+      scanStatus.textContent = `Scanning: ${code}...`;
       scanStatus.className = 'scan-status processing show';
 
       try {
@@ -480,7 +482,7 @@ MAIN_TEMPLATE = r'''
 
         if (data.success) {
           // Show success message
-          scanStatus.textContent = data.message;
+          scanStatus.textContent = data.message + ' (Details loading in background...)';
           scanStatus.className = 'scan-status success show';
 
           // Add new row to table
@@ -490,13 +492,13 @@ MAIN_TEMPLATE = r'''
           const currentCount = parseInt(scanCount.textContent);
           scanCount.textContent = currentCount + 1;
 
-          // Clear input
+          // Clear input IMMEDIATELY
           codeInput.value = '';
 
-          // Hide status after 2 seconds
+          // Hide status after 1.5 seconds
           setTimeout(() => {
             scanStatus.classList.remove('show');
-          }, 2000);
+          }, 1500);
         } else {
           scanStatus.textContent = 'Error: ' + data.error;
           scanStatus.className = 'scan-status error show';
@@ -505,8 +507,7 @@ MAIN_TEMPLATE = r'''
         scanStatus.textContent = 'Error: ' + error.message;
         scanStatus.className = 'scan-status error show';
       } finally {
-        // Re-enable button and hide spinner
-        scanBtn.disabled = false;
+        // Hide spinner and keep button enabled
         scanSpinner.style.display = 'none';
         codeInput.focus();
       }
@@ -517,6 +518,8 @@ MAIN_TEMPLATE = r'''
       row.className = scan.status === 'Duplicate' ? 'duplicate-row' : '';
       row.dataset.scanId = scan.id;
 
+      // Note: order_number and customer_name will be "Processing..." and "Looking up..."
+      // They'll update in the database in background, refresh page to see updates
       const orderLink = scan.order_id 
         ? `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.order_number}</a>`
         : scan.order_number;
@@ -1202,11 +1205,114 @@ def delete_batch():
     return redirect(url_for("all_batches"))
 
 
+def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
+    """
+    Background thread function to process API calls after scan is already saved.
+    This runs AFTER the response is sent to user, so scanning can continue immediately.
+    """
+    import threading
+    time.sleep(0.1)  # Small delay to ensure response is sent first
+    
+    conn = get_mysql_connection()
+    try:
+        # Initialize with defaults
+        order_number = "N/A"
+        customer_name = "Not Found"
+        order_id = ""
+        scan_carrier = batch_carrier
+        
+        # ── ShipStation lookup ──
+        shipstation_found = False
+        try:
+            if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+                url = f"https://ssapi.shipstation.com/shipments?trackingNumber={tracking_number}"
+                resp = requests.get(
+                    url,
+                    auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                    headers={"Accept": "application/json"},
+                    timeout=6
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                shipments = data.get("shipments", [])
+
+                if shipments:
+                    shipstation_found = True
+                    first = shipments[0]
+                    order_number = first.get("orderNumber", "N/A")
+                    ship_to = first.get("shipTo", {})
+                    customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
+                    carrier_code = first.get("carrierCode", "").lower()
+
+                    carrier_map = {
+                        "ups": "UPS",
+                        "canadapost": "Canada Post",
+                        "canada_post": "Canada Post",
+                        "dhl": "DHL",
+                        "dhl_express": "DHL",
+                        "purolator": "Purolator",
+                    }
+                    scan_carrier = carrier_map.get(carrier_code, batch_carrier)
+        except Exception as e:
+            print(f"ShipStation error for {tracking_number}: {e}")
+
+        # ── Shopify lookup ──
+        shopify_found = False
+        try:
+            shopify_api = get_shopify_api()
+            shopify_info = shopify_api.get_order_by_tracking(tracking_number)
+            
+            if shopify_info and shopify_info.get("order_id"):
+                shopify_found = True
+                order_number = shopify_info.get("order_number", order_number)
+                customer_name = shopify_info.get("customer_name", customer_name)
+                order_id = shopify_info.get("order_id", order_id)
+        except Exception as e:
+            print(f"Shopify error for {tracking_number}: {e}")
+
+        # ── Fallback carrier detection ──
+        if not scan_carrier or scan_carrier == "":
+            if len(tracking_number) == 12:
+                scan_carrier = "Purolator"
+            elif len(tracking_number) == 10:
+                scan_carrier = "DHL"
+            elif tracking_number.startswith("1Z"):
+                scan_carrier = "UPS"
+            elif tracking_number.startswith("2016"):
+                scan_carrier = "Canada Post"
+            elif tracking_number.startswith("LA") or len(tracking_number) == 30:
+                scan_carrier = "USPS"
+            else:
+                scan_carrier = batch_carrier
+
+        # ── Update the scan record with API results ──
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE scans
+            SET carrier = %s,
+                order_number = %s,
+                customer_name = %s,
+                order_id = %s,
+                status = 'Complete'
+            WHERE id = %s
+            """,
+            (scan_carrier, order_number, customer_name, order_id, scan_id)
+        )
+        conn.commit()
+        cursor.close()
+        
+    except Exception as e:
+        print(f"Background API processing error for scan {scan_id}: {e}")
+    finally:
+        conn.close()
+
+
 @app.route("/scan", methods=["POST"])
 def scan():
     """
-    Async-friendly scan endpoint that can return JSON for AJAX requests
-    or redirect for traditional form submissions.
+    INSTANT scan endpoint - inserts to database immediately,
+    then processes APIs in background thread.
     """
     code = request.form.get("code", "").strip()
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
@@ -1242,7 +1348,7 @@ def scan():
             if len(code) == 34:
                 code = code[11:-11]
 
-        # Check for duplicate FIRST (before API calls)
+        # Check for duplicate FIRST (instant check)
         cursor = conn.cursor()
         cursor.execute(
             "SELECT COUNT(*) FROM scans WHERE tracking_number = %s AND batch_id = %s",
@@ -1250,87 +1356,28 @@ def scan():
         )
         is_duplicate = cursor.fetchone()[0] > 0
         cursor.close()
-        status = "Duplicate" if is_duplicate else "Original"
+        status = "Duplicate" if is_duplicate else "Processing"
 
-        # Defaults - more user-friendly messages
-        order_number  = "N/A"
-        customer_name = "Lookup in progress..."
-        order_id      = ""
-        now_str       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        scan_carrier  = batch_carrier  # Default to batch carrier
-
-        # ── ShipStation lookup ──
-        shipstation_found = False
-        try:
-            if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
-                url = f"https://ssapi.shipstation.com/shipments?trackingNumber={code}"
-                resp = requests.get(
-                    url,
-                    auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-                    headers={"Accept": "application/json"},
-                    timeout=6
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                shipments = data.get("shipments", [])
-
-                if shipments:
-                    shipstation_found = True
-                    first = shipments[0]
-                    order_number  = first.get("orderNumber", "N/A")
-                    ship_to = first.get("shipTo", {})
-                    customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
-                    carrier_code  = first.get("carrierCode", "").lower()
-
-                    carrier_map = {
-                        "ups":        "UPS",
-                        "canadapost": "Canada Post",
-                        "canada_post": "Canada Post",
-                        "dhl":        "DHL",
-                        "dhl_express": "DHL",
-                        "purolator":  "Purolator",
-                    }
-                    scan_carrier = carrier_map.get(carrier_code, batch_carrier)
-        except requests.RequestException:
-            pass  # Silently continue to Shopify lookup
-        except Exception:
-            pass
-
-        # ── Shopify lookup (always try, even if ShipStation found something) ──
-        shopify_found = False
-        try:
-            shopify_api = get_shopify_api()
-            shopify_info = shopify_api.get_order_by_tracking(code)
-            
-            # Only use Shopify data if we got valid results
-            if shopify_info and shopify_info.get("order_id"):
-                shopify_found = True
-                order_number  = shopify_info.get("order_number", order_number)
-                customer_name = shopify_info.get("customer_name", customer_name)
-                order_id      = shopify_info.get("order_id", order_id)
-        except Exception:
-            pass  # Continue with what we have
-
-        # ── Final fallback for customer name ──
-        if not shipstation_found and not shopify_found:
-            customer_name = "Not Found"
+        # INSTANT INSERT with placeholder data
+        order_number = "Processing..."
+        customer_name = "Looking up..."
+        order_id = ""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # ── Fallback carrier detection if still not set ──
-        if not scan_carrier or scan_carrier == "":
-            if len(code) == 12:
-                scan_carrier = "Purolator"
-            elif len(code) == 10:
-                scan_carrier = "DHL"
-            elif code.startswith("1Z"):
-                scan_carrier = "UPS"
-            elif code.startswith("2016"):
-                scan_carrier = "Canada Post"
-            elif code.startswith("LA") or len(code) == 30:
-                scan_carrier = "USPS"
-            else:
-                scan_carrier = batch_carrier  # Use batch carrier as final fallback
+        # Detect carrier from tracking number format (quick, no API)
+        scan_carrier = batch_carrier
+        if len(code) == 12:
+            scan_carrier = "Purolator"
+        elif len(code) == 10:
+            scan_carrier = "DHL"
+        elif code.startswith("1Z"):
+            scan_carrier = "UPS"
+        elif code.startswith("2016"):
+            scan_carrier = "Canada Post"
+        elif code.startswith("LA") or len(code) == 30:
+            scan_carrier = "USPS"
 
-        # ── Insert the scan record ──
+        # ── INSERT IMMEDIATELY (no waiting for APIs) ──
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -1346,7 +1393,16 @@ def scan():
         scan_id = cursor.lastrowid
         cursor.close()
 
-        # Return appropriate response based on request type
+        # ── Launch background thread for API calls ──
+        import threading
+        api_thread = threading.Thread(
+            target=process_scan_apis_background,
+            args=(scan_id, code, batch_carrier),
+            daemon=True
+        )
+        api_thread.start()
+
+        # ── Return IMMEDIATELY (don't wait for APIs) ──
         if is_ajax:
             return jsonify({
                 "success": True,
