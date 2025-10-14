@@ -11,7 +11,8 @@ from flask import (
     url_for,
     render_template_string,
     flash,
-    session
+    session,
+    jsonify
 )
 import mysql.connector
 from mysql.connector import pooling
@@ -24,7 +25,7 @@ app = Flask(__name__)
 # ── Secure session cookie settings ──
 app.config.update(
     SESSION_COOKIE_SECURE=True,    # only send cookie over HTTPS
-    SESSION_COOKIE_HTTPONLY=True,  # JS can’t read the cookie
+    SESSION_COOKIE_HTTPONLY=True,  # JS can't read the cookie
     SESSION_COOKIE_SAMESITE='Lax'  # basic CSRF protection on cookies
 )
 
@@ -193,10 +194,16 @@ MAIN_TEMPLATE = r'''
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash {
       padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid;
+      animation: slideIn 0.3s ease-out;
     }
     .flash.success { background-color: #e0f7e9; color: #2f7a45; border-color: #b2e6c2; }
     .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
     .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
 
     h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
     form label { font-weight: 600; color: #333; }
@@ -204,26 +211,93 @@ MAIN_TEMPLATE = r'''
       width: 300px; padding: 8px; border: 1px solid #ccc; border-radius: 4px;
       margin-top: 4px; margin-bottom: 12px; font-size: 0.95rem;
     }
-    .btn { padding: 8px 12px; font-size: 0.9rem; border: none; border-radius: 4px; cursor: pointer; }
+    .btn { padding: 8px 12px; font-size: 0.9rem; border: none; border-radius: 4px; cursor: pointer; transition: all 0.2s; }
     .btn-new { background-color: #2d85f8; color: white; }
     .btn-delete { background-color: #e74c3c; color: white; }
     .btn-batch { background-color: #27ae60; color: white; }
-    .btn:hover { opacity: 0.92; }
+    .btn:hover { opacity: 0.92; transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    /* Scan form improvements */
+    .scan-section { 
+      background: white; 
+      padding: 20px; 
+      border-radius: 8px; 
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1); 
+      margin-bottom: 20px; 
+    }
+    .scan-form { display: flex; align-items: flex-end; gap: 12px; }
+    .scan-form .form-group { flex: 1; max-width: 400px; }
+    .scan-form input[type="text"] { width: 100%; }
+    .scan-status { 
+      margin-top: 12px; 
+      padding: 8px 12px; 
+      border-radius: 4px; 
+      font-size: 0.9rem; 
+      display: none;
+    }
+    .scan-status.show { display: block; }
+    .scan-status.processing { background-color: #fff4e5; color: #8a6100; border: 1px solid #ffe0b2; }
+    .scan-status.success { background-color: #e0f7e9; color: #2f7a45; border: 1px solid #b2e6c2; }
+    .scan-status.error { background-color: #fdecea; color: #a33a2f; border: 1px solid #f5c6cb; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
     th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
     th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
     tr:nth-child(even) { background-color: #fafafa; }
     tr:hover { background-color: #f1f1f1; }
     .duplicate-row { background-color: #fdecea !important; }
+    .duplicate-row:hover { background-color: #fbd5d0 !important; }
     td a { color: #2d85f8; text-decoration: none; font-weight: 500; }
     td a:hover { text-decoration: underline; }
-    td input[type="checkbox"] { width: 16px; height: 16px; }
-    .batch-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
-    .batch-header h2 { font-size: 1.5rem; color: #2c3e50; }
-    .batch-nav { display: flex; gap: 24px; font-size: 0.95rem; }
-    .batch-nav a { color: #2d85f8; text-decoration: none; font-weight: 500; }
-    .batch-nav a:hover { text-decoration: underline; }
+    td input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
+    
+    .batch-header { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between; 
+      flex-wrap: wrap; 
+      margin-bottom: 16px; 
+      background: white;
+      padding: 16px 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .batch-info h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 4px; }
+    .batch-info p { color: #666; font-size: 0.9rem; margin: 2px 0; }
+    .batch-actions { display: flex; gap: 12px; align-items: center; }
+    .batch-actions a { color: #e74c3c; text-decoration: none; font-size: 0.9rem; font-weight: 500; }
+    .batch-actions a:hover { text-decoration: underline; }
+
+    /* Actions bar for delete */
+    .actions-bar {
+      background: white;
+      padding: 16px 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .actions-bar h3 { font-size: 1.1rem; color: #2c3e50; }
+
+    /* Loading spinner */
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #f3f3f3;
+      border-top: 2px solid #2d85f8;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-left: 8px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
@@ -246,94 +320,111 @@ MAIN_TEMPLATE = r'''
     <!-- ── MAIN CONTENT ── -->
     <div class="main-content">
 
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% for category, msg in messages %}
-          <div class="flash {{ category }}">{{ msg }}</div>
-        {% endfor %}
-      {% endwith %}
+      <div id="flash-container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for category, msg in messages %}
+            <div class="flash {{ category }}">{{ msg }}</div>
+          {% endfor %}
+        {% endwith %}
+      </div>
 
       {% if not current_batch %}
         <h2>Create New Batch</h2>
-        <form action="{{ url_for('new_batch') }}" method="post">
-          <label for="carrier"><strong>Carrier:</strong></label><br>
-          <select name="carrier" id="carrier" required>
-            <option value="">-- Select Carrier --</option>
-            <option value="UPS">UPS</option>
-            <option value="Canada Post">Canada Post</option>
-            <option value="DHL">DHL</option>
-            <option value="Purolator">Purolator</option>
-          </select>
-          <br>
-          <button type="submit" class="btn btn-new">Start Batch</button>
-        </form>
+        <div class="scan-section">
+          <form action="{{ url_for('new_batch') }}" method="post">
+            <label for="carrier"><strong>Carrier:</strong></label><br>
+            <select name="carrier" id="carrier" required>
+              <option value="">-- Select Carrier --</option>
+              <option value="UPS">UPS</option>
+              <option value="Canada Post">Canada Post</option>
+              <option value="DHL">DHL</option>
+              <option value="Purolator">Purolator</option>
+            </select>
+            <br><br>
+            <button type="submit" class="btn btn-new">Start Batch</button>
+          </form>
+        </div>
 
       {% else %}
         <div class="batch-header">
-          <h2>Batch #{{ current_batch.id }} (Carrier: {{ current_batch.carrier }})</h2>
-          <p style="margin-top:4px; color:#666; font-size:0.9rem;">
-            Scans count: {{ scans|length }}
-          </p>
+          <div class="batch-info">
+            <h2>Batch #{{ current_batch.id }} ({{ current_batch.carrier }})</h2>
+            <p><em>Created: {{ current_batch.created_at }}</em></p>
+            <p>Scans in batch: <strong id="scan-count">{{ scans|length }}</strong></p>
+          </div>
+          <div class="batch-actions">
+            <a href="#" onclick="return confirmCancelBatch();">Cancel This Batch</a>
+          </div>
         </div>
 
+        <!-- Scan form with async capability -->
+        <div class="scan-section">
+          <form id="scan-form" class="scan-form" autocomplete="off">
+            <div class="form-group">
+              <label for="code"><strong>Scan Tracking Number:</strong></label><br>
+              <input type="text" name="code" id="code" autofocus required>
+            </div>
+            <button type="submit" class="btn" id="scan-btn">
+              Submit<span id="scan-spinner" class="spinner" style="display:none;"></span>
+            </button>
+          </form>
+          <div id="scan-status" class="scan-status"></div>
+        </div>
 
-        <p style="margin-bottom: 16px; color: #666; font-size: 0.9rem;">
-          <em>Batch created at: {{ current_batch.created_at }}</em>
-          &nbsp;|&nbsp;
-          <a href="{{ url_for('cancel_batch') }}" style="color:#e74c3c; text-decoration:none;">
-            Cancel This Batch
-          </a>
-        </p>
-
-        <!-- Scan form -->
-        <form action="{{ url_for('scan') }}" method="post" autocomplete="off">
-          <label for="code"><strong>Scan Tracking Number:</strong></label><br>
-          <input type="text" name="code" id="code" autofocus required>
-          <button type="submit" class="btn" style="margin-left: 8px;">Submit</button>
-        </form>
+        <!-- Delete scans at top -->
+        <div class="actions-bar">
+          <h3>Scans in This Batch</h3>
+          <form action="{{ url_for('delete_scans') }}" method="post" id="delete-form" style="margin: 0;">
+            <button type="submit" class="btn btn-delete" id="delete-btn">Delete Selected</button>
+          </form>
+        </div>
 
         <!-- Scans table -->
-        <h3 style="margin-top: 24px; color:#2c3e50;">Scans in This Batch</h3>
-        <form action="{{ url_for('delete_scans') }}" method="post">
+        <form id="scans-table-form">
           <table>
             <thead>
               <tr>
-                <th style="width: 40px;"> </th>
+                <th style="width: 40px;"><input type="checkbox" id="select-all"></th>
                 <th>Tracking</th>
                 <th>Carrier</th>
                 <th>Order #</th>
                 <th>Customer</th>
                 <th>Scan Time</th>
                 <th>Status</th>
-                <th>Order ID</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody id="scans-tbody">
               {% for row in scans %}
-                <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
+                <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}" data-scan-id="{{ row.id }}">
                   <td>
-                    <input type="checkbox" name="delete_scan_ids" value="{{ row.id }}">
+                    <input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="{{ row.id }}">
                   </td>
                   <td style="font-weight: 500;">{{ row.tracking_number }}</td>
                   <td>{{ row.carrier }}</td>
                   <td>
-                    <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                    {% if row.order_id %}
+                      <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                        {{ row.order_number }}
+                      </a>
+                    {% else %}
                       {{ row.order_number }}
-                    </a>
+                    {% endif %}
                   </td>
                   <td>
-                    <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                    {% if row.order_id %}
+                      <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                        {{ row.customer_name }}
+                      </a>
+                    {% else %}
                       {{ row.customer_name }}
-                    </a>
+                    {% endif %}
                   </td>
                   <td>{{ row.scan_date }}</td>
                   <td>{{ row.status }}</td>
-                  <td>{{ row.order_id }}</td>
                 </tr>
               {% endfor %}
             </tbody>
           </table>
-          <br>
-          <button type="submit" class="btn btn-delete">Delete Selected</button>
         </form>
 
         <br><br>
@@ -346,6 +437,155 @@ MAIN_TEMPLATE = r'''
     </div> <!-- .main-content -->
 
   </div> <!-- .container -->
+
+  <script>
+    // ── Async scanning functionality ──
+    {% if current_batch %}
+    const scanForm = document.getElementById('scan-form');
+    const codeInput = document.getElementById('code');
+    const scanBtn = document.getElementById('scan-btn');
+    const scanSpinner = document.getElementById('scan-spinner');
+    const scanStatus = document.getElementById('scan-status');
+    const scansTable = document.getElementById('scans-tbody');
+    const scanCount = document.getElementById('scan-count');
+    const shopUrl = '{{ shop_url }}';
+
+    scanForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      
+      const code = codeInput.value.trim();
+      if (!code) return;
+
+      // Disable button and show spinner
+      scanBtn.disabled = true;
+      scanSpinner.style.display = 'inline-block';
+      
+      // Show processing status
+      scanStatus.textContent = `Processing: ${code}...`;
+      scanStatus.className = 'scan-status processing show';
+
+      try {
+        const formData = new FormData();
+        formData.append('code', code);
+
+        const response = await fetch('{{ url_for("scan") }}', {
+          method: 'POST',
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          body: formData
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          // Show success message
+          scanStatus.textContent = data.message;
+          scanStatus.className = 'scan-status success show';
+
+          // Add new row to table
+          addScanToTable(data.scan);
+
+          // Update scan count
+          const currentCount = parseInt(scanCount.textContent);
+          scanCount.textContent = currentCount + 1;
+
+          // Clear input
+          codeInput.value = '';
+
+          // Hide status after 2 seconds
+          setTimeout(() => {
+            scanStatus.classList.remove('show');
+          }, 2000);
+        } else {
+          scanStatus.textContent = 'Error: ' + data.error;
+          scanStatus.className = 'scan-status error show';
+        }
+      } catch (error) {
+        scanStatus.textContent = 'Error: ' + error.message;
+        scanStatus.className = 'scan-status error show';
+      } finally {
+        // Re-enable button and hide spinner
+        scanBtn.disabled = false;
+        scanSpinner.style.display = 'none';
+        codeInput.focus();
+      }
+    });
+
+    function addScanToTable(scan) {
+      const row = document.createElement('tr');
+      row.className = scan.status === 'Duplicate' ? 'duplicate-row' : '';
+      row.dataset.scanId = scan.id;
+
+      const orderLink = scan.order_id 
+        ? `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.order_number}</a>`
+        : scan.order_number;
+
+      const customerLink = scan.order_id
+        ? `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.customer_name}</a>`
+        : scan.customer_name;
+
+      row.innerHTML = `
+        <td><input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="${scan.id}"></td>
+        <td style="font-weight: 500;">${scan.tracking_number}</td>
+        <td>${scan.carrier}</td>
+        <td>${orderLink}</td>
+        <td>${customerLink}</td>
+        <td>${scan.scan_date}</td>
+        <td>${scan.status}</td>
+      `;
+
+      // Insert at the top of the table
+      scansTable.insertBefore(row, scansTable.firstChild);
+    }
+
+    // ── Select all checkboxes functionality ──
+    const selectAllCheckbox = document.getElementById('select-all');
+    selectAllCheckbox.addEventListener('change', function() {
+      const checkboxes = document.querySelectorAll('.scan-checkbox');
+      checkboxes.forEach(cb => cb.checked = this.checked);
+    });
+
+    // ── Delete form handling ──
+    const deleteForm = document.getElementById('delete-form');
+    deleteForm.addEventListener('submit', function(e) {
+      const checkboxes = document.querySelectorAll('.scan-checkbox:checked');
+      
+      if (checkboxes.length === 0) {
+        e.preventDefault();
+        alert('Please select at least one scan to delete.');
+        return false;
+      }
+
+      // Add the selected IDs to the delete form
+      checkboxes.forEach(cb => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'delete_scan_ids';
+        input.value = cb.value;
+        deleteForm.appendChild(input);
+      });
+    });
+    {% endif %}
+
+    // ── Cancel batch confirmation ──
+    function confirmCancelBatch() {
+      if (confirm('Are you sure you want to cancel this batch? This will delete all scans in the batch.')) {
+        window.location.href = '{{ url_for("cancel_batch") }}';
+      }
+      return false;
+    }
+
+    // ── Auto-dismiss flash messages ──
+    setTimeout(function() {
+      const flashes = document.querySelectorAll('.flash');
+      flashes.forEach(flash => {
+        flash.style.transition = 'opacity 0.5s';
+        flash.style.opacity = '0';
+        setTimeout(() => flash.remove(), 500);
+      });
+    }, 5000);
+  </script>
 
 </body>
 </html>
@@ -384,7 +624,7 @@ ALL_BATCHES_TEMPLATE = r'''
     .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
     .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
     h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
     th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
     th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
     tr:nth-child(even) { background-color: #fafafa; }
@@ -447,7 +687,7 @@ ALL_BATCHES_TEMPLATE = r'''
                 {{ b.tracking_numbers }}
               </td>
               <td>
-                <form action="{{ url_for('delete_batch') }}" method="post"
+                <form action="{{ url_for('delete_batch') }}" method="post" style="display: inline;"
                       onsubmit="return confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.');">
                   <input type="hidden" name="batch_id" value="{{ b.id }}">
                   <button type="submit" class="btn-delete-small">Delete</button>
@@ -508,7 +748,7 @@ BATCH_VIEW_TEMPLATE = r'''
     .batch-header .back-link:hover { text-decoration: underline; }
     p.meta { color: #666; font-size: 0.9rem; margin-bottom: 16px; }
     h3 { color: #2c3e50; margin-top: 16px; margin-bottom: 8px; font-size: 1.25rem; }
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
     th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
     th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
     tr:nth-child(even) { background-color: #fafafa; }
@@ -561,7 +801,6 @@ BATCH_VIEW_TEMPLATE = r'''
             <th>Customer</th>
             <th>Scan Time</th>
             <th>Status</th>
-            <th>Order ID</th>
           </tr>
         </thead>
         <tbody>
@@ -570,18 +809,25 @@ BATCH_VIEW_TEMPLATE = r'''
               <td>{{ row.tracking_number }}</td>
               <td>{{ row.carrier }}</td>
               <td>
-                <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                {% if row.order_id %}
+                  <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                    {{ row.order_number }}
+                  </a>
+                {% else %}
                   {{ row.order_number }}
-                </a>
+                {% endif %}
               </td>
               <td>
-                <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                {% if row.order_id %}
+                  <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                    {{ row.customer_name }}
+                  </a>
+                {% else %}
                   {{ row.customer_name }}
-                </a>
+                {% endif %}
               </td>
               <td>{{ row.scan_date }}</td>
               <td>{{ row.status }}</td>
-              <td>{{ row.order_id }}</td>
             </tr>
           {% endfor %}
         </tbody>
@@ -629,16 +875,17 @@ ALL_SCANS_TEMPLATE = r'''
 
     h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
 
-    .search-form { margin-top: 10px; margin-bottom: 5px; }
+    .search-form { margin-top: 10px; margin-bottom: 20px; background: white; padding: 16px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     .search-form input[type="text"] {
-      padding: 6px; font-size: 14px; width: 200px; border: 1px solid #ccc; border-radius: 4px;
+      padding: 8px 12px; font-size: 14px; width: 300px; border: 1px solid #ccc; border-radius: 4px;
     }
     .search-form button {
-      padding: 6px 10px; font-size: 14px; border: none; border-radius: 4px; background-color: #2d85f8; color: #fff; cursor: pointer; margin-left: 6px;
+      padding: 8px 16px; font-size: 14px; border: none; border-radius: 4px; background-color: #2d85f8; color: #fff; cursor: pointer; margin-left: 8px;
     }
+    .search-form button:hover { opacity: 0.92; }
     .search-form a { margin-left: 12px; font-size: 14px; text-decoration: none; color: #2d85f8; font-weight: 500; }
 
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
     th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
     th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
     tr:nth-child(even) { background-color: #fafafa; }
@@ -677,8 +924,8 @@ ALL_SCANS_TEMPLATE = r'''
       <h2>All Scans</h2>
 
       <form class="search-form" method="get" action="{{ url_for('all_scans') }}">
-        <label for="order_search"><strong>Search by Order # or Customer Name:</strong></label>
-        <input type="text" name="order_number" id="order_search" value="{{ request.args.get('order_number','') }}">
+        <label for="order_search"><strong>Search by Order # or Customer Name:</strong></label><br><br>
+        <input type="text" name="order_number" id="order_search" value="{{ request.args.get('order_number','') }}" placeholder="Enter order number or name...">
         <button type="submit">Search</button>
         {% if request.args.get('order_number') %}
           <a href="{{ url_for('all_scans') }}">Clear</a>
@@ -694,7 +941,6 @@ ALL_SCANS_TEMPLATE = r'''
             <th>Customer</th>
             <th>Scan Time</th>
             <th>Status</th>
-            <th>Order ID</th>
             <th>Batch ID</th>
             <th>Actions</th>
           </tr>
@@ -705,21 +951,28 @@ ALL_SCANS_TEMPLATE = r'''
               <td>{{ s.tracking_number }}</td>
               <td>{{ s.carrier }}</td>
               <td>
-                <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+                {% if s.order_id %}
+                  <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+                    {{ s.order_number }}
+                  </a>
+                {% else %}
                   {{ s.order_number }}
-                </a>
+                {% endif %}
               </td>
               <td>
-                <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+                {% if s.order_id %}
+                  <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+                    {{ s.customer_name }}
+                  </a>
+                {% else %}
                   {{ s.customer_name }}
-                </a>
+                {% endif %}
               </td>
               <td>{{ s.scan_date }}</td>
               <td>{{ s.status }}</td>
-              <td>{{ s.order_id }}</td>
               <td>{{ s.batch_id or '' }}</td>
               <td>
-                <form action="{{ url_for('delete_scan') }}" method="post"
+                <form action="{{ url_for('delete_scan') }}" method="post" style="display: inline;"
                       onsubmit="return confirm('Are you sure you want to delete this scan?');">
                   <input type="hidden" name="scan_id"  value="{{ s.id }}">
                   <button type="submit" class="btn-delete-small">Delete</button>
@@ -733,21 +986,6 @@ ALL_SCANS_TEMPLATE = r'''
     </div>
 
   </div>
-
-<script>
-  function requireLogoutPrompt(e) {
-    e.preventDefault();
-    e.returnValue = "";
-  }
-  window.addEventListener("beforeunload", requireLogoutPrompt);
-  document.addEventListener("DOMContentLoaded", function() {
-    const logoutLink = document.querySelector(".logout");
-    if (!logoutLink) return;
-    logoutLink.addEventListener("click", function() {
-      window.removeEventListener("beforeunload", requireLogoutPrompt);
-    });
-  });
-</script>
 
 </body>
 </html>
@@ -767,13 +1005,13 @@ def require_login():
     last = session.get("last_active")
     now  = time.time()
 
-    # if they’ve been idle too long, clear session & go to login
+    # if they've been idle too long, clear session & go to login
     if last and (now - last) > INACTIVITY_TIMEOUT:
         session.clear()
         flash("Logged out due to 30m inactivity.", "error")
         return redirect(url_for("login"))
 
-    # stamp this request’s activity
+    # stamp this request's activity
     session["last_active"] = now
 
     # then enforce that they must be authenticated
@@ -809,7 +1047,7 @@ def logout():
 def index():
     batch_id = session.get("batch_id")
     if not batch_id:
-        # No batch open → show “Create New Batch”
+        # No batch open → show "Create New Batch"
         return render_template_string(
             MAIN_TEMPLATE,
             current_batch=None,
@@ -966,19 +1204,29 @@ def delete_batch():
 
 @app.route("/scan", methods=["POST"])
 def scan():
+    """
+    Async-friendly scan endpoint that can return JSON for AJAX requests
+    or redirect for traditional form submissions.
+    """
     code = request.form.get("code", "").strip()
+    is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    
     if not code:
+        if is_ajax:
+            return jsonify({"success": False, "error": "No code received."}), 400
         flash("No code received.", "error")
         return redirect(url_for("index"))
 
     batch_id = session.get("batch_id")
     if not batch_id:
+        if is_ajax:
+            return jsonify({"success": False, "error": "No batch open."}), 400
         flash("No batch open. Please start a new batch first.", "error")
         return redirect(url_for("index"))
 
     conn = get_mysql_connection()
     try:
-        # Get the batch’s configured carrier
+        # Get the batch's configured carrier
         cursor = conn.cursor()
         cursor.execute("SELECT carrier FROM batches WHERE id = %s", (batch_id,))
         row = cursor.fetchone()
@@ -986,74 +1234,89 @@ def scan():
         batch_carrier = (row[0] if row else "") or ""
 
         # Normalize codes for specific carriers
+        original_code = code
         if batch_carrier == "Canada Post":
             if len(code) >= 12:
                 code = code[7:-5]
         elif batch_carrier == "Purolator":
             if len(code) == 34:
                 code = code[11:-11]
-        # else: leave code as-is
 
-        # Defaults
+        # Check for duplicate FIRST (before API calls)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM scans WHERE tracking_number = %s AND batch_id = %s",
+            (code, batch_id)
+        )
+        is_duplicate = cursor.fetchone()[0] > 0
+        cursor.close()
+        status = "Duplicate" if is_duplicate else "Original"
+
+        # Defaults - more user-friendly messages
         order_number  = "N/A"
-        customer_name = "No ShipStation"
+        customer_name = "Lookup in progress..."
         order_id      = ""
-        status        = "Original"
         now_str       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        scan_carrier  = ""
+        scan_carrier  = batch_carrier  # Default to batch carrier
 
         # ── ShipStation lookup ──
-        shipments = []
+        shipstation_found = False
         try:
-            if not SHIPSTATION_API_KEY or not SHIPSTATION_API_SECRET:
-                raise RuntimeError("ShipStation credentials not configured")
+            if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+                url = f"https://ssapi.shipstation.com/shipments?trackingNumber={code}"
+                resp = requests.get(
+                    url,
+                    auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                    headers={"Accept": "application/json"},
+                    timeout=6
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                shipments = data.get("shipments", [])
 
-            url = f"https://ssapi.shipstation.com/shipments?trackingNumber={code}"
-            resp = requests.get(
-                url,
-                auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-                headers={"Accept": "application/json"},
-                timeout=6
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            shipments = data.get("shipments", [])
+                if shipments:
+                    shipstation_found = True
+                    first = shipments[0]
+                    order_number  = first.get("orderNumber", "N/A")
+                    ship_to = first.get("shipTo", {})
+                    customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
+                    carrier_code  = first.get("carrierCode", "").lower()
 
-            if shipments:
-                first = shipments[0]
-                order_number  = first.get("orderNumber", "N/A")
-                customer_name = first.get("shipTo", {}).get("name", "No Name")
-                carrier_code  = first.get("carrierCode", "").lower()
+                    carrier_map = {
+                        "ups":        "UPS",
+                        "canadapost": "Canada Post",
+                        "canada_post": "Canada Post",
+                        "dhl":        "DHL",
+                        "dhl_express": "DHL",
+                        "purolator":  "Purolator",
+                    }
+                    scan_carrier = carrier_map.get(carrier_code, batch_carrier)
+        except requests.RequestException:
+            pass  # Silently continue to Shopify lookup
+        except Exception:
+            pass
 
-                carrier_map = {
-                    "ups":        "UPS",
-                    "canadapost": "Canada Post",
-                    "dhl":        "DHL",
-                    "purolator":  "Purolator",
-                }
-                scan_carrier = carrier_map.get(carrier_code, "")
-        except RuntimeError as e:
-            flash(str(e), "error")
-            return redirect(url_for("index"))
-        except requests.RequestException as e:
-            flash(f"ShipStation request failed: {e}", "warning")
-        except ValueError as e:
-            flash(f"ShipStation returned bad data: {e}", "warning")
-
-        # ── Shopify lookup ──
+        # ── Shopify lookup (always try, even if ShipStation found something) ──
+        shopify_found = False
         try:
             shopify_api = get_shopify_api()
             shopify_info = shopify_api.get_order_by_tracking(code)
-            if shopify_info:
+            
+            # Only use Shopify data if we got valid results
+            if shopify_info and shopify_info.get("order_id"):
+                shopify_found = True
                 order_number  = shopify_info.get("order_number", order_number)
                 customer_name = shopify_info.get("customer_name", customer_name)
                 order_id      = shopify_info.get("order_id", order_id)
-        except Exception as e:
-            # Non-fatal; continue with whatever we have
-            flash(f"Shopify lookup error: {e}", "warning")
+        except Exception:
+            pass  # Continue with what we have
 
-        # ── Fallback carrier detection if ShipStation didn't tell us ──
-        if not scan_carrier:
+        # ── Final fallback for customer name ──
+        if not shipstation_found and not shopify_found:
+            customer_name = "Not Found"
+        
+        # ── Fallback carrier detection if still not set ──
+        if not scan_carrier or scan_carrier == "":
             if len(code) == 12:
                 scan_carrier = "Purolator"
             elif len(code) == 10:
@@ -1064,16 +1327,8 @@ def scan():
                 scan_carrier = "Canada Post"
             elif code.startswith("LA") or len(code) == 30:
                 scan_carrier = "USPS"
-
-        # ── Duplicate check ──
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM scans WHERE tracking_number = %s AND batch_id = %s",
-            (code, batch_id)
-        )
-        if cursor.fetchone()[0] > 0:
-            status = "Duplicate"
-        cursor.close()
+            else:
+                scan_carrier = batch_carrier  # Use batch carrier as final fallback
 
         # ── Insert the scan record ──
         cursor = conn.cursor()
@@ -1088,11 +1343,34 @@ def scan():
              now_str, status, order_id, batch_id)
         )
         conn.commit()
+        scan_id = cursor.lastrowid
         cursor.close()
 
-        flash(f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})", "success")
-        return redirect(url_for("index"))
+        # Return appropriate response based on request type
+        if is_ajax:
+            return jsonify({
+                "success": True,
+                "scan": {
+                    "id": scan_id,
+                    "tracking_number": code,
+                    "carrier": scan_carrier,
+                    "order_number": order_number,
+                    "customer_name": customer_name,
+                    "scan_date": now_str,
+                    "status": status,
+                    "order_id": order_id
+                },
+                "message": f"Scanned: {code}" + (" (DUPLICATE)" if is_duplicate else "")
+            })
+        else:
+            flash(f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})", "success")
+            return redirect(url_for("index"))
 
+    except Exception as e:
+        if is_ajax:
+            return jsonify({"success": False, "error": str(e)}), 500
+        flash(f"Error processing scan: {e}", "error")
+        return redirect(url_for("index"))
     finally:
         conn.close()
 
