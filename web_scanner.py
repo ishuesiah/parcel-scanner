@@ -453,6 +453,41 @@ MAIN_TEMPLATE = r'''
     const scanCount = document.getElementById('scan-count');
     const shopUrl = '{{ shop_url }}';
 
+    // ── AGGRESSIVE AUTO-FOCUS ── Keep input focused at ALL times
+    function keepInputFocused() {
+      if (document.activeElement !== codeInput) {
+        codeInput.focus();
+      }
+    }
+
+    // Focus on page load
+    codeInput.focus();
+
+    // Re-focus if user clicks anywhere else
+    document.addEventListener('click', function(e) {
+      // Don't interfere with checkbox clicks or button clicks
+      if (e.target.type !== 'checkbox' && e.target.type !== 'submit' && e.target.tagName !== 'A') {
+        setTimeout(() => codeInput.focus(), 10);
+      }
+    });
+
+    // Re-focus if input loses focus for any reason
+    document.addEventListener('focusout', function(e) {
+      if (e.target === codeInput) {
+        setTimeout(() => codeInput.focus(), 10);
+      }
+    });
+
+    // Capture any keyboard input and focus the field (for barcode scanners)
+    document.addEventListener('keydown', function(e) {
+      // If user is not in an input field and starts typing, focus the scan input
+      if (document.activeElement.tagName !== 'INPUT' && 
+          document.activeElement.tagName !== 'TEXTAREA' &&
+          e.key.length === 1) {
+        codeInput.focus();
+      }
+    });
+
     scanForm.addEventListener('submit', async function(e) {
       e.preventDefault();
       
@@ -507,7 +542,7 @@ MAIN_TEMPLATE = r'''
         scanStatus.textContent = 'Error: ' + error.message;
         scanStatus.className = 'scan-status error show';
       } finally {
-        // Hide spinner and keep button enabled
+        // Hide spinner and ALWAYS refocus input
         scanSpinner.style.display = 'none';
         codeInput.focus();
       }
