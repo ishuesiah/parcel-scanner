@@ -298,6 +298,15 @@ MAIN_TEMPLATE = r'''
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
+
+    /* Pulsing animation for processing rows */
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+    .processing-row td {
+      animation: pulse 2s ease-in-out infinite;
+    }
   </style>
 </head>
 <body>
@@ -351,8 +360,8 @@ MAIN_TEMPLATE = r'''
             <h2>Batch #{{ current_batch.id }} ({{ current_batch.carrier }})</h2>
             <p><em>Created: {{ current_batch.created_at }}</em></p>
             <p>Scans in batch: <strong id="scan-count">{{ scans|length }}</strong></p>
-            <p style="font-size: 0.85rem; color: #666; margin-top: 4px;">
-              💡 Tip: Order details load in background. Refresh page to see updated info.
+            <p style="font-size: 0.85rem; color: #27ae60; margin-top: 4px;">
+              ✓ Order details auto-update in real-time
             </p>
           </div>
           <div class="batch-actions">
@@ -398,7 +407,7 @@ MAIN_TEMPLATE = r'''
             </thead>
             <tbody id="scans-tbody">
               {% for row in scans %}
-                <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}" data-scan-id="{{ row.id }}">
+                <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else ('processing-row' if row.status == 'Processing' else '') }}" data-scan-id="{{ row.id }}">
                   <td>
                     <input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="{{ row.id }}">
                   </td>
@@ -453,6 +462,10 @@ MAIN_TEMPLATE = r'''
     const scanCount = document.getElementById('scan-count');
     const shopUrl = '{{ shop_url }}';
 
+    // ── Track scans that need updates ──
+    let scansToUpdate = new Set();
+    let updateInterval = null;
+
     // ── AGGRESSIVE AUTO-FOCUS ── Keep input focused at ALL times
     function keepInputFocused() {
       if (document.activeElement !== codeInput) {
@@ -488,6 +501,109 @@ MAIN_TEMPLATE = r'''
       }
     });
 
+    // ── AUTO-UPDATE FUNCTION ──
+    // This polls the server for updates on scans that are still processing
+    async function checkForUpdates() {
+      if (scansToUpdate.size === 0) {
+        if (updateInterval) {
+          clearInterval(updateInterval);
+          updateInterval = null;
+        }
+        return;
+      }
+
+      const scanIds = Array.from(scansToUpdate);
+      try {
+        const response = await fetch('{{ url_for("get_scan_updates") }}', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ scan_ids: scanIds })
+        });
+
+        const data = await response.json();
+        
+        if (data.scans) {
+          data.scans.forEach(scan => {
+            updateScanRow(scan);
+            
+            // If scan is no longer processing, remove from update list
+            if (scan.status !== 'Processing' && 
+                scan.order_number !== 'Processing...' && 
+                scan.customer_name !== 'Looking up...') {
+              scansToUpdate.delete(scan.id);
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Error checking for updates:', error);
+      }
+    }
+
+    // ── UPDATE A SINGLE ROW IN THE TABLE ──
+    function updateScanRow(scan) {
+      const row = document.querySelector(`tr[data-scan-id="${scan.id}"]`);
+      if (!row) return;
+
+      // Update row class based on status
+      row.className = '';
+      if (scan.status === 'Duplicate') {
+        row.classList.add('duplicate-row');
+      } else if (scan.status === 'Processing') {
+        row.classList.add('processing-row');
+      }
+
+      // Update carrier
+      const carrierCell = row.cells[2];
+      carrierCell.textContent = scan.carrier;
+
+      // Update order number
+      const orderCell = row.cells[3];
+      if (scan.order_id) {
+        orderCell.innerHTML = `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.order_number}</a>`;
+      } else {
+        orderCell.textContent = scan.order_number;
+      }
+
+      // Update customer name
+      const customerCell = row.cells[4];
+      if (scan.order_id) {
+        customerCell.innerHTML = `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.customer_name}</a>`;
+      } else {
+        customerCell.textContent = scan.customer_name;
+      }
+
+      // Update status
+      const statusCell = row.cells[6];
+      statusCell.textContent = scan.status;
+    }
+
+    // ── START AUTO-UPDATE POLLING ──
+    function startAutoUpdate(scanId) {
+      scansToUpdate.add(scanId);
+      
+      if (!updateInterval) {
+        // Check every 2 seconds
+        updateInterval = setInterval(checkForUpdates, 2000);
+      }
+    }
+
+    // ── Initialize auto-update for any existing processing scans ──
+    document.querySelectorAll('tr[data-scan-id]').forEach(row => {
+      const scanId = parseInt(row.dataset.scanId);
+      const statusCell = row.cells[6];
+      const orderCell = row.cells[3];
+      const customerCell = row.cells[4];
+      
+      // If scan is still processing, add to update list
+      if (statusCell.textContent === 'Processing' || 
+          orderCell.textContent === 'Processing...' || 
+          customerCell.textContent === 'Looking up...') {
+        startAutoUpdate(scanId);
+      }
+    });
+
     scanForm.addEventListener('submit', async function(e) {
       e.preventDefault();
       
@@ -517,7 +633,8 @@ MAIN_TEMPLATE = r'''
 
         if (data.success) {
           // Show success message
-          scanStatus.textContent = data.message + ' (Details loading in background...)';
+          const dupText = data.scan.status === 'Duplicate' ? ' (DUPLICATE)' : '';
+          scanStatus.textContent = data.message + dupText;
           scanStatus.className = 'scan-status success show';
 
           // Add new row to table
@@ -526,6 +643,9 @@ MAIN_TEMPLATE = r'''
           // Update scan count
           const currentCount = parseInt(scanCount.textContent);
           scanCount.textContent = currentCount + 1;
+
+          // Start auto-update for this scan
+          startAutoUpdate(data.scan.id);
 
           // Clear input IMMEDIATELY
           codeInput.value = '';
@@ -550,11 +670,16 @@ MAIN_TEMPLATE = r'''
 
     function addScanToTable(scan) {
       const row = document.createElement('tr');
-      row.className = scan.status === 'Duplicate' ? 'duplicate-row' : '';
+      // Apply correct class based on status
+      if (scan.status === 'Duplicate') {
+        row.className = 'duplicate-row';
+      } else if (scan.status === 'Processing') {
+        row.className = 'processing-row';
+      }
       row.dataset.scanId = scan.id;
 
       // Note: order_number and customer_name will be "Processing..." and "Looking up..."
-      // They'll update in the database in background, refresh page to see updates
+      // They'll update automatically via the polling mechanism
       const orderLink = scan.order_id 
         ? `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.order_number}</a>`
         : scan.order_number;
@@ -1244,6 +1369,10 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
     """
     Background thread function to process API calls after scan is already saved.
     This runs AFTER the response is sent to user, so scanning can continue immediately.
+    
+    IMPORTANT: Preserves "Duplicate" status - only updates status to "Complete" if 
+    the current status is "Processing". This ensures duplicate scans stay marked
+    as duplicates even after the background processing completes.
     """
     import threading
     time.sleep(0.1)  # Small delay to ensure response is sent first
@@ -1321,6 +1450,8 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 scan_carrier = batch_carrier
 
         # ── Update the scan record with API results ──
+        # CRITICAL: Preserve "Duplicate" status, only mark as Complete if it was Processing
+        # This uses a CASE statement to check the current status before updating
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -1329,7 +1460,10 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 order_number = %s,
                 customer_name = %s,
                 order_id = %s,
-                status = 'Complete'
+                status = CASE 
+                    WHEN status = 'Duplicate' THEN 'Duplicate'
+                    ELSE 'Complete'
+                END
             WHERE id = %s
             """,
             (scan_carrier, order_number, customer_name, order_id, scan_id)
@@ -1464,6 +1598,56 @@ def scan():
         return redirect(url_for("index"))
     finally:
         conn.close()
+
+
+@app.route("/get_scan_updates", methods=["POST"])
+def get_scan_updates():
+    """
+    NEW ENDPOINT: Returns updated scan information for specified scan IDs.
+    This is polled by the frontend JavaScript to auto-update the UI when
+    background processing completes.
+    """
+    try:
+        data = request.get_json()
+        scan_ids = data.get("scan_ids", [])
+        
+        if not scan_ids:
+            return jsonify({"scans": []})
+        
+        conn = get_mysql_connection()
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # Build query with placeholders for each ID
+            placeholders = ",".join(["%s"] * len(scan_ids))
+            query = f"""
+                SELECT 
+                    id,
+                    tracking_number,
+                    carrier,
+                    order_number,
+                    customer_name,
+                    scan_date,
+                    status,
+                    order_id
+                FROM scans
+                WHERE id IN ({placeholders})
+            """
+            
+            cursor.execute(query, scan_ids)
+            scans = cursor.fetchall()
+            
+            return jsonify({"scans": scans})
+            
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+            conn.close()
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/delete_scans", methods=["POST"])
