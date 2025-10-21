@@ -1335,7 +1335,7 @@ def index():
             flash("Batch not found. Please start a new batch.", "error")
             return redirect(url_for("index"))
 
-        # Fetch all scans in this batch, INCLUDING duplicate info
+        # Fetch all scans in this batch (using existing columns only)
         cursor.execute("""
           SELECT
             id,
@@ -1345,14 +1345,33 @@ def index():
             customer_name,
             scan_date,
             status,
-            order_id,
-            duplicate_of_batch,
-            duplicate_of_scan_date
+            order_id
           FROM scans
          WHERE batch_id = %s
          ORDER BY scan_date DESC
         """, (batch_id,))
         scans = cursor.fetchall()
+        
+        # For each duplicate scan, fetch the original scan info
+        for scan in scans:
+            if scan['status'] == 'Duplicate':
+                cursor.execute("""
+                    SELECT batch_id, scan_date
+                    FROM scans
+                    WHERE tracking_number = %s
+                    ORDER BY scan_date ASC
+                    LIMIT 1
+                """, (scan['tracking_number'],))
+                original = cursor.fetchone()
+                if original:
+                    scan['duplicate_of_batch'] = original['batch_id']
+                    scan['duplicate_of_scan_date'] = original['scan_date'].strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    scan['duplicate_of_batch'] = None
+                    scan['duplicate_of_scan_date'] = None
+            else:
+                scan['duplicate_of_batch'] = None
+                scan['duplicate_of_scan_date'] = None
 
         return render_template_string(
             MAIN_TEMPLATE,
@@ -1620,9 +1639,8 @@ def scan():
                 code = code[11:-11]
 
         # ═══════════════════════════════════════════════════════════════
-        # CRITICAL CHANGE: Check for duplicate ACROSS ALL BATCHES
-        # (removed the batch_id filter from the WHERE clause)
-        # Also fetch information about the original scan if it exists
+        # Check for duplicate ACROSS ALL BATCHES (not just current batch)
+        # Fetch information about the original scan if it exists
         # ═══════════════════════════════════════════════════════════════
         cursor = conn.cursor(dictionary=True)
         cursor.execute(
@@ -1638,7 +1656,7 @@ def scan():
         original_scan = cursor.fetchone()
         cursor.close()
         
-        # Determine if this is a duplicate and capture original batch info
+        # Determine if this is a duplicate and store original batch info for display
         is_duplicate = original_scan is not None
         duplicate_of_batch = original_scan['batch_id'] if is_duplicate else None
         duplicate_of_scan_date = original_scan['scan_date'].strftime("%Y-%m-%d %H:%M:%S") if is_duplicate else None
@@ -1663,19 +1681,18 @@ def scan():
         elif code.startswith("LA") or len(code) == 30:
             scan_carrier = "USPS"
 
-        # ── INSERT IMMEDIATELY with duplicate tracking info (no waiting for APIs) ──
+        # ── INSERT IMMEDIATELY (no waiting for APIs) ──
+        # Note: We don't store duplicate info in DB, we query it when needed
         cursor = conn.cursor()
         cursor.execute(
             """
             INSERT INTO scans
               (tracking_number, carrier, order_number, customer_name,
-               scan_date, status, order_id, batch_id, 
-               duplicate_of_batch, duplicate_of_scan_date)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               scan_date, status, order_id, batch_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (code, scan_carrier, order_number, customer_name,
-             now_str, status, order_id, batch_id,
-             duplicate_of_batch, duplicate_of_scan_date)
+             now_str, status, order_id, batch_id)
         )
         conn.commit()
         scan_id = cursor.lastrowid
@@ -1756,9 +1773,7 @@ def get_scan_updates():
                     customer_name,
                     scan_date,
                     status,
-                    order_id,
-                    duplicate_of_batch,
-                    duplicate_of_scan_date
+                    order_id
                 FROM scans
                 WHERE id IN ({placeholders})
             """
