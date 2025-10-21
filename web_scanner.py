@@ -470,7 +470,7 @@ MAIN_TEMPLATE = r'''
                   <td>{{ row.status }}</td>
                 </tr>
                 {# If this is a duplicate, add a detail row immediately after #}
-                {% if row.status == 'Duplicate' and row.duplicate_of_batch %}
+                {% if row.status == 'Duplicate' %}
                 <tr class="duplicate-details-row" data-parent-scan-id="{{ row.id }}">
                   <td colspan="7" class="duplicate-details-cell">
                     <div class="duplicate-info">
@@ -480,11 +480,15 @@ MAIN_TEMPLATE = r'''
                       <span>⚠️ DUPLICATE ALERT</span>
                     </div>
                     <div class="duplicate-detail">
-                      <strong>Original Scan:</strong> Tracking #{{ row.tracking_number }} was previously scanned in 
-                      <a href="{{ url_for('view_batch', batch_id=row.duplicate_of_batch) }}" target="_blank" style="color: #2d85f8; font-weight: 600;">
-                        Batch #{{ row.duplicate_of_batch }}
-                      </a>
-                      on {{ row.duplicate_of_scan_date }}
+                      {% if row.duplicate_of_batch %}
+                        <strong>Original Scan:</strong> Tracking #{{ row.tracking_number }} was previously scanned in 
+                        <a href="{{ url_for('view_batch', batch_id=row.duplicate_of_batch) }}" target="_blank" style="color: #2d85f8; font-weight: 600;">
+                          Batch #{{ row.duplicate_of_batch }}
+                        </a>
+                        on {{ row.duplicate_of_scan_date }}
+                      {% else %}
+                        <strong>Warning:</strong> This tracking number #{{ row.tracking_number }} has been scanned before.
+                      {% endif %}
                     </div>
                     <div class="duplicate-detail" style="margin-top: 8px; color: #e74c3c;">
                       ⚠️ This parcel may have already been shipped. Please verify before sending again.
@@ -739,7 +743,7 @@ MAIN_TEMPLATE = r'''
       row.dataset.scanId = scan.id;
       
       // Store duplicate info if applicable
-      if (scan.duplicate_of_batch) {
+      if (scan.duplicate_of_batch && scan.duplicate_of_batch !== '') {
         row.dataset.duplicateOfBatch = scan.duplicate_of_batch;
         row.dataset.duplicateOfScanDate = scan.duplicate_of_scan_date;
       }
@@ -768,10 +772,29 @@ MAIN_TEMPLATE = r'''
       scansTable.insertBefore(row, scansTable.firstChild);
       
       // If this is a duplicate, add the details row immediately after
-      if (scan.status === 'Duplicate' && scan.duplicate_of_batch) {
+      if (scan.status === 'Duplicate') {
         const detailsRow = document.createElement('tr');
         detailsRow.className = 'duplicate-details-row';
         detailsRow.dataset.parentScanId = scan.id;
+        
+        let detailContent = '';
+        if (scan.duplicate_of_batch && scan.duplicate_of_batch !== '' && scan.duplicate_of_batch !== 'None') {
+          detailContent = `
+            <div class="duplicate-detail">
+              <strong>Original Scan:</strong> Tracking #${scan.tracking_number} was previously scanned in 
+              <a href="{{ url_for('view_batch', batch_id='') }}${scan.duplicate_of_batch}" target="_blank" style="color: #2d85f8; font-weight: 600;">
+                Batch #${scan.duplicate_of_batch}
+              </a>
+              on ${scan.duplicate_of_scan_date}
+            </div>
+          `;
+        } else {
+          detailContent = `
+            <div class="duplicate-detail">
+              <strong>Warning:</strong> This tracking number #${scan.tracking_number} has been scanned before.
+            </div>
+          `;
+        }
         
         detailsRow.innerHTML = `
           <td colspan="7" class="duplicate-details-cell">
@@ -781,13 +804,7 @@ MAIN_TEMPLATE = r'''
               </svg>
               <span>⚠️ DUPLICATE ALERT</span>
             </div>
-            <div class="duplicate-detail">
-              <strong>Original Scan:</strong> Tracking #${scan.tracking_number} was previously scanned in 
-              <a href="{{ url_for('view_batch', batch_id='') }}${scan.duplicate_of_batch}" target="_blank" style="color: #2d85f8; font-weight: 600;">
-                Batch #${scan.duplicate_of_batch}
-              </a>
-              on ${scan.duplicate_of_scan_date}
-            </div>
+            ${detailContent}
             <div class="duplicate-detail" style="margin-top: 8px; color: #e74c3c;">
               ⚠️ This parcel may have already been shipped. Please verify before sending again.
             </div>
@@ -1363,7 +1380,7 @@ def index():
                     LIMIT 1
                 """, (scan['tracking_number'],))
                 original = cursor.fetchone()
-                if original:
+                if original and original['batch_id']:
                     scan['duplicate_of_batch'] = original['batch_id']
                     scan['duplicate_of_scan_date'] = original['scan_date'].strftime("%Y-%m-%d %H:%M:%S")
                 else:
