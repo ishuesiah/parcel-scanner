@@ -1,9 +1,25 @@
 # web_scanner.py
 
+"""
+Hemlock & Oak Parcel Scanner
+Version: 1.2.1
+Description: Track and manage parcel shipments with carrier integrations
+"""
+
+__version__ = "1.2.1"
+
 import os
 import requests
 import bcrypt
 import time
+
+# Load environment variables from .env file if it exists (for local development)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed (production environment)
+
 from flask import (
     Flask,
     request,
@@ -81,10 +97,61 @@ LOGIN_TEMPLATE = r'''
   <meta charset="utf-8">
   <title>Login – H&amp;O Parcel Scans</title>
   <style>
+      @import url("https://d3a1s2k5oq9b60.cloudfront.net/WF-062340-d8eba8d3266ba707a7e48a89247d3873.css?fsf=22601");
+  @font-face {
+  font-family: "ABC Arizona Flare Regular";
+  src: url("Webfont-062340-003957-022601-e4892a18d562a49278782e582c6385b87590aea0.woff2") format("woff2"), url("Webfont-062340-003957-022601-6707a17205951254095bffe39e6cf21dc9435ddd.woff") format("woff");
+  }
+
+      @font-face {
+        font-family: 'Arizona Regular';
+        src: url("https://cdn.shopify.com/s/files/1/0280/1175/7703/files/Arizona_Flare_Light.woff2?v=1745606070") format("woff2");
+        font-weight: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'Arizona Italic';
+        src: url("https://cdn.shopify.com/s/files/1/0280/1175/7703/files/Webfont-062340-003957-022602-3d874fa6cd082c5453f60ea524707bf1a00ad7d7.woff2?v=1745605778") format("woff2");
+        font-weight: normal;
+        font-style: italic;
+        font-display: swap;
+      }
+          @font-face {
+          font-family: 'SprigSansRegular';
+          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-Regular.woff2?v=1724296405') format('woff2');
+          font-weight: 300;
+          font-style: normal;
+          font-display: swap;
+        }
+
+        @font-face {
+          font-family: 'SprigSansRegularItalic';
+          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-RegularItalic.woff2?v=1724296404') format('woff2');
+          font-weight: 400;
+          font-style: italic;
+          font-display: swap;
+        }
+
+        @font-face {
+          font-family: 'SprigSansMedium';
+          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-Bold.woff2?v=1724296404') format('woff2');
+          font-weight: 500;
+          font-style: normal;
+          font-display: swap;
+        }
+
+        @font-face {
+          font-family: 'SprigSansMediumItalic';
+          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-Sprig-MediumItalic.woff2?v=1724305674') format('woff2');
+          font-weight: 500;
+          font-style: italic;
+          font-display: swap;
+        }
     html, body {
       height: 100%;
       margin: 0;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      font-family: "SprigSansRegular", Tahoma, Geneva, Verdana, sans-serif;
       background-color: #f5f6fa;
       color: #333;
       display: flex;
@@ -241,7 +308,6 @@ MAIN_TEMPLATE = r'''
     .scan-status.processing { background-color: #fff4e5; color: #8a6100; border: 1px solid #ffe0b2; }
     .scan-status.success { background-color: #e0f7e9; color: #2f7a45; border: 1px solid #b2e6c2; }
     .scan-status.error { background-color: #fdecea; color: #a33a2f; border: 1px solid #f5c6cb; }
-    .scan-status.duplicate { background-color: #fdecea; color: #a33a2f; border: 1px solid #f5c6cb; font-weight: 600; }
 
     table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
     th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
@@ -307,13 +373,16 @@ MAIN_TEMPLATE = r'''
 
     <!-- ── SIDEBAR ── -->
     <div class="sidebar">
-      <h1>H&amp;O Parcel Scans</h1>
+      <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
       <ul>
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
+      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
+        v{{ version }}
+      </div>
     </div>
     <!-- ── END SIDEBAR ── -->
 
@@ -375,12 +444,18 @@ MAIN_TEMPLATE = r'''
           <div id="scan-status" class="scan-status"></div>
         </div>
 
-        <!-- Delete scans at top -->
+        <!-- Actions bar at top -->
         <div class="actions-bar">
           <h3>Scans in This Batch</h3>
-          <form action="{{ url_for('delete_scans') }}" method="post" id="delete-form" style="margin: 0;">
-            <button type="submit" class="btn btn-delete" id="delete-btn">Delete Selected</button>
-          </form>
+          <div style="display: flex; gap: 12px;">
+            <form action="{{ url_for('delete_scans') }}" method="post" id="delete-form" style="margin: 0;">
+              <button type="submit" class="btn btn-delete" id="delete-btn">Delete Selected</button>
+            </form>
+            <button type="button" class="btn btn-new" onclick="window.location.reload()">Save</button>
+            <form action="{{ url_for('record_batch') }}" method="post" style="margin: 0;">
+              <button type="submit" class="btn btn-batch">Record Carrier Pick-up</button>
+            </form>
+          </div>
         </div>
 
         <!-- Scans table -->
@@ -399,7 +474,7 @@ MAIN_TEMPLATE = r'''
             </thead>
             <tbody id="scans-tbody">
               {% for row in scans %}
-                <tr class="{{ 'duplicate-row' if 'Duplicate' in row.status else '' }}" data-scan-id="{{ row.id }}">
+                <tr class="{{ 'duplicate-row' if row.status.startswith('Duplicate') else '' }}" data-scan-id="{{ row.id }}">
                   <td>
                     <input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="{{ row.id }}">
                   </td>
@@ -424,16 +499,22 @@ MAIN_TEMPLATE = r'''
                     {% endif %}
                   </td>
                   <td>{{ row.scan_date }}</td>
-                  <td>{{ row.status }}</td>
+                  <td>
+                    {% if row.status.startswith('Duplicate (Batch #') %}
+                      {% set batch_num = row.status.split('#')[1].rstrip(')') %}
+                      {% if batch_num and batch_num.isdigit() %}
+                        Duplicate (<a href="{{ url_for('view_batch', batch_id=batch_num|int) }}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #{{ batch_num }}</a>)
+                      {% else %}
+                        {{ row.status }}
+                      {% endif %}
+                    {% else %}
+                      {{ row.status }}
+                    {% endif %}
+                  </td>
                 </tr>
               {% endfor %}
             </tbody>
           </table>
-        </form>
-
-        <br><br>
-        <form action="{{ url_for('record_batch') }}" method="post">
-          <button type="submit" class="btn btn-batch">Record Carrier Pick‐up</button>
         </form>
 
       {% endif %}
@@ -443,6 +524,92 @@ MAIN_TEMPLATE = r'''
   </div> <!-- .container -->
 
   <script>
+    // ── Auto-refresh order details every 5 seconds ──
+    let autoRefreshInterval;
+    
+    function startAutoRefresh() {
+      {% if current_batch %}
+      // Poll every 5 seconds for updated order details
+      autoRefreshInterval = setInterval(async function() {
+        try {
+          const response = await fetch('{{ url_for("get_batch_updates", batch_id=current_batch.id) }}');
+          const data = await response.json();
+          
+          if (data.success && data.scans) {
+            // Update each row with new data
+            data.scans.forEach(scan => {
+              updateScanRow(scan);
+            });
+          }
+        } catch (error) {
+          console.error('Auto-refresh error:', error);
+        }
+      }, 5000); // Every 5 seconds
+      {% endif %}
+    }
+    
+    function stopAutoRefresh() {
+      if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+      }
+    }
+    
+    function updateScanRow(scan) {
+      // Find the row for this scan
+      const row = document.querySelector(`tr[data-scan-id="${scan.id}"]`);
+      if (!row) return;
+      
+      // Only update if the data has actually changed (not still "Processing...")
+      if (scan.order_number === 'Processing...' || scan.customer_name === 'Looking up...') {
+        return; // Still processing, skip
+      }
+      
+      // Update the cells
+      const cells = row.querySelectorAll('td');
+      
+      // Update carrier (cell 2)
+      if (cells[2]) cells[2].textContent = scan.carrier;
+      
+      // Update order number (cell 3)
+      if (cells[3]) {
+        if (scan.order_id) {
+          cells[3].innerHTML = `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.order_number}</a>`;
+        } else {
+          cells[3].textContent = scan.order_number;
+        }
+      }
+      
+      // Update customer name (cell 4)
+      if (cells[4]) {
+        if (scan.order_id) {
+          cells[4].innerHTML = `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.customer_name}</a>`;
+        } else {
+          cells[4].textContent = scan.customer_name;
+        }
+      }
+      
+      // Update status (cell 6) - change from "Processing" to "Complete"
+      if (cells[6] && scan.status === 'Complete') {
+        cells[6].textContent = scan.status;
+      }
+    }
+    
+    // Start auto-refresh when page loads (only if there's an active batch)
+    {% if current_batch %}
+    startAutoRefresh();
+    {% endif %}
+    
+    // Stop auto-refresh when page is hidden (save bandwidth)
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        stopAutoRefresh();
+      } else {
+        {% if current_batch %}
+        startAutoRefresh();
+        {% endif %}
+      }
+    });
+
     // ── Async scanning functionality ──
     {% if current_batch %}
     const scanForm = document.getElementById('scan-form');
@@ -482,14 +649,9 @@ MAIN_TEMPLATE = r'''
         const data = await response.json();
 
         if (data.success) {
-          // Show success or duplicate message
-          if (data.duplicate_info) {
-            scanStatus.innerHTML = data.message;
-            scanStatus.className = 'scan-status duplicate show';
-          } else {
-            scanStatus.textContent = data.message + ' (Details loading in background...)';
-            scanStatus.className = 'scan-status success show';
-          }
+          // Show success message
+          scanStatus.textContent = data.message + ' (Details loading in background...)';
+          scanStatus.className = 'scan-status success show';
 
           // Add new row to table
           addScanToTable(data.scan);
@@ -501,11 +663,10 @@ MAIN_TEMPLATE = r'''
           // Clear input IMMEDIATELY
           codeInput.value = '';
 
-          // Hide status after 3 seconds for duplicates, 1.5 for success
-          const hideDelay = data.duplicate_info ? 3000 : 1500;
+          // Hide status after 1.5 seconds
           setTimeout(() => {
             scanStatus.classList.remove('show');
-          }, hideDelay);
+          }, 1500);
         } else {
           scanStatus.textContent = 'Error: ' + data.error;
           scanStatus.className = 'scan-status error show';
@@ -522,7 +683,7 @@ MAIN_TEMPLATE = r'''
 
     function addScanToTable(scan) {
       const row = document.createElement('tr');
-      row.className = scan.status.includes('Duplicate') ? 'duplicate-row' : '';
+      row.className = scan.status.startsWith('Duplicate') ? 'duplicate-row' : '';
       row.dataset.scanId = scan.id;
 
       // Note: order_number and customer_name will be "Processing..." and "Looking up..."
@@ -535,6 +696,16 @@ MAIN_TEMPLATE = r'''
         ? `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.customer_name}</a>`
         : scan.customer_name;
 
+      // Format status with batch link if it's a duplicate
+      let statusDisplay = scan.status;
+      if (scan.status.startsWith('Duplicate (Batch #')) {
+        const batchMatch = scan.status.match(/Batch #(\d+)/);
+        if (batchMatch) {
+          const batchNum = batchMatch[1];
+          statusDisplay = `Duplicate (<a href="/view_batch/${batchNum}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #${batchNum}</a>)`;
+        }
+      }
+
       row.innerHTML = `
         <td><input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="${scan.id}"></td>
         <td style="font-weight: 500;">${scan.tracking_number}</td>
@@ -542,7 +713,7 @@ MAIN_TEMPLATE = r'''
         <td>${orderLink}</td>
         <td>${customerLink}</td>
         <td>${scan.scan_date}</td>
-        <td>${scan.status}</td>
+        <td>${statusDisplay}</td>
       `;
 
       // Insert at the top of the table
@@ -608,10 +779,62 @@ ALL_BATCHES_TEMPLATE = r'''
   <meta charset="utf-8">
   <title>All Batches – H&O Parcel Scans</title>
   <style>
+      @import url("https://d3a1s2k5oq9b60.cloudfront.net/WF-062340-d8eba8d3266ba707a7e48a89247d3873.css?fsf=22601");
+  @font-face {
+  font-family: "ABC Arizona Flare Regular";
+  src: url("Webfont-062340-003957-022601-e4892a18d562a49278782e582c6385b87590aea0.woff2") format("woff2"), url("Webfont-062340-003957-022601-6707a17205951254095bffe39e6cf21dc9435ddd.woff") format("woff");
+  }
+
+      @font-face {
+        font-family: 'Arizona Regular';
+        src: url("https://cdn.shopify.com/s/files/1/0280/1175/7703/files/Arizona_Flare_Light.woff2?v=1745606070") format("woff2");
+        font-weight: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'Arizona Italic';
+        src: url("https://cdn.shopify.com/s/files/1/0280/1175/7703/files/Webfont-062340-003957-022602-3d874fa6cd082c5453f60ea524707bf1a00ad7d7.woff2?v=1745605778") format("woff2");
+        font-weight: normal;
+        font-style: italic;
+        font-display: swap;
+      }
+          @font-face {
+          font-family: 'SprigSansRegular';
+          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-Regular.woff2?v=1724296405') format('woff2');
+          font-weight: 300;
+          font-style: normal;
+          font-display: swap;
+        }
+
+        @font-face {
+          font-family: 'SprigSansRegularItalic';
+          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-RegularItalic.woff2?v=1724296404') format('woff2');
+          font-weight: 400;
+          font-style: italic;
+          font-display: swap;
+        }
+
+        @font-face {
+          font-family: 'SprigSansMedium';
+          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-Bold.woff2?v=1724296404') format('woff2');
+          font-weight: 500;
+          font-style: normal;
+          font-display: swap;
+        }
+
+        @font-face {
+          font-family: 'SprigSansMediumItalic';
+          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-Sprig-MediumItalic.woff2?v=1724305674') format('woff2');
+          font-weight: 500;
+          font-style: italic;
+          font-display: swap;
+        }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       height: 100%;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      font-family: "SprigSansRegular", Tahoma, Geneva, Verdana, sans-serif;
       background-color: #f5f6fa; color: #333;
     }
     .container { display: flex; height: 100vh; }
@@ -653,13 +876,16 @@ ALL_BATCHES_TEMPLATE = r'''
   <div class="container">
 
     <div class="sidebar">
-      <h1>H&amp;O Parcel Scans</h1>
+      <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></img></h1>
       <ul>
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
+      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
+        v{{ version }}
+      </div>
     </div>
 
     <div class="main-content">
@@ -773,13 +999,16 @@ BATCH_VIEW_TEMPLATE = r'''
   <div class="container">
 
     <div class="sidebar">
-      <h1>H&amp;O Parcel Scans</h1>
+      <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
       <ul>
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
+      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
+        v{{ version }}
+      </div>
     </div>
 
     <div class="main-content">
@@ -815,7 +1044,7 @@ BATCH_VIEW_TEMPLATE = r'''
         </thead>
         <tbody>
           {% for row in scans %}
-            <tr class="{{ 'duplicate-row' if 'Duplicate' in row.status else '' }}">
+            <tr class="{{ 'duplicate-row' if row.status.startswith('Duplicate') else '' }}">
               <td>{{ row.tracking_number }}</td>
               <td>{{ row.carrier }}</td>
               <td>
@@ -837,7 +1066,18 @@ BATCH_VIEW_TEMPLATE = r'''
                 {% endif %}
               </td>
               <td>{{ row.scan_date }}</td>
-              <td>{{ row.status }}</td>
+              <td>
+                {% if row.status.startswith('Duplicate (Batch #') %}
+                  {% set batch_num = row.status.split('#')[1].rstrip(')') %}
+                  {% if batch_num and batch_num.isdigit() %}
+                    Duplicate (<a href="{{ url_for('view_batch', batch_id=batch_num|int) }}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #{{ batch_num }}</a>)
+                  {% else %}
+                    {{ row.status }}
+                  {% endif %}
+                {% else %}
+                  {{ row.status }}
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>
@@ -914,13 +1154,16 @@ ALL_SCANS_TEMPLATE = r'''
   <div class="container">
 
     <div class="sidebar">
-      <h1>H&amp;O Parcel Scans</h1>
+      <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
       <ul>
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
+      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
+        v{{ version }}
+      </div>
     </div>
 
     <div class="main-content">
@@ -957,7 +1200,7 @@ ALL_SCANS_TEMPLATE = r'''
         </thead>
         <tbody>
           {% for s in scans %}
-            <tr class="{{ 'duplicate-row' if 'Duplicate' in s.status else '' }}">
+            <tr class="{{ 'duplicate-row' if s.status.startswith('Duplicate') else '' }}">
               <td>{{ s.tracking_number }}</td>
               <td>{{ s.carrier }}</td>
               <td>
@@ -979,7 +1222,18 @@ ALL_SCANS_TEMPLATE = r'''
                 {% endif %}
               </td>
               <td>{{ s.scan_date }}</td>
-              <td>{{ s.status }}</td>
+              <td>
+                {% if s.status.startswith('Duplicate (Batch #') %}
+                  {% set batch_num = s.status.split('#')[1].rstrip(')') %}
+                  {% if batch_num and batch_num.isdigit() %}
+                    Duplicate (<a href="{{ url_for('view_batch', batch_id=batch_num|int) }}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #{{ batch_num }}</a>)
+                  {% else %}
+                    {{ s.status }}
+                  {% endif %}
+                {% else %}
+                  {{ s.status }}
+                {% endif %}
+              </td>
               <td>{{ s.batch_id or '' }}</td>
               <td>
                 <form action="{{ url_for('delete_scan') }}" method="post" style="display: inline;"
@@ -1062,7 +1316,8 @@ def index():
             MAIN_TEMPLATE,
             current_batch=None,
             scans=[],
-            shop_url=SHOP_URL
+            shop_url=SHOP_URL,
+            version=__version__
         )
 
     conn = get_mysql_connection()
@@ -1102,7 +1357,8 @@ def index():
             MAIN_TEMPLATE,
             current_batch=batch_row,
             scans=scans,
-            shop_url=SHOP_URL
+            shop_url=SHOP_URL,
+            version=__version__
         )
     finally:
         try:
@@ -1212,44 +1468,6 @@ def delete_batch():
     return redirect(url_for("all_batches"))
 
 
-def check_duplicate_in_database(tracking_number):
-    """
-    Check if a tracking number exists in the database.
-    Returns (is_duplicate, existing_batch_id) tuple.
-    """
-    conn = get_mysql_connection()
-    try:
-        cursor = conn.cursor()
-        
-        # First check in the scans table for an exact match
-        cursor.execute(
-            "SELECT batch_id FROM scans WHERE tracking_number = %s LIMIT 1",
-            (tracking_number,)
-        )
-        result = cursor.fetchone()
-        
-        if result:
-            return True, result[0]
-        
-        # Also check in the batches table (comma-separated tracking_numbers)
-        # This is a backup check in case a batch was recorded but scans were deleted
-        cursor.execute("SELECT id, tracking_numbers FROM batches WHERE tracking_numbers != ''")
-        batches = cursor.fetchall()
-        
-        for batch_id, tracking_numbers_csv in batches:
-            if tracking_numbers_csv:
-                # Split the CSV and check if our tracking number is in there
-                tracking_list = [t.strip() for t in tracking_numbers_csv.split(',')]
-                if tracking_number in tracking_list:
-                    return True, batch_id
-        
-        return False, None
-        
-    finally:
-        cursor.close()
-        conn.close()
-
-
 def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
     """
     Background thread function to process API calls after scan is already saved.
@@ -1330,16 +1548,8 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
             else:
                 scan_carrier = batch_carrier
 
-        # ── Update the scan record with API results (but keep the original status) ──
+        # ── Update the scan record with API results ──
         cursor = conn.cursor()
-        
-        # First get the current status (might be "Duplicate in Batch #X")
-        cursor.execute("SELECT status FROM scans WHERE id = %s", (scan_id,))
-        current_status = cursor.fetchone()
-        
-        # If it's a duplicate, keep that status, otherwise set to Complete
-        final_status = current_status[0] if (current_status and "Duplicate" in current_status[0]) else "Complete"
-        
         cursor.execute(
             """
             UPDATE scans
@@ -1347,10 +1557,10 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 order_number = %s,
                 customer_name = %s,
                 order_id = %s,
-                status = %s
+                status = 'Complete'
             WHERE id = %s
             """,
-            (scan_carrier, order_number, customer_name, order_id, final_status, scan_id)
+            (scan_carrier, order_number, customer_name, order_id, scan_id)
         )
         conn.commit()
         cursor.close()
@@ -1365,8 +1575,10 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
 def scan():
     """
     INSTANT scan endpoint - inserts to database immediately,
-    checks for duplicates across ALL batches,
     then processes APIs in background thread.
+    
+    ✨ NEW: Checks for duplicates across ALL batches in the database,
+    not just the current batch.
     """
     code = request.form.get("code", "").strip()
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
@@ -1402,36 +1614,64 @@ def scan():
             if len(code) == 34:
                 code = code[11:-11]
 
-        # ── CHECK FOR DUPLICATES ACROSS ENTIRE DATABASE ──
-        is_duplicate_global, existing_batch_id = check_duplicate_in_database(code)
+        # ─────────────────────────────────────────────────────────────────
+        # ✨ NEW: Check for duplicate across ALL BATCHES in the database
+        # ─────────────────────────────────────────────────────────────────
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            """
+            SELECT batch_id, scan_date, order_number, customer_name, order_id, carrier
+            FROM scans 
+            WHERE tracking_number = %s 
+            ORDER BY scan_date DESC 
+            LIMIT 1
+            """,
+            (code,)
+        )
+        existing_scan = cursor.fetchone()
+        cursor.close()
         
-        # Determine the status message
-        if is_duplicate_global:
-            if existing_batch_id == batch_id:
+        # Determine if this is a duplicate and create appropriate status message
+        if existing_scan:
+            is_duplicate = True
+            original_batch_id = existing_scan['batch_id']
+            # Check if it's a duplicate within the SAME batch or a DIFFERENT batch
+            if original_batch_id == batch_id:
                 status = "Duplicate (This Batch)"
             else:
-                status = f"Duplicate in Batch #{existing_batch_id}"
+                status = f"Duplicate (Batch #{original_batch_id})"
         else:
+            is_duplicate = False
             status = "Processing"
+        # ─────────────────────────────────────────────────────────────────
+
+        # Set order details - use existing data for duplicates, placeholders for new scans
+        if is_duplicate and existing_scan:
+            # Copy order details from the existing scan
+            order_number = existing_scan.get('order_number', 'Processing...')
+            customer_name = existing_scan.get('customer_name', 'Looking up...')
+            order_id = existing_scan.get('order_id', '')
+            # Use the carrier from existing scan if available
+            scan_carrier = existing_scan.get('carrier', batch_carrier) or batch_carrier
+        else:
+            # Use placeholders for new scans (will be filled by background thread)
+            order_number = "Processing..."
+            customer_name = "Looking up..."
+            order_id = ""
+            # Detect carrier from tracking number format (quick, no API)
+            scan_carrier = batch_carrier
+            if len(code) == 12:
+                scan_carrier = "Purolator"
+            elif len(code) == 10:
+                scan_carrier = "DHL"
+            elif code.startswith("1Z"):
+                scan_carrier = "UPS"
+            elif code.startswith("2016"):
+                scan_carrier = "Canada Post"
+            elif code.startswith("LA") or len(code) == 30:
+                scan_carrier = "USPS"
         
-        # INSTANT INSERT with placeholder data
-        order_number = "Processing..."
-        customer_name = "Looking up..."
-        order_id = ""
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Detect carrier from tracking number format (quick, no API)
-        scan_carrier = batch_carrier
-        if len(code) == 12:
-            scan_carrier = "Purolator"
-        elif len(code) == 10:
-            scan_carrier = "DHL"
-        elif code.startswith("1Z"):
-            scan_carrier = "UPS"
-        elif code.startswith("2016"):
-            scan_carrier = "Canada Post"
-        elif code.startswith("LA") or len(code) == 30:
-            scan_carrier = "USPS"
 
         # ── INSERT IMMEDIATELY (no waiting for APIs) ──
         cursor = conn.cursor()
@@ -1449,26 +1689,29 @@ def scan():
         scan_id = cursor.lastrowid
         cursor.close()
 
-        # ── Launch background thread for API calls ──
-        import threading
-        api_thread = threading.Thread(
-            target=process_scan_apis_background,
-            args=(scan_id, code, batch_carrier),
-            daemon=True
-        )
-        api_thread.start()
+        # ── Launch background thread for API calls (only if not duplicate) ──
+        # Note: We still insert the scan record even if duplicate, but we don't
+        # need to fetch order details for duplicates since they're already known
+        if not is_duplicate:
+            import threading
+            api_thread = threading.Thread(
+                target=process_scan_apis_background,
+                args=(scan_id, code, batch_carrier),
+                daemon=True
+            )
+            api_thread.start()
 
         # ── Return IMMEDIATELY (don't wait for APIs) ──
         if is_ajax:
-            # Build response message
-            if is_duplicate_global:
-                if existing_batch_id == batch_id:
-                    message = f"⚠️ DUPLICATE: {code} already exists in this batch"
+            # Create a more informative message for duplicates
+            if is_duplicate:
+                if existing_scan['batch_id'] == batch_id:
+                    message = f"⚠️ DUPLICATE: {code} was already scanned in THIS batch"
                 else:
-                    message = f'⚠️ DUPLICATE: {code} already exists in <a href="/view_batch/{existing_batch_id}" target="_blank" style="color: #e74c3c; font-weight: bold;">Batch #{existing_batch_id}</a>'
+                    message = f"⚠️ DUPLICATE: {code} was previously scanned in Batch #{existing_scan['batch_id']}"
             else:
-                message = f"Scanned: {code}"
-                
+                message = f"✓ Scanned: {code}"
+            
             return jsonify({
                 "success": True,
                 "scan": {
@@ -1481,14 +1724,16 @@ def scan():
                     "status": status,
                     "order_id": order_id
                 },
-                "message": message,
-                "duplicate_info": {
-                    "is_duplicate": is_duplicate_global,
-                    "batch_id": existing_batch_id
-                } if is_duplicate_global else None
+                "message": message
             })
         else:
-            flash(f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})", "success")
+            if is_duplicate:
+                if existing_scan['batch_id'] == batch_id:
+                    flash(f"⚠️ DUPLICATE: {code} was already scanned in THIS batch", "warning")
+                else:
+                    flash(f"⚠️ DUPLICATE: {code} was previously scanned in Batch #{existing_scan['batch_id']}", "warning")
+            else:
+                flash(f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})", "success")
             return redirect(url_for("index"))
 
     except Exception as e:
@@ -1612,7 +1857,8 @@ def all_batches():
         return render_template_string(
             ALL_BATCHES_TEMPLATE,
             batches=batches,
-            shop_url=SHOP_URL
+            shop_url=SHOP_URL,
+            version=__version__
         )
     finally:
         try:
@@ -1656,8 +1902,55 @@ def view_batch(batch_id):
             BATCH_VIEW_TEMPLATE,
             batch=batch,
             scans=scans,
-            shop_url=SHOP_URL
+            shop_url=SHOP_URL,
+            version=__version__
         )
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@app.route("/api/batch/<int:batch_id>/updates", methods=["GET"])
+def get_batch_updates(batch_id):
+    """
+    API endpoint to get updated scan information for auto-refresh.
+    Returns scans that have been updated in the last 60 seconds.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get scans from this batch that were recently updated
+        # (we check scans updated in last 60 seconds to catch background API updates)
+        cursor.execute("""
+          SELECT
+            id,
+            tracking_number,
+            carrier,
+            order_number,
+            customer_name,
+            status,
+            order_id
+          FROM scans
+          WHERE batch_id = %s
+            AND (order_number != 'Processing...' OR status = 'Complete')
+          ORDER BY scan_date DESC
+        """, (batch_id,))
+        
+        scans = cursor.fetchall()
+        
+        return jsonify({
+            "success": True,
+            "scans": scans
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
     finally:
         try:
             cursor.close()
@@ -1713,7 +2006,8 @@ def all_scans():
         return render_template_string(
             ALL_SCANS_TEMPLATE,
             scans=scans,
-            shop_url=SHOP_URL
+            shop_url=SHOP_URL,
+            version=__version__
         )
     finally:
         try:
