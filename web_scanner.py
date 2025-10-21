@@ -241,6 +241,7 @@ MAIN_TEMPLATE = r'''
     .scan-status.processing { background-color: #fff4e5; color: #8a6100; border: 1px solid #ffe0b2; }
     .scan-status.success { background-color: #e0f7e9; color: #2f7a45; border: 1px solid #b2e6c2; }
     .scan-status.error { background-color: #fdecea; color: #a33a2f; border: 1px solid #f5c6cb; }
+    .scan-status.duplicate { background-color: #fdecea; color: #a33a2f; border: 1px solid #f5c6cb; font-weight: 600; }
 
     table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
     th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
@@ -398,7 +399,7 @@ MAIN_TEMPLATE = r'''
             </thead>
             <tbody id="scans-tbody">
               {% for row in scans %}
-                <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}" data-scan-id="{{ row.id }}">
+                <tr class="{{ 'duplicate-row' if 'Duplicate' in row.status else '' }}" data-scan-id="{{ row.id }}">
                   <td>
                     <input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="{{ row.id }}">
                   </td>
@@ -481,9 +482,14 @@ MAIN_TEMPLATE = r'''
         const data = await response.json();
 
         if (data.success) {
-          // Show success message
-          scanStatus.textContent = data.message + ' (Details loading in background...)';
-          scanStatus.className = 'scan-status success show';
+          // Show success or duplicate message
+          if (data.duplicate_info) {
+            scanStatus.innerHTML = data.message;
+            scanStatus.className = 'scan-status duplicate show';
+          } else {
+            scanStatus.textContent = data.message + ' (Details loading in background...)';
+            scanStatus.className = 'scan-status success show';
+          }
 
           // Add new row to table
           addScanToTable(data.scan);
@@ -495,10 +501,11 @@ MAIN_TEMPLATE = r'''
           // Clear input IMMEDIATELY
           codeInput.value = '';
 
-          // Hide status after 1.5 seconds
+          // Hide status after 3 seconds for duplicates, 1.5 for success
+          const hideDelay = data.duplicate_info ? 3000 : 1500;
           setTimeout(() => {
             scanStatus.classList.remove('show');
-          }, 1500);
+          }, hideDelay);
         } else {
           scanStatus.textContent = 'Error: ' + data.error;
           scanStatus.className = 'scan-status error show';
@@ -515,7 +522,7 @@ MAIN_TEMPLATE = r'''
 
     function addScanToTable(scan) {
       const row = document.createElement('tr');
-      row.className = scan.status === 'Duplicate' ? 'duplicate-row' : '';
+      row.className = scan.status.includes('Duplicate') ? 'duplicate-row' : '';
       row.dataset.scanId = scan.id;
 
       // Note: order_number and customer_name will be "Processing..." and "Looking up..."
@@ -808,7 +815,7 @@ BATCH_VIEW_TEMPLATE = r'''
         </thead>
         <tbody>
           {% for row in scans %}
-            <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else '' }}">
+            <tr class="{{ 'duplicate-row' if 'Duplicate' in row.status else '' }}">
               <td>{{ row.tracking_number }}</td>
               <td>{{ row.carrier }}</td>
               <td>
@@ -950,7 +957,7 @@ ALL_SCANS_TEMPLATE = r'''
         </thead>
         <tbody>
           {% for s in scans %}
-            <tr class="{{ 'duplicate-row' if s.status == 'Duplicate' else '' }}">
+            <tr class="{{ 'duplicate-row' if 'Duplicate' in s.status else '' }}">
               <td>{{ s.tracking_number }}</td>
               <td>{{ s.carrier }}</td>
               <td>
@@ -1205,6 +1212,44 @@ def delete_batch():
     return redirect(url_for("all_batches"))
 
 
+def check_duplicate_in_database(tracking_number):
+    """
+    Check if a tracking number exists in the database.
+    Returns (is_duplicate, existing_batch_id) tuple.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        
+        # First check in the scans table for an exact match
+        cursor.execute(
+            "SELECT batch_id FROM scans WHERE tracking_number = %s LIMIT 1",
+            (tracking_number,)
+        )
+        result = cursor.fetchone()
+        
+        if result:
+            return True, result[0]
+        
+        # Also check in the batches table (comma-separated tracking_numbers)
+        # This is a backup check in case a batch was recorded but scans were deleted
+        cursor.execute("SELECT id, tracking_numbers FROM batches WHERE tracking_numbers != ''")
+        batches = cursor.fetchall()
+        
+        for batch_id, tracking_numbers_csv in batches:
+            if tracking_numbers_csv:
+                # Split the CSV and check if our tracking number is in there
+                tracking_list = [t.strip() for t in tracking_numbers_csv.split(',')]
+                if tracking_number in tracking_list:
+                    return True, batch_id
+        
+        return False, None
+        
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
     """
     Background thread function to process API calls after scan is already saved.
@@ -1285,8 +1330,16 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
             else:
                 scan_carrier = batch_carrier
 
-        # ── Update the scan record with API results ──
+        # ── Update the scan record with API results (but keep the original status) ──
         cursor = conn.cursor()
+        
+        # First get the current status (might be "Duplicate in Batch #X")
+        cursor.execute("SELECT status FROM scans WHERE id = %s", (scan_id,))
+        current_status = cursor.fetchone()
+        
+        # If it's a duplicate, keep that status, otherwise set to Complete
+        final_status = current_status[0] if (current_status and "Duplicate" in current_status[0]) else "Complete"
+        
         cursor.execute(
             """
             UPDATE scans
@@ -1294,10 +1347,10 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 order_number = %s,
                 customer_name = %s,
                 order_id = %s,
-                status = 'Complete'
+                status = %s
             WHERE id = %s
             """,
-            (scan_carrier, order_number, customer_name, order_id, scan_id)
+            (scan_carrier, order_number, customer_name, order_id, final_status, scan_id)
         )
         conn.commit()
         cursor.close()
@@ -1312,6 +1365,7 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
 def scan():
     """
     INSTANT scan endpoint - inserts to database immediately,
+    checks for duplicates across ALL batches,
     then processes APIs in background thread.
     """
     code = request.form.get("code", "").strip()
@@ -1348,16 +1402,18 @@ def scan():
             if len(code) == 34:
                 code = code[11:-11]
 
-        # Check for duplicate FIRST (instant check)
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM scans WHERE tracking_number = %s AND batch_id = %s",
-            (code, batch_id)
-        )
-        is_duplicate = cursor.fetchone()[0] > 0
-        cursor.close()
-        status = "Duplicate" if is_duplicate else "Processing"
-
+        # ── CHECK FOR DUPLICATES ACROSS ENTIRE DATABASE ──
+        is_duplicate_global, existing_batch_id = check_duplicate_in_database(code)
+        
+        # Determine the status message
+        if is_duplicate_global:
+            if existing_batch_id == batch_id:
+                status = "Duplicate (This Batch)"
+            else:
+                status = f"Duplicate in Batch #{existing_batch_id}"
+        else:
+            status = "Processing"
+        
         # INSTANT INSERT with placeholder data
         order_number = "Processing..."
         customer_name = "Looking up..."
@@ -1404,6 +1460,15 @@ def scan():
 
         # ── Return IMMEDIATELY (don't wait for APIs) ──
         if is_ajax:
+            # Build response message
+            if is_duplicate_global:
+                if existing_batch_id == batch_id:
+                    message = f"⚠️ DUPLICATE: {code} already exists in this batch"
+                else:
+                    message = f'⚠️ DUPLICATE: {code} already exists in <a href="/view_batch/{existing_batch_id}" target="_blank" style="color: #e74c3c; font-weight: bold;">Batch #{existing_batch_id}</a>'
+            else:
+                message = f"Scanned: {code}"
+                
             return jsonify({
                 "success": True,
                 "scan": {
@@ -1416,7 +1481,11 @@ def scan():
                     "status": status,
                     "order_id": order_id
                 },
-                "message": f"Scanned: {code}" + (" (DUPLICATE)" if is_duplicate else "")
+                "message": message,
+                "duplicate_info": {
+                    "is_duplicate": is_duplicate_global,
+                    "batch_id": existing_batch_id
+                } if is_duplicate_global else None
             })
         else:
             flash(f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})", "success")
