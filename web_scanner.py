@@ -253,6 +253,38 @@ MAIN_TEMPLATE = r'''
     td a:hover { text-decoration: underline; }
     td input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
     
+    /* NEW: Duplicate details row styling */
+    .duplicate-details-row {
+      background-color: #fff4e5 !important;
+      border-left: 4px solid #e74c3c;
+    }
+    .duplicate-details-row:hover {
+      background-color: #ffe8cc !important;
+    }
+    .duplicate-details-cell {
+      padding: 12px 16px !important;
+      font-size: 0.9rem;
+    }
+    .duplicate-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #a33a2f;
+      font-weight: 500;
+    }
+    .duplicate-info svg {
+      flex-shrink: 0;
+    }
+    .duplicate-detail {
+      margin-left: 28px;
+      color: #666;
+      font-size: 0.85rem;
+      margin-top: 4px;
+    }
+    .duplicate-detail strong {
+      color: #333;
+    }
+    
     .batch-header { 
       display: flex; 
       align-items: center; 
@@ -407,7 +439,10 @@ MAIN_TEMPLATE = r'''
             </thead>
             <tbody id="scans-tbody">
               {% for row in scans %}
-                <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else ('processing-row' if row.status == 'Processing' else '') }}" data-scan-id="{{ row.id }}">
+                <tr class="{{ 'duplicate-row' if row.status == 'Duplicate' else ('processing-row' if row.status == 'Processing' else '') }}" 
+                    data-scan-id="{{ row.id }}"
+                    data-duplicate-of-batch="{{ row.duplicate_of_batch if row.duplicate_of_batch else '' }}"
+                    data-duplicate-of-scan-date="{{ row.duplicate_of_scan_date if row.duplicate_of_scan_date else '' }}">
                   <td>
                     <input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="{{ row.id }}">
                   </td>
@@ -434,6 +469,29 @@ MAIN_TEMPLATE = r'''
                   <td>{{ row.scan_date }}</td>
                   <td>{{ row.status }}</td>
                 </tr>
+                {# If this is a duplicate, add a detail row immediately after #}
+                {% if row.status == 'Duplicate' and row.duplicate_of_batch %}
+                <tr class="duplicate-details-row" data-parent-scan-id="{{ row.id }}">
+                  <td colspan="7" class="duplicate-details-cell">
+                    <div class="duplicate-info">
+                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M10 0C4.48 0 0 4.48 0 10s4.48 10 10 10 10-4.48 10-10S15.52 0 10 0zm1 15H9v-2h2v2zm0-4H9V5h2v6z" fill="#e74c3c"/>
+                      </svg>
+                      <span>⚠️ DUPLICATE ALERT</span>
+                    </div>
+                    <div class="duplicate-detail">
+                      <strong>Original Scan:</strong> Tracking #{{ row.tracking_number }} was previously scanned in 
+                      <a href="{{ url_for('view_batch', batch_id=row.duplicate_of_batch) }}" target="_blank" style="color: #2d85f8; font-weight: 600;">
+                        Batch #{{ row.duplicate_of_batch }}
+                      </a>
+                      on {{ row.duplicate_of_scan_date }}
+                    </div>
+                    <div class="duplicate-detail" style="margin-top: 8px; color: #e74c3c;">
+                      ⚠️ This parcel may have already been shipped. Please verify before sending again.
+                    </div>
+                  </td>
+                </tr>
+                {% endif %}
               {% endfor %}
             </tbody>
           </table>
@@ -633,9 +691,9 @@ MAIN_TEMPLATE = r'''
 
         if (data.success) {
           // Show success message
-          const dupText = data.scan.status === 'Duplicate' ? ' (DUPLICATE)' : '';
+          const dupText = data.scan.status === 'Duplicate' ? ' (DUPLICATE - SEE DETAILS BELOW)' : '';
           scanStatus.textContent = data.message + dupText;
-          scanStatus.className = 'scan-status success show';
+          scanStatus.className = 'scan-status ' + (data.scan.status === 'Duplicate' ? 'error' : 'success') + ' show';
 
           // Add new row to table
           addScanToTable(data.scan);
@@ -650,10 +708,11 @@ MAIN_TEMPLATE = r'''
           // Clear input IMMEDIATELY
           codeInput.value = '';
 
-          // Hide status after 1.5 seconds
+          // Hide status after longer for duplicates (so they see the warning)
+          const hideDelay = data.scan.status === 'Duplicate' ? 3000 : 1500;
           setTimeout(() => {
             scanStatus.classList.remove('show');
-          }, 1500);
+          }, hideDelay);
         } else {
           scanStatus.textContent = 'Error: ' + data.error;
           scanStatus.className = 'scan-status error show';
@@ -669,6 +728,7 @@ MAIN_TEMPLATE = r'''
     });
 
     function addScanToTable(scan) {
+      // Create main scan row
       const row = document.createElement('tr');
       // Apply correct class based on status
       if (scan.status === 'Duplicate') {
@@ -677,6 +737,12 @@ MAIN_TEMPLATE = r'''
         row.className = 'processing-row';
       }
       row.dataset.scanId = scan.id;
+      
+      // Store duplicate info if applicable
+      if (scan.duplicate_of_batch) {
+        row.dataset.duplicateOfBatch = scan.duplicate_of_batch;
+        row.dataset.duplicateOfScanDate = scan.duplicate_of_scan_date;
+      }
 
       // Note: order_number and customer_name will be "Processing..." and "Looking up..."
       // They'll update automatically via the polling mechanism
@@ -700,6 +766,37 @@ MAIN_TEMPLATE = r'''
 
       // Insert at the top of the table
       scansTable.insertBefore(row, scansTable.firstChild);
+      
+      // If this is a duplicate, add the details row immediately after
+      if (scan.status === 'Duplicate' && scan.duplicate_of_batch) {
+        const detailsRow = document.createElement('tr');
+        detailsRow.className = 'duplicate-details-row';
+        detailsRow.dataset.parentScanId = scan.id;
+        
+        detailsRow.innerHTML = `
+          <td colspan="7" class="duplicate-details-cell">
+            <div class="duplicate-info">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 0C4.48 0 0 4.48 0 10s4.48 10 10 10 10-4.48 10-10S15.52 0 10 0zm1 15H9v-2h2v2zm0-4H9V5h2v6z" fill="#e74c3c"/>
+              </svg>
+              <span>⚠️ DUPLICATE ALERT</span>
+            </div>
+            <div class="duplicate-detail">
+              <strong>Original Scan:</strong> Tracking #${scan.tracking_number} was previously scanned in 
+              <a href="{{ url_for('view_batch', batch_id='') }}${scan.duplicate_of_batch}" target="_blank" style="color: #2d85f8; font-weight: 600;">
+                Batch #${scan.duplicate_of_batch}
+              </a>
+              on ${scan.duplicate_of_scan_date}
+            </div>
+            <div class="duplicate-detail" style="margin-top: 8px; color: #e74c3c;">
+              ⚠️ This parcel may have already been shipped. Please verify before sending again.
+            </div>
+          </td>
+        `;
+        
+        // Insert details row right after the main row
+        scansTable.insertBefore(detailsRow, row.nextSibling);
+      }
     }
 
     // ── Select all checkboxes functionality ──
@@ -1208,6 +1305,10 @@ def logout():
 
 @app.route("/", methods=["GET"])
 def index():
+    """
+    Main page - shows either "Create New Batch" or the current open batch with scans.
+    Now includes duplicate_of_batch and duplicate_of_scan_date in the scans query.
+    """
     batch_id = session.get("batch_id")
     if not batch_id:
         # No batch open → show "Create New Batch"
@@ -1234,7 +1335,7 @@ def index():
             flash("Batch not found. Please start a new batch.", "error")
             return redirect(url_for("index"))
 
-        # Fetch all scans in this batch
+        # Fetch all scans in this batch, INCLUDING duplicate info
         cursor.execute("""
           SELECT
             id,
@@ -1244,7 +1345,9 @@ def index():
             customer_name,
             scan_date,
             status,
-            order_id
+            order_id,
+            duplicate_of_batch,
+            duplicate_of_scan_date
           FROM scans
          WHERE batch_id = %s
          ORDER BY scan_date DESC
@@ -1370,9 +1473,8 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
     Background thread function to process API calls after scan is already saved.
     This runs AFTER the response is sent to user, so scanning can continue immediately.
     
-    IMPORTANT: Preserves "Duplicate" status - only updates status to "Complete" if 
-    the current status is "Processing". This ensures duplicate scans stay marked
-    as duplicates even after the background processing completes.
+    CRITICAL CHANGE: Now preserves "Duplicate" status and NEVER overwrites it.
+    Only updates status to "Complete" if current status is "Processing".
     """
     import threading
     time.sleep(0.1)  # Small delay to ensure response is sent first
@@ -1450,7 +1552,7 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 scan_carrier = batch_carrier
 
         # ── Update the scan record with API results ──
-        # CRITICAL: Preserve "Duplicate" status, only mark as Complete if it was Processing
+        # CRITICAL: Preserve "Duplicate" status - only mark as Complete if it was Processing
         # This uses a CASE statement to check the current status before updating
         cursor = conn.cursor()
         cursor.execute(
@@ -1480,8 +1582,8 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
 @app.route("/scan", methods=["POST"])
 def scan():
     """
-    INSTANT scan endpoint - inserts to database immediately,
-    then processes APIs in background thread.
+    UPDATED: Now checks for duplicates ACROSS ALL BATCHES (not just current batch).
+    When a duplicate is found, stores information about the original scan.
     """
     code = request.form.get("code", "").strip()
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
@@ -1517,14 +1619,29 @@ def scan():
             if len(code) == 34:
                 code = code[11:-11]
 
-        # Check for duplicate FIRST (instant check)
-        cursor = conn.cursor()
+        # ═══════════════════════════════════════════════════════════════
+        # CRITICAL CHANGE: Check for duplicate ACROSS ALL BATCHES
+        # (removed the batch_id filter from the WHERE clause)
+        # Also fetch information about the original scan if it exists
+        # ═══════════════════════════════════════════════════════════════
+        cursor = conn.cursor(dictionary=True)
         cursor.execute(
-            "SELECT COUNT(*) FROM scans WHERE tracking_number = %s AND batch_id = %s",
-            (code, batch_id)
+            """
+            SELECT id, batch_id, scan_date, tracking_number
+            FROM scans 
+            WHERE tracking_number = %s
+            ORDER BY scan_date ASC
+            LIMIT 1
+            """,
+            (code,)
         )
-        is_duplicate = cursor.fetchone()[0] > 0
+        original_scan = cursor.fetchone()
         cursor.close()
+        
+        # Determine if this is a duplicate and capture original batch info
+        is_duplicate = original_scan is not None
+        duplicate_of_batch = original_scan['batch_id'] if is_duplicate else None
+        duplicate_of_scan_date = original_scan['scan_date'].strftime("%Y-%m-%d %H:%M:%S") if is_duplicate else None
         status = "Duplicate" if is_duplicate else "Processing"
 
         # INSTANT INSERT with placeholder data
@@ -1546,23 +1663,26 @@ def scan():
         elif code.startswith("LA") or len(code) == 30:
             scan_carrier = "USPS"
 
-        # ── INSERT IMMEDIATELY (no waiting for APIs) ──
+        # ── INSERT IMMEDIATELY with duplicate tracking info (no waiting for APIs) ──
         cursor = conn.cursor()
         cursor.execute(
             """
             INSERT INTO scans
               (tracking_number, carrier, order_number, customer_name,
-               scan_date, status, order_id, batch_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+               scan_date, status, order_id, batch_id, 
+               duplicate_of_batch, duplicate_of_scan_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (code, scan_carrier, order_number, customer_name,
-             now_str, status, order_id, batch_id)
+             now_str, status, order_id, batch_id,
+             duplicate_of_batch, duplicate_of_scan_date)
         )
         conn.commit()
         scan_id = cursor.lastrowid
         cursor.close()
 
-        # ── Launch background thread for API calls ──
+        # ── Launch background thread for API calls (only if not duplicate) ──
+        # For duplicates, we still want to look up order info for display purposes
         import threading
         api_thread = threading.Thread(
             target=process_scan_apis_background,
@@ -1583,12 +1703,17 @@ def scan():
                     "customer_name": customer_name,
                     "scan_date": now_str,
                     "status": status,
-                    "order_id": order_id
+                    "order_id": order_id,
+                    "duplicate_of_batch": duplicate_of_batch,
+                    "duplicate_of_scan_date": duplicate_of_scan_date
                 },
-                "message": f"Scanned: {code}" + (" (DUPLICATE)" if is_duplicate else "")
+                "message": f"Scanned: {code}" + (f" - DUPLICATE from Batch #{duplicate_of_batch}" if is_duplicate else "")
             })
         else:
-            flash(f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})", "success")
+            msg = f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})"
+            if is_duplicate:
+                msg += f" - WARNING: Duplicate of scan from Batch #{duplicate_of_batch}"
+            flash(msg, "warning" if is_duplicate else "success")
             return redirect(url_for("index"))
 
     except Exception as e:
@@ -1603,9 +1728,11 @@ def scan():
 @app.route("/get_scan_updates", methods=["POST"])
 def get_scan_updates():
     """
-    NEW ENDPOINT: Returns updated scan information for specified scan IDs.
+    Returns updated scan information for specified scan IDs.
     This is polled by the frontend JavaScript to auto-update the UI when
     background processing completes.
+    
+    Now also returns duplicate information.
     """
     try:
         data = request.get_json()
@@ -1629,7 +1756,9 @@ def get_scan_updates():
                     customer_name,
                     scan_date,
                     status,
-                    order_id
+                    order_id,
+                    duplicate_of_batch,
+                    duplicate_of_scan_date
                 FROM scans
                 WHERE id IN ({placeholders})
             """
