@@ -642,8 +642,19 @@ MAIN_TEMPLATE = r'''
       }
     });
 
-    // ── Periodic focus restoration ──
+    // ── Async scanning functionality ──
     {% if current_batch %}
+    // Declare all DOM element references first
+    const scanForm = document.getElementById('scan-form');
+    const codeInput = document.getElementById('code');
+    const scanBtn = document.getElementById('scan-btn');
+    const scanSpinner = document.getElementById('scan-spinner');
+    const scanStatus = document.getElementById('scan-status');
+    const scansTable = document.getElementById('scans-tbody');
+    const scanCount = document.getElementById('scan-count');
+    const shopUrl = '{{ shop_url }}';
+
+    // ── Periodic focus restoration ──
     // Ensure focus is set on page load (with small delay to ensure DOM is ready)
     setTimeout(function() {
       if (codeInput) codeInput.focus();
@@ -671,18 +682,8 @@ MAIN_TEMPLATE = r'''
         codeInput.focus();
       }
     }, 3000); // Every 3 seconds
-    {% endif %}
 
-    // ── Async scanning functionality ──
-    {% if current_batch %}
-    const scanForm = document.getElementById('scan-form');
-    const codeInput = document.getElementById('code');
-    const scanBtn = document.getElementById('scan-btn');
-    const scanSpinner = document.getElementById('scan-spinner');
-    const scanStatus = document.getElementById('scan-status');
-    const scansTable = document.getElementById('scans-tbody');
-    const scanCount = document.getElementById('scan-count');
-    const shopUrl = '{{ shop_url }}';
+    // ── Form submission handler ──
 
     scanForm.addEventListener('submit', async function(e) {
       e.preventDefault();
