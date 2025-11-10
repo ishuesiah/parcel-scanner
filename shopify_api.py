@@ -84,8 +84,22 @@ class ShopifyAPI:
                     continue
 
                 resp.raise_for_status()
-                next_token = self._extract_next_page_token(resp.headers)
-                return resp.json(), next_token
+
+                # Validate response is JSON before parsing
+                content_type = resp.headers.get('Content-Type', '')
+                if 'application/json' not in content_type:
+                    print(f"Shopify API returned non-JSON response. Content-Type: {content_type}")
+                    print(f"Response preview: {resp.text[:200]}")
+                    return None, None
+
+                try:
+                    json_data = resp.json()
+                    next_token = self._extract_next_page_token(resp.headers)
+                    return json_data, next_token
+                except ValueError as e:
+                    print(f"Shopify API JSON parse error: {e}")
+                    print(f"Response preview: {resp.text[:200]}")
+                    return None, None
 
             except requests.exceptions.Timeout as e:
                 wait = min(2 ** retry, 8)

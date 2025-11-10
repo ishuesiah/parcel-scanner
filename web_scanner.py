@@ -552,8 +552,21 @@ MAIN_TEMPLATE = r'''
       autoRefreshInterval = setInterval(async function() {
         try {
           const response = await fetch('{{ url_for("get_batch_updates", batch_id=current_batch.id) }}');
+
+          // Check if response is OK and is JSON
+          if (!response.ok) {
+            console.error('Auto-refresh HTTP error:', response.status);
+            return;
+          }
+
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            console.error('Auto-refresh returned non-JSON response:', contentType);
+            return;
+          }
+
           const data = await response.json();
-          
+
           if (data.success && data.scans) {
             // Update each row with new data
             data.scans.forEach(scan => {
@@ -696,6 +709,15 @@ MAIN_TEMPLATE = r'''
           body: formData
         });
 
+        // Check if response is JSON before parsing
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          scanStatus.textContent = 'Server error - received non-JSON response';
+          scanStatus.className = 'scan-status error show';
+          console.error('Scan returned non-JSON response:', contentType);
+          return;
+        }
+
         const data = await response.json();
 
         if (data.success) {
@@ -722,8 +744,14 @@ MAIN_TEMPLATE = r'''
           scanStatus.className = 'scan-status error show';
         }
       } catch (error) {
-        scanStatus.textContent = 'Error: ' + error.message;
+        let errorMsg = error.message;
+        if (error instanceof SyntaxError) {
+          // JSON parse error
+          errorMsg = 'Server returned invalid response (not JSON)';
+        }
+        scanStatus.textContent = 'Error: ' + errorMsg;
         scanStatus.className = 'scan-status error show';
+        console.error('Scan error:', error);
       } finally {
         // Hide spinner and keep button enabled
         scanSpinner.style.display = 'none';
@@ -1559,7 +1587,21 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                             break
 
                     resp.raise_for_status()
-                    data = resp.json()
+
+                    # Validate response is JSON before parsing
+                    content_type = resp.headers.get('Content-Type', '')
+                    if 'application/json' not in content_type:
+                        print(f"ShipStation returned non-JSON response for {tracking_number}. Content-Type: {content_type}")
+                        print(f"Response preview: {resp.text[:200]}")
+                        break  # Exit retry loop, use defaults
+
+                    try:
+                        data = resp.json()
+                    except ValueError as e:
+                        print(f"ShipStation JSON parse error for {tracking_number}: {e}")
+                        print(f"Response preview: {resp.text[:200]}")
+                        break  # Exit retry loop, use defaults
+
                     shipments = data.get("shipments", [])
 
                     if shipments:
