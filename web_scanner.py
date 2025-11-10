@@ -610,6 +610,37 @@ MAIN_TEMPLATE = r'''
       }
     });
 
+    // ── Periodic focus restoration ──
+    {% if current_batch %}
+    // Ensure focus is set on page load (with small delay to ensure DOM is ready)
+    setTimeout(function() {
+      if (codeInput) codeInput.focus();
+    }, 100);
+
+    // Restore focus to tracking input every 3 seconds if user hasn't focused elsewhere
+    setInterval(function() {
+      if (!codeInput || document.hidden) return;
+
+      const activeElement = document.activeElement;
+
+      // Only restore focus if active element is body or non-interactive element
+      // This allows users to interact with buttons, links, checkboxes, etc.
+      const isInteractiveElement = activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.tagName === 'SELECT' ||
+        activeElement.tagName === 'BUTTON' ||
+        activeElement.tagName === 'A' ||
+        activeElement.isContentEditable
+      );
+
+      // Restore focus only if not interacting with anything else
+      if (!isInteractiveElement || activeElement === document.body) {
+        codeInput.focus();
+      }
+    }, 3000); // Every 3 seconds
+    {% endif %}
+
     // ── Async scanning functionality ──
     {% if current_batch %}
     const scanForm = document.getElementById('scan-form');
@@ -1474,8 +1505,8 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
     This runs AFTER the response is sent to user, so scanning can continue immediately.
     """
     import threading
-    time.sleep(0.1)  # Small delay to ensure response is sent first
-    
+    # No delay needed - response is already sent before thread starts
+
     conn = get_mysql_connection()
     try:
         # Initialize with defaults
@@ -1484,54 +1515,88 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
         order_id = ""
         scan_carrier = batch_carrier
         
-        # ── ShipStation lookup ──
+        # ── ShipStation lookup with retry logic ──
         shipstation_found = False
-        try:
-            if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
-                url = f"https://ssapi.shipstation.com/shipments?trackingNumber={tracking_number}"
-                resp = requests.get(
-                    url,
-                    auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-                    headers={"Accept": "application/json"},
-                    timeout=6
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                shipments = data.get("shipments", [])
+        if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+            max_retries = 4
+            for retry in range(max_retries):
+                try:
+                    url = f"https://ssapi.shipstation.com/shipments?trackingNumber={tracking_number}"
+                    resp = requests.get(
+                        url,
+                        auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                        headers={"Accept": "application/json"},
+                        timeout=12  # Increased from 6 to 12 seconds
+                    )
 
-                if shipments:
-                    shipstation_found = True
-                    first = shipments[0]
-                    order_number = first.get("orderNumber", "N/A")
-                    ship_to = first.get("shipTo", {})
-                    customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
-                    carrier_code = first.get("carrierCode", "").lower()
+                    # Handle 503 and other 5xx errors with retry
+                    if resp.status_code == 503 or (500 <= resp.status_code < 600):
+                        wait = min(2 ** retry, 8)
+                        print(f"ShipStation {resp.status_code} error for {tracking_number}, retry {retry + 1}/{max_retries} after {wait}s")
+                        if retry < max_retries - 1:
+                            time.sleep(wait)
+                            continue
+                        else:
+                            break
 
-                    carrier_map = {
-                        "ups": "UPS",
-                        "canadapost": "Canada Post",
-                        "canada_post": "Canada Post",
-                        "dhl": "DHL",
-                        "dhl_express": "DHL",
-                        "purolator": "Purolator",
-                    }
-                    scan_carrier = carrier_map.get(carrier_code, batch_carrier)
-        except Exception as e:
-            print(f"ShipStation error for {tracking_number}: {e}")
+                    resp.raise_for_status()
+                    data = resp.json()
+                    shipments = data.get("shipments", [])
+
+                    if shipments:
+                        shipstation_found = True
+                        first = shipments[0]
+                        order_number = first.get("orderNumber", "N/A")
+                        ship_to = first.get("shipTo", {})
+                        customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
+                        carrier_code = first.get("carrierCode", "").lower()
+
+                        carrier_map = {
+                            "ups": "UPS",
+                            "canadapost": "Canada Post",
+                            "canada_post": "Canada Post",
+                            "dhl": "DHL",
+                            "dhl_express": "DHL",
+                            "purolator": "Purolator",
+                        }
+                        scan_carrier = carrier_map.get(carrier_code, batch_carrier)
+                    break  # Success, exit retry loop
+
+                except requests.exceptions.Timeout as e:
+                    wait = min(2 ** retry, 8)
+                    print(f"ShipStation timeout for {tracking_number}, retry {retry + 1}/{max_retries} after {wait}s: {e}")
+                    if retry < max_retries - 1:
+                        time.sleep(wait)
+                    else:
+                        print(f"ShipStation failed after {max_retries} retries for {tracking_number}")
+
+                except Exception as e:
+                    wait = min(2 ** retry, 8)
+                    print(f"ShipStation error for {tracking_number}, retry {retry + 1}/{max_retries}: {e}")
+                    if retry < max_retries - 1:
+                        time.sleep(wait)
+                    else:
+                        print(f"ShipStation failed after {max_retries} retries for {tracking_number}")
+                    break
 
         # ── Shopify lookup ──
         shopify_found = False
         try:
             shopify_api = get_shopify_api()
             shopify_info = shopify_api.get_order_by_tracking(tracking_number)
-            
+
             if shopify_info and shopify_info.get("order_id"):
                 shopify_found = True
                 order_number = shopify_info.get("order_number", order_number)
                 customer_name = shopify_info.get("customer_name", customer_name)
                 order_id = shopify_info.get("order_id", order_id)
+                print(f"Shopify lookup successful for {tracking_number}: order {order_number}")
+            else:
+                print(f"Shopify lookup found no order for {tracking_number}")
         except Exception as e:
             print(f"Shopify error for {tracking_number}: {e}")
+            import traceback
+            traceback.print_exc()
 
         # ── Fallback carrier detection ──
         if not scan_carrier or scan_carrier == "":

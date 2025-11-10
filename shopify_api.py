@@ -52,26 +52,60 @@ class ShopifyAPI:
 
     def _make_request(self, endpoint: str, method: str = "GET", params: dict = None) -> tuple[Optional[Dict], Optional[str]]:
         url = f"https://{self.shop_url}/admin/api/{self.api_version}/{endpoint}"
-        max_retries = 3
+        max_retries = 5  # Increased from 3 to 5
         retry = 0
-        
+
         while retry < max_retries:
             try:
-                resp = self.session.request(method, url, params=params)
+                resp = self.session.request(method, url, params=params, timeout=15)
+
+                # Handle rate limiting (429)
                 if resp.status_code == 429:
                     wait = int(resp.headers.get("Retry-After", 2))
+                    print(f"Shopify rate limit hit, waiting {wait}s before retry {retry + 1}/{max_retries}")
                     time.sleep(wait)
                     retry += 1
                     continue
+
+                # Handle 503 Service Unavailable with exponential backoff
+                if resp.status_code == 503:
+                    wait = min(2 ** retry, 16)  # Exponential backoff: 1s, 2s, 4s, 8s, 16s max
+                    print(f"Shopify 503 error, waiting {wait}s before retry {retry + 1}/{max_retries}")
+                    time.sleep(wait)
+                    retry += 1
+                    continue
+
+                # Handle other 5xx errors with exponential backoff
+                if 500 <= resp.status_code < 600:
+                    wait = min(2 ** retry, 16)
+                    print(f"Shopify {resp.status_code} error, waiting {wait}s before retry {retry + 1}/{max_retries}")
+                    time.sleep(wait)
+                    retry += 1
+                    continue
+
                 resp.raise_for_status()
                 next_token = self._extract_next_page_token(resp.headers)
                 return resp.json(), next_token
-            except requests.exceptions.RequestException as e:
+
+            except requests.exceptions.Timeout as e:
+                wait = min(2 ** retry, 8)
+                print(f"Shopify timeout error: {e}, waiting {wait}s before retry {retry + 1}/{max_retries}")
                 if retry < max_retries - 1:
-                    time.sleep(1)
+                    time.sleep(wait)
                     retry += 1
                     continue
                 return None, None
+
+            except requests.exceptions.RequestException as e:
+                wait = min(2 ** retry, 8)
+                print(f"Shopify request error: {e}, waiting {wait}s before retry {retry + 1}/{max_retries}")
+                if retry < max_retries - 1:
+                    time.sleep(wait)
+                    retry += 1
+                    continue
+                return None, None
+
+        print(f"Shopify API request failed after {max_retries} retries")
         return None, None
 
     def _get_paginated_orders(self, initial_params: dict) -> Generator[dict, None, None]:
