@@ -55,17 +55,36 @@ INACTIVITY_TIMEOUT = 30 * 60
 # ── MySQL connection pool ──
 db_pool = mysql.connector.pooling.MySQLConnectionPool(
     pool_name="flask_pool",
-    pool_size=5,
+    pool_size=15,  # Increased from 5 to 15 to handle concurrent scans + background threads
     pool_reset_session=True,
     host=os.environ["MYSQL_HOST"],
     port=int(os.environ.get("MYSQL_PORT", 30603)),
     user=os.environ["MYSQL_USER"],
     password=os.environ["MYSQL_PASSWORD"],
     database=os.environ["MYSQL_DATABASE"],
+    connection_timeout=10,  # 10 second timeout for getting a connection from pool
+    autocommit=False,  # Explicit transaction control
 )
 
 def get_mysql_connection():
-    return db_pool.get_connection()
+    """
+    Get a connection from the pool with retry logic for pool exhaustion.
+    """
+    max_retries = 3
+    for retry in range(max_retries):
+        try:
+            return db_pool.get_connection()
+        except mysql.connector.errors.PoolError as e:
+            if retry < max_retries - 1:
+                wait = 0.5 * (retry + 1)  # 0.5s, 1s, 1.5s
+                print(f"Connection pool exhausted, retry {retry + 1}/{max_retries} after {wait}s: {e}")
+                time.sleep(wait)
+            else:
+                print(f"Failed to get database connection after {max_retries} retries")
+                raise
+        except Exception as e:
+            print(f"Database connection error: {e}")
+            raise
 
 # Read shop URL for building admin links
 SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
@@ -1801,13 +1820,34 @@ def scan():
                 flash(f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})", "success")
             return redirect(url_for("index"))
 
-    except Exception as e:
+    except mysql.connector.errors.PoolError as e:
+        error_msg = "Database connection pool exhausted - please wait a moment and try again"
+        print(f"Pool exhaustion during scan: {e}")
         if is_ajax:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": error_msg}), 503
+        flash(error_msg, "error")
+        return redirect(url_for("index"))
+    except mysql.connector.Error as e:
+        error_msg = f"Database error: {e}"
+        print(f"MySQL error during scan: {e}")
+        if is_ajax:
+            return jsonify({"success": False, "error": "Database temporarily unavailable"}), 503
+        flash("Database temporarily unavailable, please try again", "error")
+        return redirect(url_for("index"))
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Unexpected error during scan: {e}")
+        import traceback
+        traceback.print_exc()
+        if is_ajax:
+            return jsonify({"success": False, "error": error_msg}), 500
         flash(f"Error processing scan: {e}", "error")
         return redirect(url_for("index"))
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass  # Connection might already be closed or not exist
 
 
 @app.route("/delete_scans", methods=["POST"])
@@ -1822,7 +1862,15 @@ def delete_scans():
         flash("No scans selected for deletion.", "error")
         return redirect(url_for("index"))
 
-    conn = get_mysql_connection()
+    try:
+        conn = get_mysql_connection()
+    except mysql.connector.errors.PoolError:
+        flash("Database connection pool busy - please wait a moment and try again", "error")
+        return redirect(url_for("index"))
+    except Exception as e:
+        flash(f"Database connection error: {e}", "error")
+        return redirect(url_for("index"))
+
     try:
         cursor = conn.cursor()
         placeholders = ",".join(["%s"] * len(scan_ids))
@@ -1833,14 +1881,22 @@ def delete_scans():
         flash(f"Deleted {len(scan_ids)} scan(s).", "success")
         return redirect(url_for("index"))
     except mysql.connector.Error as e:
-        flash(f"MySQL Error: {e}", "error")
+        print(f"MySQL error during delete: {e}")
+        flash("Database temporarily unavailable - delete failed, please try again", "error")
+        return redirect(url_for("index"))
+    except Exception as e:
+        print(f"Error deleting scans: {e}")
+        flash(f"Error: {e}", "error")
         return redirect(url_for("index"))
     finally:
         try:
             cursor.close()
         except Exception:
             pass
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.route("/delete_scan", methods=["POST"])
@@ -1850,20 +1906,35 @@ def delete_scan():
         flash("No scan specified for deletion.", "error")
         return redirect(url_for("all_scans"))
 
-    conn = get_mysql_connection()
+    try:
+        conn = get_mysql_connection()
+    except mysql.connector.errors.PoolError:
+        flash("Database connection pool busy - please wait a moment and try again", "error")
+        return redirect(url_for("all_scans"))
+    except Exception as e:
+        flash(f"Database connection error: {e}", "error")
+        return redirect(url_for("all_scans"))
+
     try:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM scans WHERE id = %s", (scan_id,))
         conn.commit()
         flash(f"Deleted scan #{scan_id}.", "success")
     except mysql.connector.Error as e:
-        flash(f"MySQL Error: {e}", "error")
+        print(f"MySQL error during delete: {e}")
+        flash("Database temporarily unavailable - delete failed, please try again", "error")
+    except Exception as e:
+        print(f"Error deleting scan: {e}")
+        flash(f"Error: {e}", "error")
     finally:
         try:
             cursor.close()
         except Exception:
             pass
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     return redirect(url_for("all_scans"))
 
