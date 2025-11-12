@@ -654,6 +654,10 @@ MAIN_TEMPLATE = r'''
     const scanCount = document.getElementById('scan-count');
     const shopUrl = '{{ shop_url }}';
 
+    // Initialize success sound
+    const successSound = new Audio('{{ url_for("static", filename="scan-success.mp3") }}');
+    successSound.volume = 0.5; // Set volume to 50%
+
     // ── Periodic focus restoration ──
     // Ensure focus is set on page load (with small delay to ensure DOM is ready)
     setTimeout(function() {
@@ -722,6 +726,14 @@ MAIN_TEMPLATE = r'''
         const data = await response.json();
 
         if (data.success) {
+          // Play success sound
+          try {
+            successSound.currentTime = 0; // Reset to start
+            successSound.play().catch(e => console.log('Could not play sound:', e));
+          } catch (e) {
+            console.log('Sound play error:', e);
+          }
+
           // Show success message
           scanStatus.textContent = data.message + ' (Details loading in background...)';
           scanStatus.className = 'scan-status success show';
@@ -741,6 +753,7 @@ MAIN_TEMPLATE = r'''
             scanStatus.classList.remove('show');
           }, 1500);
         } else {
+          // Don't play sound on errors (including carrier mismatch)
           scanStatus.textContent = 'Error: ' + data.error;
           scanStatus.className = 'scan-status error show';
         }
@@ -1740,6 +1753,29 @@ def scan():
         elif batch_carrier == "Purolator":
             if len(code) == 34:
                 code = code[11:-11]
+
+        # ── Validate carrier before processing ──
+        # Detect carrier from tracking number format
+        detected_carrier = None
+        if code.startswith("1Z"):
+            detected_carrier = "UPS"
+        elif len(code) == 12 and code.isdigit():
+            detected_carrier = "Purolator"
+        elif len(code) == 10 and code.isdigit():
+            detected_carrier = "DHL"
+        elif code.startswith("2016"):
+            detected_carrier = "Canada Post"
+        elif code.startswith("LA") or len(code) == 30:
+            detected_carrier = "USPS"
+
+        # Reject if carrier doesn't match batch carrier
+        if detected_carrier and detected_carrier != batch_carrier:
+            error_msg = f"Not a {batch_carrier} label, please try again. (Detected: {detected_carrier})"
+            print(f"Carrier mismatch: expected {batch_carrier}, got {detected_carrier} for code {code}")
+            if is_ajax:
+                return jsonify({"success": False, "error": error_msg, "carrier_mismatch": True}), 400
+            flash(error_msg, "error")
+            return redirect(url_for("index"))
 
         # ─────────────────────────────────────────────────────────────────
         # ✨ NEW: Check for duplicate across ALL BATCHES in the database
