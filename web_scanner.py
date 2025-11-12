@@ -440,6 +440,17 @@ MAIN_TEMPLATE = r'''
             <h2>Batch #{{ current_batch.id }} ({{ current_batch.carrier }})</h2>
             <p><em>Created: {{ current_batch.created_at }}</em></p>
             <p>Scans in batch: <strong id="scan-count">{{ scans|length }}</strong></p>
+            {% set batch_status = current_batch.get('status', 'in_progress') %}
+            <p style="margin-top: 8px;">
+              <strong>Status:</strong>
+              {% if batch_status == 'notified' %}
+                <span style="color: #27ae60;">✉ Notified</span>
+              {% elif batch_status == 'recorded' %}
+                <span style="color: #f39c12;">✓ Picked Up (Ready to notify)</span>
+              {% else %}
+                <span style="color: #666;">⏳ In Progress</span>
+              {% endif %}
+            </p>
             <p style="font-size: 0.85rem; color: #666; margin-top: 4px;">
               💡 Tip: Order details load in background. Refresh page to see updated info.
             </p>
@@ -470,10 +481,20 @@ MAIN_TEMPLATE = r'''
             <form action="{{ url_for('delete_scans') }}" method="post" id="delete-form" style="margin: 0;">
               <button type="submit" class="btn btn-delete" id="delete-btn">Delete Selected</button>
             </form>
-            <button type="button" class="btn btn-new" onclick="window.location.reload()">Save</button>
-            <form action="{{ url_for('record_batch') }}" method="post" style="margin: 0;">
-              <button type="submit" class="btn btn-batch">Record Carrier Pick-up</button>
-            </form>
+            <button type="button" class="btn btn-new" onclick="window.location.reload()">Refresh</button>
+            {% if batch_status == 'notified' %}
+              <form action="{{ url_for('notify_customers') }}" method="post" style="margin: 0;">
+                <button type="submit" class="btn btn-new">Resend Notifications</button>
+              </form>
+            {% elif batch_status == 'recorded' %}
+              <form action="{{ url_for('notify_customers') }}" method="post" style="margin: 0;">
+                <button type="submit" class="btn btn-batch">✉ Notify Customers</button>
+              </form>
+            {% else %}
+              <form action="{{ url_for('record_batch') }}" method="post" style="margin: 0;">
+                <button type="submit" class="btn btn-batch">✓ Mark as Picked Up</button>
+              </form>
+            {% endif %}
           </div>
         </div>
 
@@ -996,7 +1017,7 @@ ALL_BATCHES_TEMPLATE = r'''
             <th>Carrier</th>
             <th>Created At</th>
             <th>Pkg Count</th>
-            <th>Tracking Numbers</th>
+            <th>Status</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -1011,8 +1032,15 @@ ALL_BATCHES_TEMPLATE = r'''
               <td>{{ b.carrier }}</td>
               <td>{{ b.created_at }}</td>
               <td>{{ b.pkg_count }}</td>
-              <td style="max-width: 400px; word-break: break-word;">
-                {{ b.tracking_numbers }}
+              <td>
+                {% set batch_status = b.get('status', 'in_progress') %}
+                {% if batch_status == 'notified' %}
+                  <span style="color: #27ae60; font-weight: 500;">✉ Notified</span>
+                {% elif batch_status == 'recorded' %}
+                  <span style="color: #f39c12; font-weight: 500;">✓ Picked Up</span>
+                {% else %}
+                  <span style="color: #666;">⏳ In Progress</span>
+                {% endif %}
               </td>
               <td>
                 <form action="{{ url_for('delete_batch') }}" method="post" style="display: inline;"
@@ -1574,6 +1602,7 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
         order_number = "N/A"
         customer_name = "Not Found"
         order_id = ""
+        customer_email = ""
         scan_carrier = batch_carrier
         
         # ── ShipStation lookup with retry logic ──
@@ -1665,6 +1694,7 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 order_number = shopify_info.get("order_number", order_number)
                 customer_name = shopify_info.get("customer_name", customer_name)
                 order_id = shopify_info.get("order_id", order_id)
+                customer_email = shopify_info.get("customer_email", "")
                 print(f"Shopify lookup successful for {tracking_number}: order {order_number}")
             else:
                 print(f"Shopify lookup found no order for {tracking_number}")
@@ -1697,10 +1727,11 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 order_number = %s,
                 customer_name = %s,
                 order_id = %s,
+                customer_email = %s,
                 status = 'Complete'
             WHERE id = %s
             """,
-            (scan_carrier, order_number, customer_name, order_id, scan_id)
+            (scan_carrier, order_number, customer_name, order_id, customer_email, scan_id)
         )
         conn.commit()
         cursor.close()
@@ -2020,7 +2051,7 @@ def delete_scan():
 
 @app.route("/record_batch", methods=["POST"])
 def record_batch():
-    batch_id = session.pop("batch_id", None)
+    batch_id = session.get("batch_id")  # Keep batch_id in session (don't pop)
     if not batch_id:
         flash("No batch open.", "error")
         return redirect(url_for("index"))
@@ -2041,11 +2072,12 @@ def record_batch():
         cursor.execute("""
           UPDATE batches
              SET pkg_count = %s,
-                 tracking_numbers = %s
+                 tracking_numbers = %s,
+                 status = 'recorded'
            WHERE id = %s
         """, (pkg_count, tracking_csv, batch_id))
         conn.commit()
-        flash(f"Batch #{batch_id} recorded with {pkg_count} parcel(s).", "success")
+        flash(f"✓ Batch #{batch_id} marked as picked up ({pkg_count} parcels). Ready to notify customers.", "success")
         return redirect(url_for("index"))
     except mysql.connector.Error as e:
         flash(f"MySQL Error: {e}", "error")
@@ -2056,6 +2088,156 @@ def record_batch():
         except Exception:
             pass
         conn.close()
+
+
+@app.route("/notify_customers", methods=["POST"])
+def notify_customers():
+    """
+    Send Klaviyo notifications to customers for all orders in the batch.
+    Only notifies each order number once (prevents duplicate notifications).
+    """
+    batch_id = session.get("batch_id")
+    if not batch_id:
+        flash("No batch open.", "error")
+        return redirect(url_for("index"))
+
+    try:
+        conn = get_mysql_connection()
+    except Exception as e:
+        flash(f"Database connection error: {e}", "error")
+        return redirect(url_for("index"))
+
+    try:
+        cursor = conn.cursor(dictionary=True)
+
+        # Get batch info
+        cursor.execute("SELECT carrier, status FROM batches WHERE id = %s", (batch_id,))
+        batch = cursor.fetchone()
+        if not batch:
+            flash("Batch not found.", "error")
+            return redirect(url_for("index"))
+
+        carrier = batch['carrier']
+        batch_status = batch.get('status', 'in_progress')
+
+        # Check if batch is recorded
+        if batch_status != 'recorded' and batch_status != 'notified':
+            flash("Please mark the batch as picked up first.", "warning")
+            return redirect(url_for("index"))
+
+        # Get all scans with customer emails
+        cursor.execute("""
+            SELECT DISTINCT
+                order_number,
+                customer_email,
+                customer_name,
+                tracking_number
+            FROM scans
+            WHERE batch_id = %s
+              AND order_number != 'N/A'
+              AND order_number != 'Processing...'
+              AND customer_email != ''
+              AND customer_email IS NOT NULL
+        """, (batch_id,))
+
+        scans = cursor.fetchall()
+
+        if not scans:
+            flash("No orders with email addresses found in this batch.", "warning")
+            return redirect(url_for("index"))
+
+        # Initialize Klaviyo API
+        try:
+            from klaviyo_api import KlaviyoAPI
+            klaviyo = KlaviyoAPI()
+        except Exception as e:
+            flash(f"Klaviyo API initialization failed: {e}", "error")
+            return redirect(url_for("index"))
+
+        # Track notifications
+        success_count = 0
+        skip_count = 0
+        error_count = 0
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for scan in scans:
+            order_number = scan['order_number']
+            customer_email = scan['customer_email']
+            tracking_number = scan['tracking_number']
+
+            # Check if this order was already notified (in ANY batch)
+            cursor.execute("""
+                SELECT id FROM notifications
+                WHERE order_number = %s
+                LIMIT 1
+            """, (order_number,))
+
+            if cursor.fetchone():
+                print(f"Skipping order {order_number} - already notified")
+                skip_count += 1
+                continue
+
+            # Send Klaviyo event
+            success = klaviyo.notify_order_shipped(
+                email=customer_email,
+                order_number=order_number,
+                tracking_number=tracking_number,
+                carrier=carrier
+            )
+
+            # Record notification attempt
+            try:
+                cursor.execute("""
+                    INSERT INTO notifications
+                        (batch_id, order_number, customer_email, tracking_number, notified_at, success, error_message)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (batch_id, order_number, customer_email, tracking_number, now, success, None if success else "Klaviyo API error"))
+                conn.commit()
+
+                if success:
+                    success_count += 1
+                else:
+                    error_count += 1
+            except mysql.connector.IntegrityError:
+                # Duplicate entry - order already notified
+                skip_count += 1
+                print(f"Order {order_number} already in notifications table")
+
+        # Update batch status to 'notified'
+        cursor.execute("""
+            UPDATE batches
+            SET status = 'notified', notified_at = %s
+            WHERE id = %s
+        """, (now, batch_id))
+        conn.commit()
+
+        # Build success message
+        message_parts = []
+        if success_count > 0:
+            message_parts.append(f"✉ {success_count} customer(s) notified")
+        if skip_count > 0:
+            message_parts.append(f"{skip_count} already notified")
+        if error_count > 0:
+            message_parts.append(f"{error_count} failed")
+
+        flash(" | ".join(message_parts), "success" if error_count == 0 else "warning")
+        return redirect(url_for("index"))
+
+    except Exception as e:
+        print(f"Error in notify_customers: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error sending notifications: {e}", "error")
+        return redirect(url_for("index"))
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.route("/all_batches", methods=["GET"])
