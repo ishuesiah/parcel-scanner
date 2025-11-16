@@ -1385,6 +1385,12 @@ ALL_SCANS_TEMPLATE = r'''
               </td>
               <td>{{ s.batch_id or '' }}</td>
               <td>
+                {% if s.order_number in ['Processing...', 'N/A'] or s.customer_name in ['Looking up...', 'Not Found', 'No Order Found'] %}
+                  <form action="{{ url_for('retry_fetch_scan') }}" method="post" style="display: inline; margin-right: 4px;">
+                    <input type="hidden" name="scan_id" value="{{ s.id }}">
+                    <button type="submit" class="btn-delete-small" style="background-color: #3498db;">Retry</button>
+                  </form>
+                {% endif %}
                 <form action="{{ url_for('delete_scan') }}" method="post" style="display: inline;"
                       onsubmit="return confirm('Are you sure you want to delete this scan?');">
                   <input type="hidden" name="scan_id"  value="{{ s.id }}">
@@ -1395,6 +1401,40 @@ ALL_SCANS_TEMPLATE = r'''
           {% endfor %}
         </tbody>
       </table>
+
+      <!-- Pagination Controls -->
+      {% if total_pages > 1 %}
+        <div style="margin-top: 24px; text-align: center;">
+          <p style="margin-bottom: 12px; color: #666;">
+            Showing page {{ page }} of {{ total_pages }} ({{ total_scans }} total scans)
+          </p>
+          <div style="display: inline-flex; gap: 8px; align-items: center;">
+            {% if page > 1 %}
+              <a href="{{ url_for('all_scans', page=page-1, order_number=order_search) }}"
+                 style="padding: 8px 16px; background: #2d85f8; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">
+                ← Previous
+              </a>
+            {% else %}
+              <span style="padding: 8px 16px; background: #ccc; color: #666; border-radius: 4px; font-size: 14px;">
+                ← Previous
+              </span>
+            {% endif %}
+
+            <span style="color: #666; font-size: 14px;">Page {{ page }} of {{ total_pages }}</span>
+
+            {% if page < total_pages %}
+              <a href="{{ url_for('all_scans', page=page+1, order_number=order_search) }}"
+                 style="padding: 8px 16px; background: #2d85f8; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">
+                Next →
+              </a>
+            {% else %}
+              <span style="padding: 8px 16px; background: #ccc; color: #666; border-radius: 4px; font-size: 14px;">
+                Next →
+              </span>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
 
     </div>
 
@@ -2468,14 +2508,98 @@ def get_batch_updates(batch_id):
         conn.close()
 
 
+@app.route("/retry_fetch_scan", methods=["POST"])
+def retry_fetch_scan():
+    """
+    Retry fetching customer information for a scan that failed.
+    """
+    scan_id = request.form.get("scan_id")
+    if not scan_id:
+        flash("No scan specified.", "error")
+        return redirect(url_for("all_scans"))
+
+    try:
+        conn = get_mysql_connection()
+    except Exception as e:
+        flash(f"Database connection error: {e}", "error")
+        return redirect(url_for("all_scans"))
+
+    try:
+        cursor = conn.cursor(dictionary=True)
+
+        # Get scan details
+        cursor.execute("""
+            SELECT id, tracking_number, batch_id
+            FROM scans
+            WHERE id = %s
+        """, (scan_id,))
+        scan = cursor.fetchone()
+
+        if not scan:
+            flash(f"Scan #{scan_id} not found.", "error")
+            return redirect(url_for("all_scans"))
+
+        # Get batch carrier
+        cursor.execute("SELECT carrier FROM batches WHERE id = %s", (scan['batch_id'],))
+        batch = cursor.fetchone()
+        batch_carrier = batch['carrier'] if batch else ""
+
+        # Launch background processing thread
+        import threading
+        api_thread = threading.Thread(
+            target=process_scan_apis_background,
+            args=(scan['id'], scan['tracking_number'], batch_carrier),
+            daemon=True
+        )
+        api_thread.start()
+
+        flash(f"Re-fetching customer info for scan #{scan_id}...", "success")
+        return redirect(url_for("all_scans"))
+
+    except Exception as e:
+        print(f"Error retrying fetch for scan {scan_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error: {e}", "error")
+        return redirect(url_for("all_scans"))
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 @app.route("/all_scans", methods=["GET"])
 def all_scans():
     order_search = request.args.get("order_number", "").strip()
+    page = int(request.args.get("page", 1))
+    per_page = 100
+    offset = (page - 1) * per_page
 
     conn = get_mysql_connection()
     try:
         cursor = conn.cursor(dictionary=True)
 
+        # Get total count for pagination
+        if order_search:
+            like_pattern = f"%{order_search}%"
+            cursor.execute("""
+              SELECT COUNT(*) as total
+              FROM scans
+              WHERE order_number = %s
+                 OR LOWER(customer_name) LIKE LOWER(%s)
+            """, (order_search, like_pattern))
+        else:
+            cursor.execute("SELECT COUNT(*) as total FROM scans")
+
+        total_scans = cursor.fetchone()['total']
+        total_pages = (total_scans + per_page - 1) // per_page  # Ceiling division
+
+        # Get paginated results
         if order_search:
             like_pattern = f"%{order_search}%"
             cursor.execute("""
@@ -2493,7 +2617,8 @@ def all_scans():
               WHERE order_number = %s
                  OR LOWER(customer_name) LIKE LOWER(%s)
               ORDER BY scan_date DESC
-            """, (order_search, like_pattern))
+              LIMIT %s OFFSET %s
+            """, (order_search, like_pattern, per_page, offset))
         else:
             cursor.execute("""
               SELECT
@@ -2508,7 +2633,8 @@ def all_scans():
                 batch_id
               FROM scans
               ORDER BY scan_date DESC
-            """)
+              LIMIT %s OFFSET %s
+            """, (per_page, offset))
 
         scans = cursor.fetchall()
 
@@ -2516,7 +2642,11 @@ def all_scans():
             ALL_SCANS_TEMPLATE,
             scans=scans,
             shop_url=SHOP_URL,
-            version=__version__
+            version=__version__,
+            page=page,
+            total_pages=total_pages,
+            total_scans=total_scans,
+            order_search=order_search
         )
     finally:
         try:
