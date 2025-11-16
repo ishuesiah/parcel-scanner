@@ -70,11 +70,27 @@ db_pool = mysql.connector.pooling.MySQLConnectionPool(
 def get_mysql_connection():
     """
     Get a connection from the pool with retry logic for pool exhaustion.
+    Validates connection is alive before returning.
     """
     max_retries = 3
     for retry in range(max_retries):
         try:
-            return db_pool.get_connection()
+            conn = db_pool.get_connection()
+
+            # Validate connection is alive
+            try:
+                conn.ping(reconnect=True, attempts=2, delay=1)
+            except Exception as ping_error:
+                print(f"Connection ping failed, getting new connection: {ping_error}")
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                if retry < max_retries - 1:
+                    continue
+                raise
+
+            return conn
         except mysql.connector.errors.PoolError as e:
             if retry < max_retries - 1:
                 wait = 0.5 * (retry + 1)  # 0.5s, 1s, 1.5s
@@ -3396,8 +3412,10 @@ def all_scans():
     per_page = 100
     offset = (page - 1) * per_page
 
-    conn = get_mysql_connection()
+    conn = None
+    cursor = None
     try:
+        conn = get_mysql_connection()
         cursor = conn.cursor(dictionary=True)
 
         # Get total count for pagination
@@ -3464,12 +3482,25 @@ def all_scans():
             total_scans=total_scans,
             order_search=order_search
         )
+    except mysql.connector.errors.OperationalError as e:
+        print(f"MySQL connection error in all_scans: {e}")
+        flash("Database connection error. Please try again.", "error")
+        return redirect(url_for("index"))
+    except Exception as e:
+        print(f"Error in all_scans: {e}")
+        flash("An error occurred while loading scans.", "error")
+        return redirect(url_for("index"))
     finally:
-        try:
-            cursor.close()
-        except Exception:
-            pass
-        conn.close()
+        if cursor:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 @app.route("/pick_and_pack", methods=["GET", "POST"])
