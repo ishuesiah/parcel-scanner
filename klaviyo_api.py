@@ -156,7 +156,7 @@ class KlaviyoAPI:
 
     def notify_order_shipped(self, email: str, order_number: str, tracking_number: str, carrier: str) -> bool:
         """
-        Convenience method to send "Order Shipped" event.
+        Convenience method to send "Parcel Scanned" event.
 
         Args:
             email: Customer email
@@ -173,4 +173,4 @@ class KlaviyoAPI:
             "carrier": carrier
         }
 
-        return self.track_event(email, "Order Shipped", properties)
+        return self.track_event(email, "Parcel Scanned", properties)
