@@ -1776,21 +1776,9 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
         cursor.close()
         print(f"✓ Updated scan {scan_id}: {tracking_number} -> Order: {order_number}, Customer: {customer_name}")
 
-        # ── Send event to Klaviyo ──
-        try:
-            klaviyo = get_klaviyo_events()
-            klaviyo.track_parcel_scanned(
-                tracking_number=tracking_number,
-                order_number=order_number,
-                customer_name=customer_name,
-                customer_email=customer_email,
-                carrier=scan_carrier,
-                order_id=order_id,
-                batch_id=None  # We don't have batch_id in this scope, but could pass it if needed
-            )
-        except Exception as klaviyo_error:
-            # Don't let Klaviyo errors break the scan processing
-            print(f"Klaviyo event error for {tracking_number}: {klaviyo_error}")
+        # NOTE: Klaviyo notifications are sent when batch is marked as picked up
+        # See notify_customers() function - sends "Order Shipped" event for all unique customers in batch
+        # This prevents premature notifications before packages are actually ready for pickup
 
     except Exception as db_error:
         print(f"CRITICAL: Failed to update scan {scan_id} in database: {db_error}")
