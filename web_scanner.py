@@ -309,11 +309,29 @@ MAIN_TEMPLATE = r'''
     }
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
-    .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
-    .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
-    .sidebar .logout:hover { text-decoration: underline; }
+    .sidebar li { margin-bottom: 8px; }
+    .sidebar a {
+      display: block;
+      padding: 8px 12px;
+      text-decoration: none;
+      color: #534bc4;
+      font-size: 1rem;
+      font-weight: 500;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar a:hover { background-color: #f0f0f0; }
+    .sidebar .logout {
+      display: block;
+      margin-top: auto;
+      padding: 8px 12px;
+      color: #952746;
+      font-size: 0.95rem;
+      text-decoration: none;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar .logout:hover { background-color: #fdecea; }
 
     /* ── MAIN CONTENT ── */
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
@@ -971,11 +989,29 @@ ALL_BATCHES_TEMPLATE = r'''
     }
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
-    .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
-    .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
-    .sidebar .logout:hover { text-decoration: underline; }
+    .sidebar li { margin-bottom: 8px; }
+    .sidebar a {
+      display: block;
+      padding: 8px 12px;
+      text-decoration: none;
+      color: #534bc4;
+      font-size: 1rem;
+      font-weight: 500;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar a:hover { background-color: #f0f0f0; }
+    .sidebar .logout {
+      display: block;
+      margin-top: auto;
+      padding: 8px 12px;
+      color: #952746;
+      font-size: 0.95rem;
+      text-decoration: none;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar .logout:hover { background-color: #fdecea; }
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash {
       padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid;
@@ -1008,6 +1044,7 @@ ALL_BATCHES_TEMPLATE = r'''
         <li><a href="{{ url_for('new_batch') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
         <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
         <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
@@ -1107,11 +1144,29 @@ BATCH_VIEW_TEMPLATE = r'''
     }
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
-    .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
-    .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
-    .sidebar .logout:hover { text-decoration: underline; }
+    .sidebar li { margin-bottom: 8px; }
+    .sidebar a {
+      display: block;
+      padding: 8px 12px;
+      text-decoration: none;
+      color: #534bc4;
+      font-size: 1rem;
+      font-weight: 500;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar a:hover { background-color: #f0f0f0; }
+    .sidebar .logout {
+      display: block;
+      margin-top: auto;
+      padding: 8px 12px;
+      color: #952746;
+      font-size: 0.95rem;
+      text-decoration: none;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar .logout:hover { background-color: #fdecea; }
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash {
       padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid;
@@ -1262,11 +1317,29 @@ PICK_AND_PACK_TEMPLATE = r'''
     }
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
-    .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
-    .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
-    .sidebar .logout:hover { text-decoration: underline; }
+    .sidebar li { margin-bottom: 8px; }
+    .sidebar a {
+      display: block;
+      padding: 8px 12px;
+      text-decoration: none;
+      color: #534bc4;
+      font-size: 1rem;
+      font-weight: 500;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar a:hover { background-color: #f0f0f0; }
+    .sidebar .logout {
+      display: block;
+      margin-top: auto;
+      padding: 8px 12px;
+      color: #952746;
+      font-size: 0.95rem;
+      text-decoration: none;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar .logout:hover { background-color: #fdecea; }
 
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid; }
@@ -1373,6 +1446,7 @@ PICK_AND_PACK_TEMPLATE = r'''
         <li><a href="{{ url_for('new_batch') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
         <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
         <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
@@ -1607,11 +1681,29 @@ ITEM_LOCATIONS_TEMPLATE = r'''
     }
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
-    .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
-    .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
-    .sidebar .logout:hover { text-decoration: underline; }
+    .sidebar li { margin-bottom: 8px; }
+    .sidebar a {
+      display: block;
+      padding: 8px 12px;
+      text-decoration: none;
+      color: #534bc4;
+      font-size: 1rem;
+      font-weight: 500;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar a:hover { background-color: #f0f0f0; }
+    .sidebar .logout {
+      display: block;
+      margin-top: auto;
+      padding: 8px 12px;
+      color: #952746;
+      font-size: 0.95rem;
+      text-decoration: none;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar .logout:hover { background-color: #fdecea; }
 
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid; }
@@ -1666,6 +1758,7 @@ ITEM_LOCATIONS_TEMPLATE = r'''
         <li><a href="{{ url_for('new_batch') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
         <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
         <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
@@ -1793,11 +1886,29 @@ ALL_SCANS_TEMPLATE = r'''
     }
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
-    .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
-    .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
-    .sidebar .logout:hover { text-decoration: underline; }
+    .sidebar li { margin-bottom: 8px; }
+    .sidebar a {
+      display: block;
+      padding: 8px 12px;
+      text-decoration: none;
+      color: #534bc4;
+      font-size: 1rem;
+      font-weight: 500;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar a:hover { background-color: #f0f0f0; }
+    .sidebar .logout {
+      display: block;
+      margin-top: auto;
+      padding: 8px 12px;
+      color: #952746;
+      font-size: 0.95rem;
+      text-decoration: none;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar .logout:hover { background-color: #fdecea; }
 
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid; }
@@ -2008,11 +2119,29 @@ STUCK_ORDERS_TEMPLATE = r'''
     }
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
-    .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
-    .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
-    .sidebar .logout:hover { text-decoration: underline; }
+    .sidebar li { margin-bottom: 8px; }
+    .sidebar a {
+      display: block;
+      padding: 8px 12px;
+      text-decoration: none;
+      color: #534bc4;
+      font-size: 1rem;
+      font-weight: 500;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar a:hover { background-color: #f0f0f0; }
+    .sidebar .logout {
+      display: block;
+      margin-top: auto;
+      padding: 8px 12px;
+      color: #952746;
+      font-size: 0.95rem;
+      text-decoration: none;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar .logout:hover { background-color: #fdecea; }
 
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid; }
@@ -2058,10 +2187,13 @@ STUCK_ORDERS_TEMPLATE = r'''
     <div class="sidebar">
       <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
       <ul>
-        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('new_batch') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
+        <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
+        <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
+        <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -2238,11 +2370,29 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
     }
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
-    .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
-    .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
-    .sidebar .logout:hover { text-decoration: underline; }
+    .sidebar li { margin-bottom: 8px; }
+    .sidebar a {
+      display: block;
+      padding: 8px 12px;
+      text-decoration: none;
+      color: #534bc4;
+      font-size: 1rem;
+      font-weight: 500;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar a:hover { background-color: #f0f0f0; }
+    .sidebar .logout {
+      display: block;
+      margin-top: auto;
+      padding: 8px 12px;
+      color: #952746;
+      font-size: 0.95rem;
+      text-decoration: none;
+      border-radius: 4px;
+      transition: background-color 0.2s;
+    }
+    .sidebar .logout:hover { background-color: #fdecea; }
 
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash {
@@ -4135,16 +4285,35 @@ def check_shipments():
             else:
                 params["customerName"] = search_query
 
-        response = requests.get(
-            "https://ssapi.shipstation.com/shipments",
-            auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-            params=params,
-            timeout=30
-        )
+        # Retry logic for rate limiting (429)
+        max_retries = 3
+        retry_delay = 2  # seconds
+        response = None
 
-        if response.status_code != 200:
-            flash(f"ShipStation API error: {response.status_code}", "error")
-            print(f"❌ ShipStation error: {response.status_code} - {response.text[:200]}")
+        for attempt in range(max_retries):
+            response = requests.get(
+                "https://ssapi.shipstation.com/shipments",
+                auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                params=params,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                break
+            elif response.status_code == 429:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    print(f"⚠️ Rate limited (429), retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    flash("ShipStation API rate limit exceeded. Please wait a minute and try again.", "error")
+                    print(f"❌ ShipStation rate limit exceeded after {max_retries} attempts")
+            else:
+                flash(f"ShipStation API error: {response.status_code}", "error")
+                print(f"❌ ShipStation error: {response.status_code} - {response.text[:200]}")
+                break
+
+        if not response or response.status_code != 200:
             return render_template_string(
                 CHECK_SHIPMENTS_TEMPLATE,
                 shipments=[],
@@ -4192,7 +4361,13 @@ def check_shipments():
             )
             scan_record = cursor.fetchone()
             scanned = scan_record is not None
-            scan_date = scan_record.get("scan_date", "").strftime("%Y-%m-%d") if scan_record else ""
+            scan_date = ""
+            if scan_record and scan_record.get("scan_date"):
+                scan_date_obj = scan_record.get("scan_date")
+                if isinstance(scan_date_obj, str):
+                    scan_date = scan_date_obj[:10]  # Already a string, just take date part
+                else:
+                    scan_date = scan_date_obj.strftime("%Y-%m-%d")  # Convert datetime to string
 
             # Get UPS tracking status (only for UPS shipments)
             ups_status = "unknown"
