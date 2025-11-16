@@ -36,6 +36,7 @@ from datetime import datetime
 
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 from klaviyo_events import KlaviyoEvents  # Klaviyo integration for event tracking
+from ups_api import UPSAPI  # UPS tracking integration
 
 app = Flask(__name__)
 
@@ -128,6 +129,14 @@ def get_klaviyo_events():
     if _klaviyo_events is None:
         _klaviyo_events = KlaviyoEvents()
     return _klaviyo_events
+
+# ── UPS singleton ──
+_ups_api = None
+def get_ups_api():
+    global _ups_api
+    if _ups_api is None:
+        _ups_api = UPSAPI()
+    return _ups_api
 
 # ── Item Location Helpers ──
 def get_item_location(sku: str, item_name: str) -> str:
@@ -430,6 +439,7 @@ MAIN_TEMPLATE = r'''
         <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
         <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
+        <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1000,6 +1010,7 @@ ALL_BATCHES_TEMPLATE = r'''
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
         <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
+        <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1137,6 +1148,7 @@ BATCH_VIEW_TEMPLATE = r'''
         <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
         <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
+        <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1363,6 +1375,7 @@ PICK_AND_PACK_TEMPLATE = r'''
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
         <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
+        <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1655,6 +1668,7 @@ ITEM_LOCATIONS_TEMPLATE = r'''
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
         <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
+        <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1830,6 +1844,7 @@ ALL_SCANS_TEMPLATE = r'''
         <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
         <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
+        <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -2194,6 +2209,212 @@ STUCK_ORDERS_TEMPLATE = r'''
     }
   </script>
 
+</body>
+</html>
+'''
+
+CHECK_SHIPMENTS_TEMPLATE = r'''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Check Shipments – H&O Parcel Scans</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      font-family: "Figtree", sans-serif;
+      font-optical-sizing: auto;
+      background-color: #fbfaf5;
+      color: #333;
+    }
+    .container { display: flex; height: 100vh; }
+    .sidebar {
+      width: 240px; background: #fff; border-right: 1px solid #e0e0e0;
+      display: flex; flex-direction: column; padding: 24px 16px;
+    }
+    .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
+    .sidebar ul { list-style: none; margin-top: 8px; }
+    .sidebar li { margin-bottom: 16px; }
+    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
+    .sidebar a:hover { text-decoration: underline; }
+    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
+    .sidebar .logout:hover { text-decoration: underline; }
+
+    .main-content { flex: 1; overflow-y: auto; padding: 24px; }
+    .flash {
+      padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid;
+    }
+    .flash.success { background-color: #e0f7e9; color: #199b76; border-color: #b2e6c2; }
+    .flash.error   { background-color: #fdecea; color: #952746; border-color: #f5c6cb; }
+    .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
+
+    h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
+
+    .search-box {
+      background: white; padding: 20px; border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;
+    }
+    .search-box input[type="text"] {
+      width: 400px; padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px;
+      margin-right: 8px; font-size: 0.95rem;
+    }
+    .btn {
+      padding: 8px 16px; font-size: 0.9rem; border: none; border-radius: 4px;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .btn-search { background-color: #534bc4; color: white; }
+    .btn-search:hover { opacity: 0.92; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
+    th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
+    th { background-color: #eeeee5; text-align: left; font-weight: 600; }
+    tr:nth-child(even) { background-color: #fbfaf5; }
+    tr:hover { background-color: #f1f1f1; }
+
+    .status-badge {
+      display: inline-block; padding: 4px 8px; border-radius: 4px;
+      font-size: 0.85rem; font-weight: 500;
+    }
+    .status-label-created { background-color: #e3f2fd; color: #1976d2; }
+    .status-in-transit { background-color: #fff4e5; color: #8a6100; }
+    .status-delivered { background-color: #e0f7e9; color: #199b76; }
+    .status-exception { background-color: #fdecea; color: #952746; }
+    .status-unknown { background-color: #f5f5f5; color: #666; }
+    .status-error { background-color: #fdecea; color: #952746; }
+
+    .flag-warning {
+      color: #952746; font-weight: 600; font-size: 1.2rem;
+    }
+    .flag-ok {
+      color: #199b76; font-weight: 600; font-size: 1.2rem;
+    }
+
+    .pagination {
+      margin-top: 20px; display: flex; gap: 8px; align-items: center;
+      justify-content: center;
+    }
+    .pagination button {
+      padding: 6px 12px; border: 1px solid #534bc4; background: white;
+      color: #534bc4; border-radius: 4px; cursor: pointer;
+    }
+    .pagination button:hover { background-color: #534bc4; color: white; }
+    .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .loading {
+      text-align: center; padding: 40px; color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
+      <ul>
+        <li><a href="{{ url_for('new_batch') }}">New Batch</a></li>
+        <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
+        <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
+        <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
+        <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
+        <li><a href="{{ url_for('check_shipments') }}" style="font-weight: 700;">Check Shipments</a></li>
+      </ul>
+      <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
+    </div>
+
+    <div class="main-content">
+      <h2>📦 Check Shipments</h2>
+      <p style="margin-bottom: 16px; color: #666;">
+        Track shipments from ShipStation and UPS. Shows label status, scanning status, and delivery tracking.
+      </p>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, msg in messages %}
+          <div class="flash {{ category }}">{{ msg }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      <div class="search-box">
+        <form method="get" action="{{ url_for('check_shipments') }}">
+          <input type="text" name="search" placeholder="Search by customer name, order #, or tracking #..." value="{{ search_query }}" autofocus>
+          <button type="submit" class="btn btn-search">🔍 Search</button>
+          {% if search_query %}
+            <a href="{{ url_for('check_shipments') }}" style="margin-left: 8px; color: #534bc4;">Clear</a>
+          {% endif %}
+        </form>
+      </div>
+
+      {% if loading %}
+        <div class="loading">
+          <p>⏳ Loading shipments from ShipStation...</p>
+        </div>
+      {% elif shipments %}
+        <table>
+          <thead>
+            <tr>
+              <th>Flag</th>
+              <th>Order #</th>
+              <th>Customer</th>
+              <th>Tracking #</th>
+              <th>Carrier</th>
+              <th>Ship Date</th>
+              <th>Scanned?</th>
+              <th>UPS Status</th>
+              <th>Last Activity</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for ship in shipments %}
+              <tr>
+                <td>
+                  {% if ship.flag %}
+                    <span class="flag-warning" title="{{ ship.flag_reason }}">⚠️</span>
+                  {% else %}
+                    <span class="flag-ok">✓</span>
+                  {% endif %}
+                </td>
+                <td>{{ ship.order_number }}</td>
+                <td>{{ ship.customer_name }}</td>
+                <td style="font-family: monospace;">{{ ship.tracking_number }}</td>
+                <td>{{ ship.carrier }}</td>
+                <td>{{ ship.ship_date }}</td>
+                <td>
+                  {% if ship.scanned %}
+                    <span style="color: #199b76;">✓ {{ ship.scan_date }}</span>
+                  {% else %}
+                    <span style="color: #666;">—</span>
+                  {% endif %}
+                </td>
+                <td>
+                  <span class="status-badge status-{{ ship.ups_status }}">
+                    {{ ship.ups_status_text }}
+                  </span>
+                </td>
+                <td style="font-size: 0.85rem;">{{ ship.ups_last_activity }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <div class="pagination">
+          <button onclick="window.location.href='{{ prev_url }}'" {% if not has_prev %}disabled{% endif %}>← Previous</button>
+          <span>Page {{ page }} of {{ total_pages }} ({{ total_shipments }} shipments)</span>
+          <button onclick="window.location.href='{{ next_url }}'" {% if not has_next %}disabled{% endif %}>Next →</button>
+        </div>
+      {% else %}
+        <p style="padding: 40px; text-align: center; color: #666;">
+          {% if search_query %}
+            No shipments found for "{{ search_query }}".
+          {% else %}
+            No shipped orders found in the last 120 days.
+          {% endif %}
+        </p>
+      {% endif %}
+    </div>
+  </div>
 </body>
 </html>
 '''
@@ -3849,6 +4070,224 @@ def delete_location_rule():
         conn.close()
 
     return redirect(url_for("item_locations"))
+
+
+@app.route("/check_shipments", methods=["GET"])
+def check_shipments():
+    """
+    Check shipment status page.
+    Queries ShipStation for shipped orders, checks scan database, and queries UPS for tracking.
+    Flags shipments that are stuck (label printed but not moving).
+    """
+    search_query = request.args.get("search", "").strip()
+    page = int(request.args.get("page", 1))
+    per_page = 50
+
+    if not SHIPSTATION_API_KEY or not SHIPSTATION_API_SECRET:
+        flash("ShipStation API credentials not configured.", "error")
+        return render_template_string(
+            CHECK_SHIPMENTS_TEMPLATE,
+            shipments=[],
+            search_query=search_query,
+            loading=False,
+            page=1,
+            total_pages=1,
+            total_shipments=0,
+            has_prev=False,
+            has_next=False,
+            prev_url="#",
+            next_url="#",
+            version=__version__
+        )
+
+    try:
+        # Query ShipStation for shipped orders (last 120 days)
+        print(f"📦 Querying ShipStation for shipped orders (page {page})...")
+
+        from datetime import timedelta
+        start_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%dT%H:%M:%S")
+
+        params = {
+            "shipDateStart": start_date,
+            "pageSize": per_page,
+            "page": page,
+            "sortBy": "ShipDate",
+            "sortDir": "DESC"
+        }
+
+        # Add search filter if provided
+        if search_query:
+            # Try to determine if it's an order number or tracking number
+            if search_query.isdigit():
+                params["orderNumber"] = search_query
+            else:
+                params["customerName"] = search_query
+
+        response = requests.get(
+            "https://ssapi.shipstation.com/shipments",
+            auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+            params=params,
+            timeout=30
+        )
+
+        if response.status_code != 200:
+            flash(f"ShipStation API error: {response.status_code}", "error")
+            print(f"❌ ShipStation error: {response.status_code} - {response.text[:200]}")
+            return render_template_string(
+                CHECK_SHIPMENTS_TEMPLATE,
+                shipments=[],
+                search_query=search_query,
+                loading=False,
+                page=1,
+                total_pages=1,
+                total_shipments=0,
+                has_prev=False,
+                has_next=False,
+                prev_url="#",
+                next_url="#",
+                version=__version__
+            )
+
+        data = response.json()
+        total_shipments = data.get("total", 0)
+        total_pages = data.get("pages", 1)
+        shipments_data = data.get("shipments", [])
+
+        print(f"✓ Found {len(shipments_data)} shipments on page {page} of {total_pages} ({total_shipments} total)")
+
+        # Get scan data from our database
+        conn = get_mysql_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # Process each shipment
+        shipments = []
+        ups_api = get_ups_api()
+
+        for ss_ship in shipments_data:
+            tracking_number = ss_ship.get("trackingNumber", "")
+            order_number = ss_ship.get("orderNumber", "")
+            carrier_code = ss_ship.get("carrierCode", "").upper()
+            ship_date = ss_ship.get("shipDate", "")[:10]  # Just the date part
+
+            # Get customer name
+            ship_to = ss_ship.get("shipTo", {})
+            customer_name = ship_to.get("name", "Unknown")
+
+            # Check if scanned in our database
+            cursor.execute(
+                "SELECT scan_date FROM scans WHERE tracking_number = %s ORDER BY scan_date DESC LIMIT 1",
+                (tracking_number,)
+            )
+            scan_record = cursor.fetchone()
+            scanned = scan_record is not None
+            scan_date = scan_record.get("scan_date", "").strftime("%Y-%m-%d") if scan_record else ""
+
+            # Get UPS tracking status (only for UPS shipments)
+            ups_status = "unknown"
+            ups_status_text = "N/A"
+            ups_last_activity = "—"
+
+            if carrier_code == "UPS" and tracking_number:
+                ups_tracking = ups_api.get_tracking_status(tracking_number)
+                ups_status = ups_tracking.get("status", "unknown")
+                ups_status_text = ups_tracking.get("status_description", "Unknown")
+                ups_last_activity = ups_tracking.get("last_activity", "—")
+
+                # Clean up status text
+                if ups_status == "label_created":
+                    ups_status_text = "Label Created"
+                elif ups_status == "in_transit":
+                    ups_status_text = "In Transit"
+                elif ups_status == "delivered":
+                    ups_status_text = "Delivered"
+                elif ups_status == "exception":
+                    ups_status_text = "Exception/Delay"
+                elif ups_status == "error":
+                    ups_status_text = "API Error"
+
+            # Determine if shipment should be flagged
+            flag = False
+            flag_reason = ""
+
+            if carrier_code == "UPS":
+                # Calculate days since ship date
+                try:
+                    ship_datetime = datetime.strptime(ship_date, "%Y-%m-%d")
+                    days_since_ship = (datetime.now() - ship_datetime).days
+
+                    # Flag if: label created but not scanned after 2+ days
+                    if not scanned and days_since_ship >= 2:
+                        flag = True
+                        flag_reason = f"Not scanned after {days_since_ship} days"
+                    # Flag if: scanned but still showing label_created after 3+ days
+                    elif scanned and ups_status == "label_created" and days_since_ship >= 3:
+                        flag = True
+                        flag_reason = f"No movement after {days_since_ship} days (scanned but not picked up by carrier)"
+                    # Flag if: exception/delay status
+                    elif ups_status == "exception":
+                        flag = True
+                        flag_reason = "Shipment exception or delay"
+                except:
+                    pass
+
+            shipments.append({
+                "order_number": order_number,
+                "customer_name": customer_name,
+                "tracking_number": tracking_number,
+                "carrier": carrier_code,
+                "ship_date": ship_date,
+                "scanned": scanned,
+                "scan_date": scan_date,
+                "ups_status": ups_status,
+                "ups_status_text": ups_status_text,
+                "ups_last_activity": ups_last_activity,
+                "flag": flag,
+                "flag_reason": flag_reason
+            })
+
+        cursor.close()
+        conn.close()
+
+        # Pagination URLs
+        has_prev = page > 1
+        has_next = page < total_pages
+        prev_url = url_for("check_shipments", page=page-1, search=search_query) if has_prev else "#"
+        next_url = url_for("check_shipments", page=page+1, search=search_query) if has_next else "#"
+
+        return render_template_string(
+            CHECK_SHIPMENTS_TEMPLATE,
+            shipments=shipments,
+            search_query=search_query,
+            loading=False,
+            page=page,
+            total_pages=total_pages,
+            total_shipments=total_shipments,
+            has_prev=has_prev,
+            has_next=has_next,
+            prev_url=prev_url,
+            next_url=next_url,
+            version=__version__
+        )
+
+    except Exception as e:
+        print(f"❌ Error in check_shipments: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error loading shipments: {str(e)}", "error")
+        return render_template_string(
+            CHECK_SHIPMENTS_TEMPLATE,
+            shipments=[],
+            search_query=search_query,
+            loading=False,
+            page=1,
+            total_pages=1,
+            total_shipments=0,
+            has_prev=False,
+            has_next=False,
+            prev_url="#",
+            next_url="#",
+            version=__version__
+        )
 
 
 if __name__ == "__main__":
