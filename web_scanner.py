@@ -378,6 +378,7 @@ MAIN_TEMPLATE = r'''
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1004,6 +1005,7 @@ BATCH_VIEW_TEMPLATE = r'''
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1159,6 +1161,7 @@ ALL_SCANS_TEMPLATE = r'''
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1250,6 +1253,230 @@ ALL_SCANS_TEMPLATE = r'''
     </div>
 
   </div>
+
+</body>
+</html>
+'''
+
+
+STUCK_ORDERS_TEMPLATE = r'''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fix Stuck Orders – H&O Parcel Scans</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f5f6fa; color: #333;
+    }
+    .container { display: flex; height: 100vh; }
+    .sidebar {
+      width: 240px; background: #fff; border-right: 1px solid #e0e0e0;
+      display: flex; flex-direction: column; padding: 24px 16px;
+    }
+    .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
+    .sidebar ul { list-style: none; margin-top: 8px; }
+    .sidebar li { margin-bottom: 16px; }
+    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a:hover { text-decoration: underline; }
+    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; text-decoration: none; }
+    .sidebar .logout:hover { text-decoration: underline; }
+
+    .main-content { flex: 1; overflow-y: auto; padding: 24px; }
+    .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid; }
+    .flash.success { background-color: #e0f7e9; color: #2f7a45; border-color: #b2e6c2; }
+    .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
+    .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
+
+    h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
+    .info-box { background: #e3f2fd; padding: 12px 16px; border-radius: 6px; margin-bottom: 20px; border-left: 4px solid #2196f3; }
+    .info-box p { margin: 4px 0; font-size: 0.95rem; color: #1565c0; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
+    th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
+    th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
+    tr:nth-child(even) { background-color: #fafafa; }
+    tr:hover { background-color: #f1f1f1; }
+    .stuck-row { background-color: #fff3cd !important; }
+    td a { color: #2d85f8; text-decoration: none; font-weight: 500; }
+    td a:hover { text-decoration: underline; }
+
+    .btn-fix {
+      padding: 6px 14px; font-size: 0.85rem; background-color: #28a745; color: #fff;
+      border: none; border-radius: 4px; cursor: pointer; font-weight: 500;
+    }
+    .btn-fix:hover { opacity: 0.92; }
+    .btn-fix:disabled { background-color: #ccc; cursor: not-allowed; }
+
+    .fixing { opacity: 0.6; }
+    .status-processing { color: #ff6b6b; font-weight: 600; }
+    .status-error { color: #dc3545; font-weight: 600; }
+
+    .empty-state {
+      text-align: center; padding: 60px 20px; background: white; border-radius: 8px; margin-top: 20px;
+    }
+    .empty-state h3 { color: #28a745; font-size: 1.3rem; margin-bottom: 10px; }
+    .empty-state p { color: #666; font-size: 1rem; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <div class="sidebar">
+      <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
+      <ul>
+        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
+        <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
+      </ul>
+      <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
+      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
+        v{{ version }}
+      </div>
+    </div>
+
+    <div class="main-content">
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, msg in messages %}
+          <div class="flash {{ category }}">{{ msg }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      <h2>Fix Stuck Orders</h2>
+
+      <div class="info-box">
+        <p><strong>What are stuck orders?</strong></p>
+        <p>These are scans where customer information couldn't be retrieved from Shopify/ShipStation.</p>
+        <p>Click the "Fix" button to retry fetching the order details.</p>
+      </div>
+
+      {% if stuck_scans|length == 0 %}
+        <div class="empty-state">
+          <h3>✓ All Clear!</h3>
+          <p>No stuck orders found. All scans have customer information.</p>
+        </div>
+      {% else %}
+        <table>
+          <thead>
+            <tr>
+              <th>Tracking #</th>
+              <th>Carrier</th>
+              <th>Order #</th>
+              <th>Customer</th>
+              <th>Scan Date</th>
+              <th>Status</th>
+              <th>Batch ID</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in stuck_scans %}
+              <tr class="stuck-row" id="row-{{ s.id }}">
+                <td id="tracking-{{ s.id }}">{{ s.tracking_number }}</td>
+                <td id="carrier-{{ s.id }}">{{ s.carrier }}</td>
+                <td id="order-{{ s.id }}">
+                  <span class="{{ 'status-processing' if s.order_number == 'Processing...' else '' }}">
+                    {{ s.order_number }}
+                  </span>
+                </td>
+                <td id="customer-{{ s.id }}">
+                  <span class="{{ 'status-processing' if s.customer_name in ['Looking up...', 'No Order Found'] else 'status-error' if s.customer_name.startswith('Error:') else '' }}">
+                    {{ s.customer_name }}
+                  </span>
+                </td>
+                <td>{{ s.scan_date }}</td>
+                <td id="status-{{ s.id }}">{{ s.status }}</td>
+                <td>
+                  {% if s.batch_id %}
+                    <a href="{{ url_for('view_batch', batch_id=s.batch_id) }}">{{ s.batch_id }}</a>
+                  {% endif %}
+                </td>
+                <td>
+                  <button class="btn-fix" onclick="fixOrder({{ s.id }}, '{{ s.tracking_number }}', '{{ s.carrier }}')" id="btn-{{ s.id }}">
+                    Fix
+                  </button>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+
+    </div>
+
+  </div>
+
+  <script>
+    async function fixOrder(scanId, trackingNumber, carrier) {
+      const btn = document.getElementById('btn-' + scanId);
+      const row = document.getElementById('row-' + scanId);
+      const orderCell = document.getElementById('order-' + scanId);
+      const customerCell = document.getElementById('customer-' + scanId);
+      const statusCell = document.getElementById('status-' + scanId);
+
+      // Disable button and show loading state
+      btn.disabled = true;
+      btn.textContent = 'Fixing...';
+      row.classList.add('fixing');
+
+      try {
+        const response = await fetch(`/api/fix_order/${scanId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tracking_number: trackingNumber,
+            carrier: carrier
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          // Update the table row with new data
+          orderCell.innerHTML = data.scan.order_number || 'N/A';
+          customerCell.innerHTML = data.scan.customer_name || 'Not Found';
+          statusCell.innerHTML = data.scan.status || 'Complete';
+
+          // Remove stuck styling if order was found
+          if (data.scan.order_number !== 'N/A' && data.scan.customer_name !== 'Not Found') {
+            row.classList.remove('stuck-row');
+            row.style.backgroundColor = '#d4edda';
+            btn.textContent = 'Fixed ✓';
+            btn.style.backgroundColor = '#155724';
+
+            // Remove row after 2 seconds
+            setTimeout(() => {
+              row.style.transition = 'opacity 0.5s';
+              row.style.opacity = '0';
+              setTimeout(() => row.remove(), 500);
+            }, 2000);
+          } else {
+            // Still not found
+            btn.disabled = false;
+            btn.textContent = 'Retry';
+            row.classList.remove('fixing');
+            alert('Order information still not found. The order may not exist in Shopify/ShipStation.');
+          }
+        } else {
+          throw new Error(data.message || 'Failed to fix order');
+        }
+      } catch (error) {
+        console.error('Error fixing order:', error);
+        alert('Error: ' + error.message);
+        btn.disabled = false;
+        btn.textContent = 'Fix';
+        row.classList.remove('fixing');
+      }
+    }
+  </script>
 
 </body>
 </html>
@@ -2015,6 +2242,189 @@ def all_scans():
         except Exception:
             pass
         conn.close()
+
+
+@app.route("/stuck_orders", methods=["GET"])
+def stuck_orders():
+    """
+    Display all scans where customer information is missing or incomplete.
+    These are orders where:
+    - order_number = "Processing..." OR
+    - customer_name = "Looking up..." OR
+    - customer_name = "No Order Found" OR
+    - customer_name = "Not Found" OR
+    - customer_name starts with "Error:"
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+          SELECT
+            id,
+            tracking_number,
+            carrier,
+            order_number,
+            customer_name,
+            scan_date,
+            status,
+            order_id,
+            batch_id
+          FROM scans
+          WHERE order_number = 'Processing...'
+             OR order_number = 'N/A'
+             OR customer_name = 'Looking up...'
+             OR customer_name = 'No Order Found'
+             OR customer_name = 'Not Found'
+             OR customer_name LIKE 'Error:%'
+          ORDER BY scan_date DESC
+        """)
+
+        stuck_scans = cursor.fetchall()
+
+        return render_template_string(
+            STUCK_ORDERS_TEMPLATE,
+            stuck_scans=stuck_scans,
+            version=__version__
+        )
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@app.route("/api/fix_order/<int:scan_id>", methods=["POST"])
+def fix_order(scan_id):
+    """
+    API endpoint to manually retry fetching order details from Shopify/ShipStation.
+    Called when user clicks "Fix" button on a stuck order.
+    """
+    try:
+        data = request.get_json()
+        tracking_number = data.get('tracking_number', '')
+        carrier = data.get('carrier', '')
+
+        if not tracking_number:
+            return jsonify({
+                'success': False,
+                'message': 'Tracking number is required'
+            }), 400
+
+        # Get the scan from database to verify it exists
+        conn = get_mysql_connection()
+        try:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT * FROM scans WHERE id = %s", (scan_id,))
+            scan = cursor.fetchone()
+
+            if not scan:
+                return jsonify({
+                    'success': False,
+                    'message': 'Scan not found'
+                }), 404
+
+            # Initialize with defaults
+            order_number = "N/A"
+            customer_name = "Not Found"
+            order_id = ""
+            scan_carrier = carrier or scan.get('carrier', '')
+
+            # ── ShipStation lookup ──
+            shopify_found = False
+            try:
+                if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+                    url = f"https://ssapi.shipstation.com/shipments?trackingNumber={tracking_number}"
+                    resp = requests.get(
+                        url,
+                        auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                        headers={"Accept": "application/json"},
+                        timeout=6
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    shipments = data.get("shipments", [])
+
+                    if shipments:
+                        first = shipments[0]
+                        order_number = first.get("orderNumber", "N/A")
+                        ship_to = first.get("shipTo", {})
+                        customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
+                        carrier_code = first.get("carrierCode", "").lower()
+
+                        carrier_map = {
+                            "ups": "UPS",
+                            "canadapost": "Canada Post",
+                            "canada_post": "Canada Post",
+                            "dhl": "DHL",
+                            "dhl_express": "DHL",
+                            "purolator": "Purolator",
+                        }
+                        scan_carrier = carrier_map.get(carrier_code, scan_carrier)
+            except Exception as e:
+                print(f"ShipStation error for {tracking_number}: {e}")
+
+            # ── Shopify lookup ──
+            try:
+                shopify_api = get_shopify_api()
+                shopify_info = shopify_api.get_order_by_tracking(tracking_number)
+
+                if shopify_info and shopify_info.get("order_id"):
+                    shopify_found = True
+                    order_number = shopify_info.get("order_number", order_number)
+                    customer_name = shopify_info.get("customer_name", customer_name)
+                    order_id = shopify_info.get("order_id", order_id)
+            except Exception as e:
+                print(f"Shopify error for {tracking_number}: {e}")
+
+            # ── Update the scan record with results ──
+            cursor.execute(
+                """
+                UPDATE scans
+                SET carrier = %s,
+                    order_number = %s,
+                    customer_name = %s,
+                    order_id = %s,
+                    status = %s
+                WHERE id = %s
+                """,
+                (scan_carrier, order_number, customer_name, order_id,
+                 'Complete' if (order_number != 'N/A' or customer_name != 'Not Found') else 'Processing',
+                 scan_id)
+            )
+            conn.commit()
+
+            # Fetch the updated scan
+            cursor.execute("SELECT * FROM scans WHERE id = %s", (scan_id,))
+            updated_scan = cursor.fetchone()
+
+            return jsonify({
+                'success': True,
+                'message': 'Order updated successfully',
+                'scan': {
+                    'id': updated_scan['id'],
+                    'tracking_number': updated_scan['tracking_number'],
+                    'carrier': updated_scan['carrier'],
+                    'order_number': updated_scan['order_number'],
+                    'customer_name': updated_scan['customer_name'],
+                    'order_id': updated_scan.get('order_id', ''),
+                    'status': updated_scan['status']
+                }
+            })
+
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+            conn.close()
+
+    except Exception as e:
+        print(f"Error in fix_order: {e}")
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
 
 
 if __name__ == "__main__":

@@ -9,21 +9,21 @@ import re
 class ShopifyAPI:
     def __init__(self):
         """
-        Initialize Shopify API connection by reading these four env vars:
+        Initialize Shopify API connection by reading these env vars:
           • SHOPIFY_API_KEY
           • SHOPIFY_API_SECRET
           • SHOPIFY_ACCESS_TOKEN
-          • SHOPIFY_SHOP_URL
+          • SHOP_URL
         """
-        # Read straight from Kinsta’s environment
+        # Read straight from Kinsta's environment
         api_key      = os.environ.get("SHOPIFY_API_KEY", "")
         api_secret   = os.environ.get("SHOPIFY_API_SECRET", "")
-        access_token = os.environ.get("ACCESS_TOKEN", "")
+        access_token = os.environ.get("SHOPIFY_ACCESS_TOKEN", "")
         shop_url     = os.environ.get("SHOP_URL", "")
         
         if not access_token or not shop_url:
             raise RuntimeError(
-                "Missing SHOPIFY_ACCESS_TOKEN or SHOPIFY_SHOP_URL in environment."
+                "Missing SHOPIFY_ACCESS_TOKEN or SHOP_URL in environment."
             )
 
         self.shop_url    = shop_url
