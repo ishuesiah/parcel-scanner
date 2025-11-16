@@ -2361,8 +2361,20 @@ def index():
         conn.close()
 
 
-@app.route("/new_batch", methods=["POST"])
+@app.route("/new_batch", methods=["GET", "POST"])
 def new_batch():
+    """
+    GET: Clear current batch from session and start a new batch (from sidebar link)
+    POST: Create a new batch with carrier selection (from form)
+    """
+    if request.method == "GET":
+        # Clear session and start fresh (from sidebar link)
+        batch_id = session.pop("batch_id", None)
+        if batch_id:
+            flash(f"Batch #{batch_id} finished. Starting a new batch.", "success")
+        return redirect(url_for("index"))
+
+    # POST: Create new batch from form
     carrier = request.form.get("carrier", "").strip()
     if carrier not in ("UPS", "Canada Post", "DHL", "Purolator"):
         flash("Please select a valid carrier.", "error")
@@ -2989,18 +3001,6 @@ def finish_batch():
     batch_id = session.pop("batch_id", None)
     if batch_id:
         flash(f"Batch #{batch_id} finished. You can now create a new batch.", "success")
-    return redirect(url_for("index"))
-
-
-@app.route("/new_batch", methods=["GET"])
-def new_batch():
-    """
-    Clear current batch from session and start a new batch.
-    This is used by the "New Batch" sidebar link.
-    """
-    batch_id = session.pop("batch_id", None)
-    if batch_id:
-        flash(f"Batch #{batch_id} finished. Starting a new batch.", "success")
     return redirect(url_for("index"))
 
 
