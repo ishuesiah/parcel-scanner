@@ -35,6 +35,7 @@ from mysql.connector import pooling
 from datetime import datetime
 
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
+from klaviyo_events import KlaviyoEvents  # Klaviyo integration for event tracking
 
 app = Flask(__name__)
 
@@ -84,6 +85,14 @@ def get_shopify_api():
     if _shopify_api is None:
         _shopify_api = ShopifyAPI()
     return _shopify_api
+
+# ── Klaviyo singleton ──
+_klaviyo_events = None
+def get_klaviyo_events():
+    global _klaviyo_events
+    if _klaviyo_events is None:
+        _klaviyo_events = KlaviyoEvents()
+    return _klaviyo_events
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1521,14 +1530,16 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
 
         # ── Shopify lookup ──
         shopify_found = False
+        customer_email = ""
         try:
             shopify_api = get_shopify_api()
             shopify_info = shopify_api.get_order_by_tracking(tracking_number)
-            
+
             if shopify_info and shopify_info.get("order_id"):
                 shopify_found = True
                 order_number = shopify_info.get("order_number", order_number)
                 customer_name = shopify_info.get("customer_name", customer_name)
+                customer_email = shopify_info.get("customer_email", "")
                 order_id = shopify_info.get("order_id", order_id)
         except Exception as e:
             print(f"Shopify error for {tracking_number}: {e}")
@@ -1564,7 +1575,23 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
         )
         conn.commit()
         cursor.close()
-        
+
+        # ── Send event to Klaviyo ──
+        try:
+            klaviyo = get_klaviyo_events()
+            klaviyo.track_parcel_scanned(
+                tracking_number=tracking_number,
+                order_number=order_number,
+                customer_name=customer_name,
+                customer_email=customer_email,
+                carrier=scan_carrier,
+                order_id=order_id,
+                batch_id=None  # We don't have batch_id in this scope, but could pass it if needed
+            )
+        except Exception as klaviyo_error:
+            # Don't let Klaviyo errors break the scan processing
+            print(f"Klaviyo event error for {tracking_number}: {klaviyo_error}")
+
     except Exception as e:
         print(f"Background API processing error for scan {scan_id}: {e}")
     finally:

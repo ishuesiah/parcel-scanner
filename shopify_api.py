@@ -118,6 +118,7 @@ class ShopifyAPI:
                                 f"{cust.get('first_name','')} {cust.get('last_name','')}".strip()
                                 or "N/A"
                             ),
+                            "customer_email": cust.get("email", ""),
                             "order_id": str(order.get("id", ""))
                         }
                         self._order_cache[tracking_number] = order_data
@@ -125,12 +126,14 @@ class ShopifyAPI:
             return {
                 "order_number": "N/A",
                 "customer_name": "No Order Found",
+                "customer_email": "",
                 "order_id": None
             }
         except Exception as e:
             return {
                 "order_number": "N/A",
                 "customer_name": f"Error: {e}",
+                "customer_email": "",
                 "order_id": None
             }
 
