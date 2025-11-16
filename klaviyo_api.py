@@ -2,6 +2,7 @@
 import os
 import requests
 import time
+import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any
 
@@ -41,6 +42,9 @@ class KlaviyoAPI:
 
         url = "https://a.klaviyo.com/api/events/"
 
+        # Generate unique ID to prevent event deduplication
+        unique_id = str(uuid.uuid4())
+
         # Correct Klaviyo Events API format (2024-10-15)
         payload = {
             "data": {
@@ -63,12 +67,14 @@ class KlaviyoAPI:
                         }
                     },
                     "properties": properties,
-                    "time": datetime.utcnow().isoformat() + "Z"
+                    "time": datetime.utcnow().isoformat() + "Z",
+                    "unique_id": unique_id
                 }
             }
         }
 
         print(f"📤 Sending Klaviyo event '{event_name}' for {email}")
+        print(f"   Unique ID: {unique_id}")
         print(f"   Properties: {properties}")
 
         max_retries = 3
