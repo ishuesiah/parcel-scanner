@@ -451,7 +451,7 @@ MAIN_TEMPLATE = r'''
     <div class="sidebar">
       <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
       <ul>
-        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('new_batch') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
@@ -1070,7 +1070,7 @@ ALL_BATCHES_TEMPLATE = r'''
     <div class="sidebar">
       <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></img></h1>
       <ul>
-        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('new_batch') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
@@ -1202,7 +1202,7 @@ BATCH_VIEW_TEMPLATE = r'''
     <div class="sidebar">
       <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
       <ul>
-        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('new_batch') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
@@ -1422,7 +1422,7 @@ PICK_AND_PACK_TEMPLATE = r'''
     <div class="sidebar">
       <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
       <ul>
-        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('new_batch') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
@@ -1710,7 +1710,7 @@ ITEM_LOCATIONS_TEMPLATE = r'''
     <div class="sidebar">
       <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
       <ul>
-        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('new_batch') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
@@ -1880,7 +1880,7 @@ ALL_SCANS_TEMPLATE = r'''
     <div class="sidebar">
       <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
       <ul>
-        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('new_batch') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
@@ -2762,6 +2762,18 @@ def finish_batch():
     batch_id = session.pop("batch_id", None)
     if batch_id:
         flash(f"Batch #{batch_id} finished. You can now create a new batch.", "success")
+    return redirect(url_for("index"))
+
+
+@app.route("/new_batch", methods=["GET"])
+def new_batch():
+    """
+    Clear current batch from session and start a new batch.
+    This is used by the "New Batch" sidebar link.
+    """
+    batch_id = session.pop("batch_id", None)
+    if batch_id:
+        flash(f"Batch #{batch_id} finished. Starting a new batch.", "success")
     return redirect(url_for("index"))
 
 
