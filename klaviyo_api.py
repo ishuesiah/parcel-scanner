@@ -2,6 +2,7 @@
 import os
 import requests
 import time
+from datetime import datetime
 from typing import Optional, Dict, Any
 
 class KlaviyoAPI:
@@ -35,69 +36,92 @@ class KlaviyoAPI:
             True if successful, False otherwise
         """
         if not email:
-            print(f"Skipping Klaviyo event - no email provided")
+            print(f"⚠️ Skipping Klaviyo event - no email provided")
             return False
 
         url = "https://a.klaviyo.com/api/events/"
 
+        # Correct Klaviyo Events API format (2024-10-15)
         payload = {
             "data": {
                 "type": "event",
                 "attributes": {
                     "profile": {
-                        "$email": email
+                        "data": {
+                            "type": "profile",
+                            "attributes": {
+                                "email": email
+                            }
+                        }
                     },
                     "metric": {
-                        "name": event_name
+                        "data": {
+                            "type": "metric",
+                            "attributes": {
+                                "name": event_name
+                            }
+                        }
                     },
                     "properties": properties,
-                    "time": time.strftime("%Y-%m-%dT%H:%M:%S")
+                    "time": datetime.utcnow().isoformat() + "Z"
                 }
             }
         }
+
+        print(f"📤 Sending Klaviyo event '{event_name}' for {email}")
+        print(f"   Properties: {properties}")
 
         max_retries = 3
         for retry in range(max_retries):
             try:
                 resp = self.session.post(url, json=payload, timeout=10)
 
+                # Log response details
+                print(f"📨 Klaviyo response: {resp.status_code}")
+
                 # Handle rate limiting
                 if resp.status_code == 429:
                     wait = int(resp.headers.get("Retry-After", 2))
-                    print(f"Klaviyo rate limit hit, waiting {wait}s before retry {retry + 1}/{max_retries}")
+                    print(f"⏳ Klaviyo rate limit hit, waiting {wait}s before retry {retry + 1}/{max_retries}")
                     time.sleep(wait)
                     continue
 
                 # Handle 5xx errors with exponential backoff
                 if 500 <= resp.status_code < 600:
                     wait = min(2 ** retry, 8)
-                    print(f"Klaviyo {resp.status_code} error, retry {retry + 1}/{max_retries} after {wait}s")
+                    print(f"❌ Klaviyo {resp.status_code} error, retry {retry + 1}/{max_retries} after {wait}s")
+                    print(f"   Response: {resp.text[:500]}")
                     if retry < max_retries - 1:
                         time.sleep(wait)
                         continue
                     else:
-                        print(f"Klaviyo event failed for {email}: {resp.status_code}")
+                        print(f"❌ Klaviyo event failed for {email}: {resp.status_code}")
                         return False
 
+                # Handle 4xx errors (bad request, etc.)
+                if 400 <= resp.status_code < 500:
+                    print(f"❌ Klaviyo client error {resp.status_code}: {resp.text[:500]}")
+                    return False
+
                 resp.raise_for_status()
-                print(f"✓ Klaviyo event '{event_name}' tracked for {email}")
+                print(f"✅ Klaviyo event '{event_name}' tracked successfully for {email}")
                 return True
 
             except requests.exceptions.Timeout as e:
-                print(f"Klaviyo timeout for {email}, retry {retry + 1}/{max_retries}: {e}")
+                print(f"⏱️ Klaviyo timeout for {email}, retry {retry + 1}/{max_retries}: {e}")
                 if retry < max_retries - 1:
                     time.sleep(1)
                     continue
                 return False
 
             except requests.exceptions.RequestException as e:
-                print(f"Klaviyo request error for {email}: {e}")
+                print(f"❌ Klaviyo request error for {email}: {e}")
                 if retry < max_retries - 1:
                     time.sleep(1)
                     continue
                 return False
 
-        print(f"Klaviyo event failed for {email} after {max_retries} retries")
+        print(f"❌ Klaviyo event failed for {email} after {max_retries} retries")
         return False
 
     def notify_order_shipped(self, email: str, order_number: str, tracking_number: str, carrier: str) -> bool:

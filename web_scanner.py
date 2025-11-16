@@ -2238,7 +2238,23 @@ def notify_customers():
 
         scans = cursor.fetchall()
 
+        print(f"🔍 DEBUG: Found {len(scans)} scans with customer emails in batch {batch_id}")
+        for scan in scans:
+            print(f"   - Order {scan['order_number']}: {scan['customer_email']}")
+
         if not scans:
+            # Check total scans in batch
+            cursor.execute("SELECT COUNT(*) as total FROM scans WHERE batch_id = %s", (batch_id,))
+            total = cursor.fetchone()['total']
+            print(f"⚠️ No emails found! Total scans in batch: {total}")
+
+            # Check how many have emails vs no emails
+            cursor.execute("SELECT customer_email, COUNT(*) as count FROM scans WHERE batch_id = %s GROUP BY customer_email", (batch_id,))
+            email_breakdown = cursor.fetchall()
+            print(f"📊 Email breakdown:")
+            for row in email_breakdown:
+                print(f"   - '{row['customer_email']}': {row['count']} scans")
+
             flash("No orders with email addresses found in this batch.", "warning")
             return redirect(url_for("index"))
 
