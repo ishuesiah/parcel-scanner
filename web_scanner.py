@@ -113,6 +113,54 @@ def get_klaviyo_events():
         _klaviyo_events = KlaviyoEvents()
     return _klaviyo_events
 
+# ── Item Location Helpers ──
+def get_item_location(sku: str, item_name: str) -> str:
+    """
+    Find warehouse location for an item based on SKU or keyword matching.
+    Returns location string like "Aisle 3, Shelf B" or empty string if not found.
+    """
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # First, try exact SKU match
+        cursor.execute("""
+            SELECT aisle, shelf
+            FROM item_location_rules
+            WHERE rule_type = 'sku' AND UPPER(rule_value) = UPPER(%s)
+            LIMIT 1
+        """, (sku,))
+        result = cursor.fetchone()
+
+        if result:
+            cursor.close()
+            conn.close()
+            return f"{result['aisle']}, {result['shelf']}"
+
+        # If no SKU match, try keyword matching
+        cursor.execute("""
+            SELECT aisle, shelf, rule_value
+            FROM item_location_rules
+            WHERE rule_type = 'keyword'
+            ORDER BY LENGTH(rule_value) DESC
+        """)
+        keyword_rules = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        # Check if any keyword is in the item name (case-insensitive)
+        item_name_upper = item_name.upper()
+        for rule in keyword_rules:
+            if rule['rule_value'].upper() in item_name_upper:
+                return f"{rule['aisle']}, {rule['shelf']}"
+
+        return ""
+
+    except Exception as e:
+        print(f"Error fetching item location: {e}")
+        return ""
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ── Templates ─────────────────────────────────────────────────────────────────
@@ -407,6 +455,7 @@ MAIN_TEMPLATE = r'''
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
+        <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1025,6 +1074,7 @@ ALL_BATCHES_TEMPLATE = r'''
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
+        <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1156,6 +1206,7 @@ BATCH_VIEW_TEMPLATE = r'''
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
+        <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1375,6 +1426,7 @@ PICK_AND_PACK_TEMPLATE = r'''
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
+        <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1454,6 +1506,7 @@ PICK_AND_PACK_TEMPLATE = r'''
                   <th style="width: 50px;">✓</th>
                   <th>Item Details</th>
                   <th style="width: 150px;">SKU</th>
+                  <th style="width: 150px;">Location</th>
                   <th style="width: 80px; text-align: center;">Quantity</th>
                 </tr>
               </thead>
@@ -1477,6 +1530,13 @@ PICK_AND_PACK_TEMPLATE = r'''
                       {% endif %}
                     </td>
                     <td style="font-family: monospace; font-size: 0.95rem;">{{ item.sku }}</td>
+                    <td style="font-weight: 600; color: #2980b9;">
+                      {% if item.location %}
+                        📍 {{ item.location }}
+                      {% else %}
+                        <span style="color: #95a5a6;">—</span>
+                      {% endif %}
+                    </td>
                     <td style="text-align: center;">
                       <span class="{{ 'qty-red' if item.quantity > 1 else 'qty-normal' }}">{{ item.quantity }}</span>
                     </td>
@@ -1574,6 +1634,187 @@ PICK_AND_PACK_TEMPLATE = r'''
 </html>
 '''
 
+ITEM_LOCATIONS_TEMPLATE = r'''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Item Locations – H&O Parcel Scans</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f5f6fa; color: #333;
+    }
+    .container { display: flex; height: 100vh; }
+    .sidebar {
+      width: 240px; background: #fff; border-right: 1px solid #e0e0e0;
+      display: flex; flex-direction: column; padding: 24px 16px;
+    }
+    .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
+    .sidebar ul { list-style: none; margin-top: 8px; }
+    .sidebar li { margin-bottom: 16px; }
+    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a:hover { text-decoration: underline; }
+    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; text-decoration: none; }
+    .sidebar .logout:hover { text-decoration: underline; }
+
+    .main-content { flex: 1; overflow-y: auto; padding: 24px; }
+    .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid; }
+    .flash.success { background-color: #e0f7e9; color: #2f7a45; border-color: #b2e6c2; }
+    .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
+
+    h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
+
+    .add-form {
+      background: white; padding: 24px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 24px;
+    }
+    .add-form h3 { font-size: 1.2rem; color: #34495e; margin-bottom: 16px; }
+    .form-row { display: flex; gap: 12px; margin-bottom: 16px; align-items: end; }
+    .form-group { flex: 1; }
+    .form-group label { display: block; font-weight: 600; margin-bottom: 6px; color: #2c3e50; font-size: 0.9rem; }
+    .form-group input, .form-group select {
+      width: 100%; padding: 10px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px;
+    }
+    .form-group.narrow { flex: 0 0 150px; }
+    .add-btn {
+      padding: 10px 24px; font-size: 14px; border: none; border-radius: 4px;
+      background-color: #27ae60; color: #fff; cursor: pointer; font-weight: 600;
+    }
+    .add-btn:hover { opacity: 0.92; }
+
+    .rules-table { width: 100%; border-collapse: collapse; background: white; }
+    .rules-table th, .rules-table td { border: 1px solid #ddd; padding: 12px 10px; font-size: 0.93rem; }
+    .rules-table th { background-color: #f8f9fa; text-align: left; font-weight: 600; color: #495057; }
+    .rules-table tr:nth-child(even) { background-color: #fafafa; }
+    .rules-table tr:hover { background-color: #f1f1f1; }
+    .rule-type-badge {
+      display: inline-block; padding: 4px 8px; border-radius: 3px; font-size: 0.8rem;
+      font-weight: 600; text-transform: uppercase;
+    }
+    .rule-type-sku { background-color: #d4edda; color: #155724; }
+    .rule-type-keyword { background-color: #cce5ff; color: #004085; }
+    .delete-btn {
+      padding: 6px 12px; font-size: 0.85rem; background-color: #e74c3c; color: #fff;
+      border: none; border-radius: 4px; cursor: pointer;
+    }
+    .delete-btn:hover { opacity: 0.92; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <div class="sidebar">
+      <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
+      <ul>
+        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
+        <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
+        <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
+      </ul>
+      <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
+      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
+        v{{ version }}
+      </div>
+    </div>
+
+    <div class="main-content">
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, msg in messages %}
+          <div class="flash {{ category }}">{{ msg }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      <h2>Item Location Rules</h2>
+      <p style="margin-bottom: 20px; color: #666;">
+        Set warehouse locations for items by matching SKUs or keywords. These locations will appear in the Pick and Pack page.
+      </p>
+
+      <div class="add-form">
+        <h3>Add New Location Rule</h3>
+        <form method="post" action="{{ url_for('add_location_rule') }}">
+          <div class="form-row">
+            <div class="form-group narrow">
+              <label for="aisle">Aisle</label>
+              <input type="text" name="aisle" id="aisle" required placeholder="A1">
+            </div>
+            <div class="form-group narrow">
+              <label for="shelf">Shelf</label>
+              <input type="text" name="shelf" id="shelf" required placeholder="B3">
+            </div>
+            <div class="form-group narrow">
+              <label for="rule_type">Match By</label>
+              <select name="rule_type" id="rule_type" required>
+                <option value="sku">SKU</option>
+                <option value="keyword">Keyword</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="rule_value">Value</label>
+              <input type="text" name="rule_value" id="rule_value" required placeholder="SKU-12345 or 'Bracelet'">
+            </div>
+            <div class="form-group" style="flex: 0;">
+              <button type="submit" class="add-btn">+ Add Rule</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <table class="rules-table">
+        <thead>
+          <tr>
+            <th>Aisle</th>
+            <th>Shelf</th>
+            <th>Rule Type</th>
+            <th>Match Value</th>
+            <th>Created</th>
+            <th style="width: 100px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if rules %}
+            {% for rule in rules %}
+              <tr>
+                <td><strong>{{ rule.aisle }}</strong></td>
+                <td><strong>{{ rule.shelf }}</strong></td>
+                <td>
+                  <span class="rule-type-badge rule-type-{{ rule.rule_type }}">
+                    {{ rule.rule_type }}
+                  </span>
+                </td>
+                <td style="font-family: monospace;">{{ rule.rule_value }}</td>
+                <td>{{ rule.created_at.strftime('%Y-%m-%d %H:%M') if rule.created_at else '—' }}</td>
+                <td>
+                  <form method="post" action="{{ url_for('delete_location_rule') }}" style="display: inline;">
+                    <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                    <button type="submit" class="delete-btn" onclick="return confirm('Delete this rule?')">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="6" style="text-align: center; padding: 32px; color: #999;">
+                No location rules configured yet. Add your first rule above!
+              </td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+
+    </div>
+
+  </div>
+
+</body>
+</html>
+'''
+
 ALL_SCANS_TEMPLATE = r'''
 <!doctype html>
 <html lang="en">
@@ -1643,6 +1884,7 @@ ALL_SCANS_TEMPLATE = r'''
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
+        <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -3020,6 +3262,10 @@ def pick_and_pack():
                     if not order_data:
                         error_message = f"Order not found for '{search_identifier}'. Please check the number and try again."
                     else:
+                        # Add location information to each line item
+                        for item in order_data.get('line_items', []):
+                            item['location'] = get_item_location(item['sku'], item['name'])
+
                         # Check if already verified
                         conn = get_mysql_connection()
                         try:
@@ -3094,6 +3340,109 @@ def pick_and_pack():
         shop_url=SHOP_URL,
         version=__version__
     )
+
+
+@app.route("/item_locations", methods=["GET"])
+def item_locations():
+    """
+    Item locations admin page.
+    Displays all location rules and allows adding/deleting rules.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT id, aisle, shelf, rule_type, rule_value, created_at
+            FROM item_location_rules
+            ORDER BY aisle, shelf, rule_type, rule_value
+        """)
+        rules = cursor.fetchall()
+
+        return render_template_string(
+            ITEM_LOCATIONS_TEMPLATE,
+            rules=rules,
+            shop_url=SHOP_URL,
+            version=__version__
+        )
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@app.route("/add_location_rule", methods=["POST"])
+def add_location_rule():
+    """
+    Add a new location rule.
+    """
+    aisle = request.form.get("aisle", "").strip()
+    shelf = request.form.get("shelf", "").strip()
+    rule_type = request.form.get("rule_type", "").strip()
+    rule_value = request.form.get("rule_value", "").strip()
+
+    if not all([aisle, shelf, rule_type, rule_value]):
+        flash("All fields are required.", "error")
+        return redirect(url_for("item_locations"))
+
+    if rule_type not in ['sku', 'keyword']:
+        flash("Invalid rule type.", "error")
+        return redirect(url_for("item_locations"))
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO item_location_rules (aisle, shelf, rule_type, rule_value)
+            VALUES (%s, %s, %s, %s)
+        """, (aisle, shelf, rule_type, rule_value))
+        conn.commit()
+
+        flash(f"✅ Location rule added: {aisle}, {shelf} for {rule_type.upper()} '{rule_value}'", "success")
+    except Exception as e:
+        flash(f"Error adding rule: {str(e)}", "error")
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+    return redirect(url_for("item_locations"))
+
+
+@app.route("/delete_location_rule", methods=["POST"])
+def delete_location_rule():
+    """
+    Delete a location rule.
+    """
+    rule_id = request.form.get("rule_id")
+
+    if not rule_id:
+        flash("Invalid rule ID.", "error")
+        return redirect(url_for("item_locations"))
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM item_location_rules WHERE id = %s", (rule_id,))
+        conn.commit()
+
+        if cursor.rowcount > 0:
+            flash("✅ Location rule deleted.", "success")
+        else:
+            flash("Rule not found.", "error")
+    except Exception as e:
+        flash(f"Error deleting rule: {str(e)}", "error")
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+    return redirect(url_for("item_locations"))
 
 
 if __name__ == "__main__":
