@@ -724,6 +724,7 @@ MAIN_TEMPLATE = r'''
                 <th>Carrier</th>
                 <th>Order #</th>
                 <th>Customer</th>
+                <th>Email</th>
                 <th>Scan Time</th>
                 <th>Status</th>
               </tr>
@@ -754,6 +755,7 @@ MAIN_TEMPLATE = r'''
                       {{ row.customer_name }}
                     {% endif %}
                   </td>
+                  <td style="font-size: 0.85rem; color: #666;">{{ row.customer_email or '—' }}</td>
                   <td>{{ row.scan_date }}</td>
                   <td>
                     {% if row.status.startswith('Duplicate (Batch #') %}
@@ -1041,6 +1043,7 @@ MAIN_TEMPLATE = r'''
         <td>${scan.carrier}</td>
         <td>${orderLink}</td>
         <td>${customerLink}</td>
+        <td style="font-size: 0.85rem; color: #666;">${scan.customer_email || '—'}</td>
         <td>${scan.scan_date}</td>
         <td>${statusDisplay}</td>
       `;
@@ -2871,6 +2874,7 @@ def index():
             carrier,
             order_number,
             customer_name,
+            customer_email,
             scan_date,
             status,
             order_id
@@ -3217,17 +3221,8 @@ def scan():
         cursor.close()
         batch_carrier = (row[0] if row else "") or ""
 
-        # Normalize codes for specific carriers
-        original_code = code
-        if batch_carrier == "Canada Post":
-            if len(code) >= 12:
-                code = code[7:-5]
-        elif batch_carrier == "Purolator":
-            if len(code) == 34:
-                code = code[11:-11]
-
-        # ── Validate carrier before processing ──
-        # Detect carrier from tracking number format
+        # ── Validate carrier BEFORE normalization ──
+        # Detect carrier from tracking number format (using ORIGINAL code)
         detected_carrier = None
         if code.startswith("1Z"):
             detected_carrier = "UPS"
@@ -3235,19 +3230,29 @@ def scan():
             detected_carrier = "Purolator"
         elif len(code) == 10 and code.isdigit():
             detected_carrier = "DHL"
-        elif code.startswith("2016"):
+        elif len(code) >= 16 and (code[:4].isdigit() or code.startswith("CA")):
+            # Canada Post: 16 chars, often starts with digits or "CA"
             detected_carrier = "Canada Post"
         elif code.startswith("LA") or len(code) == 30:
             detected_carrier = "USPS"
 
-        # Reject if carrier doesn't match batch carrier
+        # Reject if carrier doesn't match batch carrier (BEFORE normalization!)
         if detected_carrier and detected_carrier != batch_carrier:
-            error_msg = f"Not a {batch_carrier} label, please try again. (Detected: {detected_carrier})"
-            print(f"Carrier mismatch: expected {batch_carrier}, got {detected_carrier} for code {code}")
+            error_msg = f"❌ Not a {batch_carrier} label! (Detected: {detected_carrier})"
+            print(f"🚫 Carrier mismatch: expected {batch_carrier}, got {detected_carrier} for code {code}")
             if is_ajax:
                 return jsonify({"success": False, "error": error_msg, "carrier_mismatch": True}), 400
             flash(error_msg, "error")
             return redirect(url_for("index"))
+
+        # NOW normalize codes for specific carriers (AFTER validation)
+        original_code = code
+        if batch_carrier == "Canada Post":
+            if len(code) >= 12:
+                code = code[7:-5]
+        elif batch_carrier == "Purolator":
+            if len(code) == 34:
+                code = code[11:-11]
 
         # ─────────────────────────────────────────────────────────────────
         # ✨ NEW: Check for duplicate across ALL BATCHES in the database
@@ -3838,6 +3843,7 @@ def get_batch_updates(batch_id):
             carrier,
             order_number,
             customer_name,
+            customer_email,
             status,
             order_id
           FROM scans
