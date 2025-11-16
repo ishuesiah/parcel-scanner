@@ -1484,15 +1484,18 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
     """
     import threading
     time.sleep(0.1)  # Small delay to ensure response is sent first
-    
-    conn = get_mysql_connection()
+
+    # Initialize with defaults (will be used if APIs fail)
+    order_number = "N/A"
+    customer_name = "Not Found"
+    order_id = ""
+    scan_carrier = batch_carrier
+    customer_email = ""
+
+    conn = None
     try:
-        # Initialize with defaults
-        order_number = "N/A"
-        customer_name = "Not Found"
-        order_id = ""
-        scan_carrier = batch_carrier
-        
+        conn = get_mysql_connection()
+
         # ── ShipStation lookup ──
         shipstation_found = False
         try:
@@ -1530,7 +1533,6 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
 
         # ── Shopify lookup ──
         shopify_found = False
-        customer_email = ""
         try:
             shopify_api = get_shopify_api()
             shopify_info = shopify_api.get_order_by_tracking(tracking_number)
@@ -1559,7 +1561,15 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
             else:
                 scan_carrier = batch_carrier
 
-        # ── Update the scan record with API results ──
+    except Exception as e:
+        print(f"Background API processing error for scan {scan_id}: {e}")
+
+    # ── ALWAYS update the scan record, even if APIs failed ──
+    # This ensures we never leave scans stuck with "Processing..." or "Looking up..."
+    try:
+        if conn is None:
+            conn = get_mysql_connection()
+
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -1575,6 +1585,7 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
         )
         conn.commit()
         cursor.close()
+        print(f"✓ Updated scan {scan_id}: {tracking_number} -> Order: {order_number}, Customer: {customer_name}")
 
         # ── Send event to Klaviyo ──
         try:
@@ -1592,10 +1603,11 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
             # Don't let Klaviyo errors break the scan processing
             print(f"Klaviyo event error for {tracking_number}: {klaviyo_error}")
 
-    except Exception as e:
-        print(f"Background API processing error for scan {scan_id}: {e}")
+    except Exception as db_error:
+        print(f"CRITICAL: Failed to update scan {scan_id} in database: {db_error}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 @app.route("/scan", methods=["POST"])
