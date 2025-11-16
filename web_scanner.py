@@ -2286,11 +2286,19 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
     .status-unknown { background-color: #f5f5f5; color: #666; }
     .status-error { background-color: #fdecea; color: #952746; }
 
+    .flag-critical {
+      color: #952746; font-weight: 700; font-size: 1.3rem;
+      animation: pulse 2s ease-in-out infinite;
+    }
     .flag-warning {
-      color: #952746; font-weight: 600; font-size: 1.2rem;
+      color: #e67e00; font-weight: 600; font-size: 1.2rem;
     }
     .flag-ok {
       color: #199b76; font-weight: 600; font-size: 1.2rem;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
     }
 
     .pagination {
@@ -2371,7 +2379,11 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
               <tr>
                 <td>
                   {% if ship.flag %}
-                    <span class="flag-warning" title="{{ ship.flag_reason }}">⚠️</span>
+                    {% if ship.flag_severity == 'critical' %}
+                      <span class="flag-critical" title="{{ ship.flag_reason }}">🚨</span>
+                    {% else %}
+                      <span class="flag-warning" title="{{ ship.flag_reason }}">⚠️</span>
+                    {% endif %}
                   {% else %}
                     <span class="flag-ok">✓</span>
                   {% endif %}
@@ -4208,6 +4220,7 @@ def check_shipments():
             # Determine if shipment should be flagged
             flag = False
             flag_reason = ""
+            flag_severity = "normal"  # normal, warning, critical
 
             if carrier_code == "UPS":
                 # Calculate days since ship date
@@ -4215,18 +4228,30 @@ def check_shipments():
                     ship_datetime = datetime.strptime(ship_date, "%Y-%m-%d")
                     days_since_ship = (datetime.now() - ship_datetime).days
 
-                    # Flag if: label created but not scanned after 2+ days
-                    if not scanned and days_since_ship >= 2:
+                    # CRITICAL ALERT: Label created but NEVER scanned after 6+ days
+                    # This means package was never sent out!
+                    if not scanned and days_since_ship >= 6:
                         flag = True
-                        flag_reason = f"Not scanned after {days_since_ship} days"
-                    # Flag if: scanned but still showing label_created after 3+ days
+                        flag_severity = "critical"
+                        flag_reason = f"🚨 CRITICAL: Label created {days_since_ship} days ago but NEVER SCANNED! Package was never sent."
+
+                    # HIGH ALERT: Scanned but UPS lost it (stuck in label_created = carrier never picked it up)
                     elif scanned and ups_status == "label_created" and days_since_ship >= 3:
                         flag = True
-                        flag_reason = f"No movement after {days_since_ship} days (scanned but not picked up by carrier)"
-                    # Flag if: exception/delay status
+                        flag_severity = "critical"
+                        flag_reason = f"🚨 CRITICAL: Scanned {days_since_ship} days ago but UPS shows no pickup. Carrier may have lost it."
+
+                    # WARNING: Label created but not scanned (2-5 days)
+                    elif not scanned and days_since_ship >= 2:
+                        flag = True
+                        flag_severity = "warning"
+                        flag_reason = f"⚠️ WARNING: Not scanned after {days_since_ship} days. Check if label was printed."
+
+                    # WARNING: Exception/delay status from carrier
                     elif ups_status == "exception":
                         flag = True
-                        flag_reason = "Shipment exception or delay"
+                        flag_severity = "warning"
+                        flag_reason = "⚠️ WARNING: Shipment exception or delay reported by carrier."
                 except:
                     pass
 
@@ -4242,7 +4267,8 @@ def check_shipments():
                 "ups_status_text": ups_status_text,
                 "ups_last_activity": ups_last_activity,
                 "flag": flag,
-                "flag_reason": flag_reason
+                "flag_reason": flag_reason,
+                "flag_severity": flag_severity
             })
 
         cursor.close()
