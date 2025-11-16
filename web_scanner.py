@@ -406,6 +406,7 @@ MAIN_TEMPLATE = r'''
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1023,6 +1024,7 @@ ALL_BATCHES_TEMPLATE = r'''
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1153,6 +1155,7 @@ BATCH_VIEW_TEMPLATE = r'''
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -1240,6 +1243,228 @@ BATCH_VIEW_TEMPLATE = r'''
 </html>
 '''
 
+PICK_AND_PACK_TEMPLATE = r'''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pick and Pack – H&O Parcel Scans</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f5f6fa; color: #333;
+    }
+    .container { display: flex; height: 100vh; }
+    .sidebar {
+      width: 240px; background: #fff; border-right: 1px solid #e0e0e0;
+      display: flex; flex-direction: column; padding: 24px 16px;
+    }
+    .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
+    .sidebar ul { list-style: none; margin-top: 8px; }
+    .sidebar li { margin-bottom: 16px; }
+    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a:hover { text-decoration: underline; }
+    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; text-decoration: none; }
+    .sidebar .logout:hover { text-decoration: underline; }
+
+    .main-content { flex: 1; overflow-y: auto; padding: 24px; }
+    .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid; }
+    .flash.success { background-color: #e0f7e9; color: #2f7a45; border-color: #b2e6c2; }
+    .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
+    .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
+
+    h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
+    h3 { font-size: 1.2rem; color: #34495e; margin-bottom: 12px; margin-top: 20px; }
+
+    .search-box {
+      background: white; padding: 24px; border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 24px;
+    }
+    .search-box input[type="text"] {
+      padding: 10px 14px; font-size: 16px; width: 400px; border: 1px solid #ccc; border-radius: 4px;
+    }
+    .search-box button {
+      padding: 10px 20px; font-size: 16px; border: none; border-radius: 4px;
+      background-color: #2d85f8; color: #fff; cursor: pointer; margin-left: 8px;
+    }
+    .search-box button:hover { opacity: 0.92; }
+
+    .order-card {
+      background: white; padding: 24px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .order-header {
+      background-color: #f8f9fa; padding: 16px; border-radius: 4px; margin-bottom: 20px;
+    }
+    .order-header p { margin: 6px 0; font-size: 0.95rem; }
+    .order-header strong { color: #2c3e50; }
+
+    .verification-notice {
+      background-color: #fff4e5; border-left: 4px solid #f39c12;
+      padding: 14px; margin-bottom: 20px; border-radius: 4px;
+    }
+    .verification-notice strong { color: #8a6100; }
+
+    .line-items { margin-top: 16px; }
+    .line-item {
+      border: 1px solid #e0e0e0; padding: 14px; margin-bottom: 12px;
+      border-radius: 4px; display: flex; align-items: flex-start;
+    }
+    .line-item input[type="checkbox"] {
+      width: 20px; height: 20px; margin-right: 14px; margin-top: 2px; cursor: pointer;
+    }
+    .item-details { flex: 1; }
+    .item-name { font-weight: 600; color: #2c3e50; font-size: 1rem; margin-bottom: 6px; }
+    .item-meta { font-size: 0.9rem; color: #666; }
+    .item-meta span { margin-right: 16px; }
+    .item-properties {
+      margin-top: 8px; padding: 8px; background-color: #f8f9fa;
+      border-radius: 3px; font-size: 0.85rem; color: #555;
+    }
+
+    .verify-form { margin-top: 24px; }
+    .verify-form textarea {
+      width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px;
+      font-family: inherit; font-size: 14px; margin-bottom: 16px; resize: vertical;
+    }
+    .verify-form button {
+      padding: 12px 24px; font-size: 16px; border: none; border-radius: 4px;
+      background-color: #27ae60; color: #fff; cursor: pointer; font-weight: 600;
+    }
+    .verify-form button:hover { opacity: 0.92; }
+
+    .error-box {
+      background-color: #fdecea; border-left: 4px solid #e74c3c;
+      padding: 16px; margin-bottom: 20px; border-radius: 4px;
+    }
+    .error-box p { color: #a33a2f; font-weight: 500; }
+    .error-box button {
+      margin-top: 12px; padding: 8px 16px; font-size: 14px; border: none;
+      border-radius: 4px; background-color: #e74c3c; color: #fff; cursor: pointer;
+    }
+    .error-box button:hover { opacity: 0.92; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+
+    <div class="sidebar">
+      <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
+      <ul>
+        <li><a href="{{ url_for('index') }}">New Batch</a></li>
+        <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
+        <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
+      </ul>
+      <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
+      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
+        v{{ version }}
+      </div>
+    </div>
+
+    <div class="main-content">
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, msg in messages %}
+          <div class="flash {{ category }}">{{ msg }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      <h2>Pick and Pack - Order Verification</h2>
+
+      <div class="search-box">
+        <form method="post" action="{{ url_for('pick_and_pack') }}">
+          <input type="hidden" name="action" value="search">
+          <label for="identifier"><strong>Enter Tracking Number or Order Number:</strong></label><br><br>
+          <input type="text" name="identifier" id="identifier" value="{{ search_identifier }}"
+                 placeholder="1Z999AA10123456784 or 1234" autofocus required>
+          <button type="submit">Search</button>
+        </form>
+      </div>
+
+      {% if error_message %}
+        <div class="error-box">
+          <p>{{ error_message }}</p>
+          <form method="post" action="{{ url_for('pick_and_pack') }}">
+            <input type="hidden" name="action" value="search">
+            <input type="hidden" name="identifier" value="{{ search_identifier }}">
+            <button type="submit">Retry</button>
+          </form>
+        </div>
+      {% endif %}
+
+      {% if order_data %}
+        <div class="order-card">
+          <div class="order-header">
+            <p><strong>Order Number:</strong> {{ order_data.order_name }}</p>
+            <p><strong>Customer:</strong> {{ order_data.customer_name }}
+               {% if order_data.customer_email %}({{ order_data.customer_email }}){% endif %}</p>
+            {% if order_data.tracking_number %}
+              <p><strong>Tracking:</strong> {{ order_data.tracking_number }}</p>
+            {% endif %}
+            <p><strong>Total Items:</strong> {{ order_data.total_items }}</p>
+          </div>
+
+          {% if already_verified %}
+            <div class="verification-notice">
+              <strong>⚠️ Already Verified:</strong> This order was verified on {{ already_verified.date }}
+              ({{ already_verified.items_checked }}/{{ already_verified.total_items }} items checked).
+              You can verify again to update the record.
+            </div>
+          {% endif %}
+
+          <h3>Line Items - Check off each item as you pack:</h3>
+
+          <form method="post" action="{{ url_for('pick_and_pack') }}" class="verify-form">
+            <input type="hidden" name="action" value="verify">
+            <input type="hidden" name="order_number" value="{{ order_data.order_number }}">
+            <input type="hidden" name="tracking_number" value="{{ order_data.tracking_number or '' }}">
+            <input type="hidden" name="shopify_order_id" value="{{ order_data.shopify_order_id }}">
+            <input type="hidden" name="total_items" value="{{ order_data.total_items }}">
+
+            <div class="line-items">
+              {% for item in order_data.line_items %}
+                <div class="line-item">
+                  <input type="checkbox" name="item_{{ loop.index }}" id="item_{{ loop.index }}" value="{{ item.id }}">
+                  <div class="item-details">
+                    <label for="item_{{ loop.index }}" class="item-name">
+                      {{ item.name }}
+                      {% if item.variant_title %}({{ item.variant_title }}){% endif %}
+                    </label>
+                    <div class="item-meta">
+                      <span><strong>SKU:</strong> {{ item.sku }}</span>
+                      <span><strong>Qty:</strong> {{ item.quantity }}</span>
+                    </div>
+                    {% if item.properties %}
+                      <div class="item-properties">
+                        {% for prop in item.properties %}
+                          <div>{{ prop }}</div>
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+
+            <label for="notes"><strong>Notes (optional):</strong></label>
+            <textarea name="notes" id="notes" rows="3" placeholder="Add any notes about this verification..."></textarea>
+
+            <button type="submit">✅ Verify Order</button>
+          </form>
+        </div>
+      {% endif %}
+
+    </div>
+
+  </div>
+
+</body>
+</html>
+'''
+
 ALL_SCANS_TEMPLATE = r'''
 <!doctype html>
 <html lang="en">
@@ -1308,6 +1533,7 @@ ALL_SCANS_TEMPLATE = r'''
         <li><a href="{{ url_for('index') }}">New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
         <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
+        <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
@@ -2654,6 +2880,110 @@ def all_scans():
         except Exception:
             pass
         conn.close()
+
+
+@app.route("/pick_and_pack", methods=["GET", "POST"])
+def pick_and_pack():
+    """
+    Order verification / pick and pack page.
+    Allows searching by tracking number or order number, displays line items,
+    and saves verification records.
+    """
+    order_data = None
+    error_message = None
+    already_verified = None
+    search_identifier = ""
+
+    if request.method == "POST":
+        action = request.form.get("action")
+
+        if action == "search":
+            search_identifier = request.form.get("identifier", "").strip()
+
+            if not search_identifier:
+                error_message = "Please enter a tracking number or order number"
+            else:
+                # Try to fetch order from Shopify
+                try:
+                    order_data = shopify_api.get_order_details_for_verification(search_identifier)
+
+                    if not order_data:
+                        error_message = f"Order not found for '{search_identifier}'. Please check the number and try again."
+                    else:
+                        # Check if already verified
+                        conn = get_mysql_connection()
+                        try:
+                            cursor = conn.cursor(dictionary=True)
+                            cursor.execute("""
+                                SELECT verified_at, items_checked, total_items
+                                FROM order_verifications
+                                WHERE order_number = %s
+                                ORDER BY verified_at DESC
+                                LIMIT 1
+                            """, (order_data['order_number'],))
+                            verification = cursor.fetchone()
+
+                            if verification:
+                                already_verified = {
+                                    'date': verification['verified_at'].strftime('%Y-%m-%d %H:%M'),
+                                    'items_checked': verification['items_checked'],
+                                    'total_items': verification['total_items']
+                                }
+                        finally:
+                            try:
+                                cursor.close()
+                            except Exception:
+                                pass
+                            conn.close()
+
+                except Exception as e:
+                    error_message = f"Error fetching order: {str(e)}"
+
+        elif action == "verify":
+            # Save verification record
+            order_number = request.form.get("order_number")
+            tracking_number = request.form.get("tracking_number", "")
+            shopify_order_id = request.form.get("shopify_order_id")
+            total_items = int(request.form.get("total_items", 0))
+            notes = request.form.get("notes", "").strip()
+
+            # Count how many items were checked
+            items_checked = 0
+            for key in request.form:
+                if key.startswith("item_"):
+                    items_checked += 1
+
+            conn = get_mysql_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO order_verifications
+                    (order_number, tracking_number, shopify_order_id, verified_at, items_checked, total_items, notes)
+                    VALUES (%s, %s, %s, NOW(), %s, %s, %s)
+                """, (order_number, tracking_number or None, shopify_order_id, items_checked, total_items, notes or None))
+                conn.commit()
+
+                flash(f"✅ Order #{order_number} verified! {items_checked}/{total_items} items checked.", "success")
+                return redirect(url_for("pick_and_pack"))
+
+            except Exception as e:
+                flash(f"Error saving verification: {str(e)}", "error")
+            finally:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+                conn.close()
+
+    return render_template_string(
+        PICK_AND_PACK_TEMPLATE,
+        order_data=order_data,
+        error_message=error_message,
+        already_verified=already_verified,
+        search_identifier=search_identifier,
+        shop_url=SHOP_URL,
+        version=__version__
+    )
 
 
 if __name__ == "__main__":

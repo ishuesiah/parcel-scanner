@@ -187,3 +187,107 @@ class ShopifyAPI:
 
     def clear_cache(self):
         self._order_cache.clear()
+
+    def get_order_details_for_verification(self, identifier: str) -> Optional[Dict[str, Any]]:
+        """
+        Get full order details including line items for verification.
+        First tries to find by tracking number, then by order number.
+
+        Args:
+            identifier: Either a tracking number or order number
+
+        Returns:
+            Dict with order details and line items, or None if not found
+        """
+        try:
+            # First, try to find by tracking number
+            params = {
+                "fulfillment_status": "any",
+                "status": "any",
+                "limit": 250,
+                "fields": "id,order_number,name,customer,line_items,fulfillments"
+            }
+            created_at_min = (datetime.now() - timedelta(days=90)).isoformat()
+            params["created_at_min"] = created_at_min
+
+            # Search through orders with fulfillments for tracking number
+            for order in self._get_paginated_orders(params):
+                fulfillments = order.get("fulfillments", [])
+                for f in fulfillments:
+                    if f.get("tracking_number") == identifier:
+                        return self._format_order_for_verification(order, f.get("tracking_number"))
+
+            # If not found by tracking, try by order number
+            # Order number could be numeric (#1234) or string (1234)
+            clean_identifier = identifier.lstrip('#')
+
+            params = {
+                "name": clean_identifier,  # Shopify uses 'name' field for order number
+                "status": "any",
+                "limit": 1,
+                "fields": "id,order_number,name,customer,line_items,fulfillments"
+            }
+
+            response, _ = self._make_request("orders.json", params=params)
+            if response and "orders" in response and response["orders"]:
+                order = response["orders"][0]
+                # Get tracking number from first fulfillment if available
+                tracking = None
+                fulfillments = order.get("fulfillments", [])
+                if fulfillments:
+                    tracking = fulfillments[0].get("tracking_number")
+                return self._format_order_for_verification(order, tracking)
+
+            return None
+
+        except Exception as e:
+            print(f"Error fetching order details: {e}")
+            return None
+
+    def _format_order_for_verification(self, order: Dict, tracking_number: Optional[str] = None) -> Dict[str, Any]:
+        """Format order data for verification page display."""
+        cust = order.get("customer", {}) or {}
+        line_items = order.get("line_items", [])
+
+        # Format line items with cleaned up properties
+        formatted_items = []
+        for item in line_items:
+            # Clean up variant title (remove "Default Title" if it's the only variant)
+            variant_title = item.get("variant_title", "")
+            if variant_title == "Default Title":
+                variant_title = ""
+
+            # Parse properties and format nicely
+            properties = item.get("properties", [])
+            formatted_properties = []
+            if properties:
+                for prop in properties:
+                    name = prop.get("name", "")
+                    value = prop.get("value", "")
+                    if name and value and not name.startswith("_"):  # Skip hidden properties
+                        formatted_properties.append(f"{name}: {value}")
+
+            formatted_items.append({
+                "id": item.get("id"),
+                "name": item.get("name", ""),
+                "sku": item.get("sku", "N/A"),
+                "quantity": item.get("quantity", 1),
+                "variant_title": variant_title,
+                "properties": formatted_properties,
+                "product_id": item.get("product_id"),
+                "variant_id": item.get("variant_id")
+            })
+
+        return {
+            "order_number": str(order.get("order_number", "N/A")),
+            "order_name": order.get("name", ""),  # e.g., "#1234"
+            "shopify_order_id": str(order.get("id", "")),
+            "customer_name": (
+                f"{cust.get('first_name','')} {cust.get('last_name','')}".strip()
+                or "N/A"
+            ),
+            "customer_email": cust.get("email", ""),
+            "tracking_number": tracking_number,
+            "line_items": formatted_items,
+            "total_items": sum(item.get("quantity", 1) for item in line_items)
+        }
