@@ -4,16 +4,17 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
-venv/
-ENV/
 *.egg-info/
 dist/
 build/
 
-# Environment variables
+# Environment
 .env
 .env.local
+.venv
+env/
+venv/
+ENV/
 
 # IDE
 .vscode/

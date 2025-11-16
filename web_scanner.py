@@ -56,17 +56,36 @@ INACTIVITY_TIMEOUT = 30 * 60
 # ── MySQL connection pool ──
 db_pool = mysql.connector.pooling.MySQLConnectionPool(
     pool_name="flask_pool",
-    pool_size=5,
+    pool_size=15,  # Increased from 5 to 15 to handle concurrent scans + background threads
     pool_reset_session=True,
     host=os.environ["MYSQL_HOST"],
     port=int(os.environ.get("MYSQL_PORT", 30603)),
     user=os.environ["MYSQL_USER"],
     password=os.environ["MYSQL_PASSWORD"],
     database=os.environ["MYSQL_DATABASE"],
+    connection_timeout=10,  # 10 second timeout for getting a connection from pool
+    autocommit=False,  # Explicit transaction control
 )
 
 def get_mysql_connection():
-    return db_pool.get_connection()
+    """
+    Get a connection from the pool with retry logic for pool exhaustion.
+    """
+    max_retries = 3
+    for retry in range(max_retries):
+        try:
+            return db_pool.get_connection()
+        except mysql.connector.errors.PoolError as e:
+            if retry < max_retries - 1:
+                wait = 0.5 * (retry + 1)  # 0.5s, 1s, 1.5s
+                print(f"Connection pool exhausted, retry {retry + 1}/{max_retries} after {wait}s: {e}")
+                time.sleep(wait)
+            else:
+                print(f"Failed to get database connection after {max_retries} retries")
+                raise
+        except Exception as e:
+            print(f"Database connection error: {e}")
+            raise
 
 # Read shop URL for building admin links
 SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
@@ -430,13 +449,37 @@ MAIN_TEMPLATE = r'''
             <h2>Batch #{{ current_batch.id }} ({{ current_batch.carrier }})</h2>
             <p><em>Created: {{ current_batch.created_at }}</em></p>
             <p>Scans in batch: <strong id="scan-count">{{ scans|length }}</strong></p>
+            {% set batch_status = current_batch.get('status', 'in_progress') %}
+            <p style="margin-top: 8px;">
+              <strong>Status:</strong>
+              {% if batch_status == 'notified' %}
+                <span style="color: #27ae60;">✉ Notified</span>
+              {% elif batch_status == 'recorded' %}
+                <span style="color: #f39c12;">✓ Picked Up (Ready to notify)</span>
+              {% else %}
+                <span style="color: #666;">⏳ In Progress</span>
+              {% endif %}
+            </p>
             <p style="font-size: 0.85rem; color: #666; margin-top: 4px;">
               💡 Tip: Order details load in background. Refresh page to see updated info.
             </p>
           </div>
           <div class="batch-actions">
-            <a href="#" onclick="return confirmCancelBatch();">Cancel This Batch</a>
+            <form action="{{ url_for('finish_batch') }}" method="post" style="margin: 0; display: inline;">
+              <button type="submit" class="btn btn-new" style="padding: 6px 12px; font-size: 0.85rem;">Finish & Start New</button>
+            </form>
+            <a href="#" onclick="return confirmCancelBatch();" style="margin-left: 12px;">Cancel This Batch</a>
           </div>
+        </div>
+
+        <!-- Batch Notes -->
+        <div class="scan-section" style="margin-bottom: 12px;">
+          <form action="{{ url_for('save_batch_notes') }}" method="post">
+            <label for="batch_notes"><strong>Batch Notes:</strong></label><br>
+            <textarea name="notes" id="batch_notes" rows="2" style="width: 100%; max-width: 600px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; font-size: 0.95rem; margin-top: 4px;">{{ current_batch.get('notes', '') }}</textarea>
+            <br>
+            <button type="submit" class="btn btn-new" style="margin-top: 8px;">Save Notes</button>
+          </form>
         </div>
 
         <!-- Scan form with async capability -->
@@ -460,10 +503,21 @@ MAIN_TEMPLATE = r'''
             <form action="{{ url_for('delete_scans') }}" method="post" id="delete-form" style="margin: 0;">
               <button type="submit" class="btn btn-delete" id="delete-btn">Delete Selected</button>
             </form>
-            <button type="button" class="btn btn-new" onclick="window.location.reload()">Save</button>
-            <form action="{{ url_for('record_batch') }}" method="post" style="margin: 0;">
-              <button type="submit" class="btn btn-batch">Record Carrier Pick-up</button>
-            </form>
+            <button type="button" class="btn btn-new" onclick="window.location.reload()">Refresh</button>
+            <button type="button" class="btn btn-new" onclick="saveBatch()">Save</button>
+            {% if batch_status == 'notified' %}
+              <form action="{{ url_for('notify_customers') }}" method="post" style="margin: 0;">
+                <button type="submit" class="btn btn-new">Resend Notifications</button>
+              </form>
+            {% elif batch_status == 'recorded' %}
+              <form action="{{ url_for('notify_customers') }}" method="post" style="margin: 0;">
+                <button type="submit" class="btn btn-batch">✉ Notify Customers</button>
+              </form>
+            {% else %}
+              <form action="{{ url_for('record_batch') }}" method="post" style="margin: 0;">
+                <button type="submit" class="btn btn-batch">✓ Mark as Picked Up</button>
+              </form>
+            {% endif %}
           </div>
         </div>
 
@@ -542,8 +596,21 @@ MAIN_TEMPLATE = r'''
       autoRefreshInterval = setInterval(async function() {
         try {
           const response = await fetch('{{ url_for("get_batch_updates", batch_id=current_batch.id) }}');
+
+          // Check if response is OK and is JSON
+          if (!response.ok) {
+            console.error('Auto-refresh HTTP error:', response.status);
+            return;
+          }
+
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            console.error('Auto-refresh returned non-JSON response:', contentType);
+            return;
+          }
+
           const data = await response.json();
-          
+
           if (data.success && data.scans) {
             // Update each row with new data
             data.scans.forEach(scan => {
@@ -621,6 +688,7 @@ MAIN_TEMPLATE = r'''
 
     // ── Async scanning functionality ──
     {% if current_batch %}
+    // Declare all DOM element references first
     const scanForm = document.getElementById('scan-form');
     const codeInput = document.getElementById('code');
     const scanBtn = document.getElementById('scan-btn');
@@ -629,6 +697,41 @@ MAIN_TEMPLATE = r'''
     const scansTable = document.getElementById('scans-tbody');
     const scanCount = document.getElementById('scan-count');
     const shopUrl = '{{ shop_url }}';
+
+    // Initialize success sound
+    const successSound = new Audio('{{ url_for("static", filename="scan-success.mp3") }}');
+    successSound.volume = 0.5; // Set volume to 50%
+
+    // ── Periodic focus restoration ──
+    // Ensure focus is set on page load (with small delay to ensure DOM is ready)
+    setTimeout(function() {
+      if (codeInput) codeInput.focus();
+    }, 100);
+
+    // Restore focus to tracking input every 3 seconds if user hasn't focused elsewhere
+    setInterval(function() {
+      if (!codeInput || document.hidden) return;
+
+      const activeElement = document.activeElement;
+
+      // Only restore focus if active element is body or non-interactive element
+      // This allows users to interact with buttons, links, checkboxes, etc.
+      const isInteractiveElement = activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.tagName === 'SELECT' ||
+        activeElement.tagName === 'BUTTON' ||
+        activeElement.tagName === 'A' ||
+        activeElement.isContentEditable
+      );
+
+      // Restore focus only if not interacting with anything else
+      if (!isInteractiveElement || activeElement === document.body) {
+        codeInput.focus();
+      }
+    }, 3000); // Every 3 seconds
+
+    // ── Form submission handler ──
 
     scanForm.addEventListener('submit', async function(e) {
       e.preventDefault();
@@ -655,9 +758,26 @@ MAIN_TEMPLATE = r'''
           body: formData
         });
 
+        // Check if response is JSON before parsing
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          scanStatus.textContent = 'Server error - received non-JSON response';
+          scanStatus.className = 'scan-status error show';
+          console.error('Scan returned non-JSON response:', contentType);
+          return;
+        }
+
         const data = await response.json();
 
         if (data.success) {
+          // Play success sound
+          try {
+            successSound.currentTime = 0; // Reset to start
+            successSound.play().catch(e => console.log('Could not play sound:', e));
+          } catch (e) {
+            console.log('Sound play error:', e);
+          }
+
           // Show success message
           scanStatus.textContent = data.message + ' (Details loading in background...)';
           scanStatus.className = 'scan-status success show';
@@ -677,12 +797,19 @@ MAIN_TEMPLATE = r'''
             scanStatus.classList.remove('show');
           }, 1500);
         } else {
+          // Don't play sound on errors (including carrier mismatch)
           scanStatus.textContent = 'Error: ' + data.error;
           scanStatus.className = 'scan-status error show';
         }
       } catch (error) {
-        scanStatus.textContent = 'Error: ' + error.message;
+        let errorMsg = error.message;
+        if (error instanceof SyntaxError) {
+          // JSON parse error
+          errorMsg = 'Server returned invalid response (not JSON)';
+        }
+        scanStatus.textContent = 'Error: ' + errorMsg;
         scanStatus.className = 'scan-status error show';
+        console.error('Scan error:', error);
       } finally {
         // Hide spinner and keep button enabled
         scanSpinner.style.display = 'none';
@@ -764,6 +891,12 @@ MAIN_TEMPLATE = r'''
         window.location.href = '{{ url_for("cancel_batch") }}';
       }
       return false;
+    }
+
+    // ── Save batch ──
+    function saveBatch() {
+      // Just reload the page to save current state
+      window.location.reload();
     }
 
     // ── Auto-dismiss flash messages ──
@@ -913,7 +1046,7 @@ ALL_BATCHES_TEMPLATE = r'''
             <th>Carrier</th>
             <th>Created At</th>
             <th>Pkg Count</th>
-            <th>Tracking Numbers</th>
+            <th>Status</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -928,8 +1061,15 @@ ALL_BATCHES_TEMPLATE = r'''
               <td>{{ b.carrier }}</td>
               <td>{{ b.created_at }}</td>
               <td>{{ b.pkg_count }}</td>
-              <td style="max-width: 400px; word-break: break-word;">
-                {{ b.tracking_numbers }}
+              <td>
+                {% set batch_status = b.get('status', 'in_progress') %}
+                {% if batch_status == 'notified' %}
+                  <span style="color: #27ae60; font-weight: 500;">✉ Notified</span>
+                {% elif batch_status == 'recorded' %}
+                  <span style="color: #f39c12; font-weight: 500;">✓ Picked Up</span>
+                {% else %}
+                  <span style="color: #666;">⏳ In Progress</span>
+                {% endif %}
               </td>
               <td>
                 <form action="{{ url_for('delete_batch') }}" method="post" style="display: inline;"
@@ -1335,7 +1475,7 @@ def index():
 
         # Fetch batch metadata
         cursor.execute("""
-          SELECT id, created_at, carrier
+          SELECT id, created_at, carrier, status, notes
             FROM batches
            WHERE id = %s
         """, (batch_id,))
@@ -1483,53 +1623,96 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
     This runs AFTER the response is sent to user, so scanning can continue immediately.
     """
     import threading
-    time.sleep(0.1)  # Small delay to ensure response is sent first
+    # No delay needed - response is already sent before thread starts
 
     # Initialize with defaults (will be used if APIs fail)
     order_number = "N/A"
     customer_name = "Not Found"
     order_id = ""
-    scan_carrier = batch_carrier
     customer_email = ""
+    scan_carrier = batch_carrier
 
     conn = None
     try:
         conn = get_mysql_connection()
 
-        # ── ShipStation lookup ──
+        # ── ShipStation lookup with retry logic ──
         shipstation_found = False
-        try:
-            if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
-                url = f"https://ssapi.shipstation.com/shipments?trackingNumber={tracking_number}"
-                resp = requests.get(
-                    url,
-                    auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-                    headers={"Accept": "application/json"},
-                    timeout=6
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                shipments = data.get("shipments", [])
+        if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+            max_retries = 4
+            for retry in range(max_retries):
+                try:
+                    url = f"https://ssapi.shipstation.com/shipments?trackingNumber={tracking_number}"
+                    resp = requests.get(
+                        url,
+                        auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                        headers={"Accept": "application/json"},
+                        timeout=12  # Increased from 6 to 12 seconds
+                    )
 
-                if shipments:
-                    shipstation_found = True
-                    first = shipments[0]
-                    order_number = first.get("orderNumber", "N/A")
-                    ship_to = first.get("shipTo", {})
-                    customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
-                    carrier_code = first.get("carrierCode", "").lower()
+                    # Handle 503 and other 5xx errors with retry
+                    if resp.status_code == 503 or (500 <= resp.status_code < 600):
+                        wait = min(2 ** retry, 8)
+                        print(f"ShipStation {resp.status_code} error for {tracking_number}, retry {retry + 1}/{max_retries} after {wait}s")
+                        if retry < max_retries - 1:
+                            time.sleep(wait)
+                            continue
+                        else:
+                            break
 
-                    carrier_map = {
-                        "ups": "UPS",
-                        "canadapost": "Canada Post",
-                        "canada_post": "Canada Post",
-                        "dhl": "DHL",
-                        "dhl_express": "DHL",
-                        "purolator": "Purolator",
-                    }
-                    scan_carrier = carrier_map.get(carrier_code, batch_carrier)
-        except Exception as e:
-            print(f"ShipStation error for {tracking_number}: {e}")
+                    resp.raise_for_status()
+
+                    # Validate response is JSON before parsing
+                    content_type = resp.headers.get('Content-Type', '')
+                    if 'application/json' not in content_type:
+                        print(f"ShipStation returned non-JSON response for {tracking_number}. Content-Type: {content_type}")
+                        print(f"Response preview: {resp.text[:200]}")
+                        break  # Exit retry loop, use defaults
+
+                    try:
+                        data = resp.json()
+                    except ValueError as e:
+                        print(f"ShipStation JSON parse error for {tracking_number}: {e}")
+                        print(f"Response preview: {resp.text[:200]}")
+                        break  # Exit retry loop, use defaults
+
+                    shipments = data.get("shipments", [])
+
+                    if shipments:
+                        shipstation_found = True
+                        first = shipments[0]
+                        order_number = first.get("orderNumber", "N/A")
+                        ship_to = first.get("shipTo", {})
+                        customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
+                        carrier_code = first.get("carrierCode", "").lower()
+
+                        carrier_map = {
+                            "ups": "UPS",
+                            "canadapost": "Canada Post",
+                            "canada_post": "Canada Post",
+                            "dhl": "DHL",
+                            "dhl_express": "DHL",
+                            "purolator": "Purolator",
+                        }
+                        scan_carrier = carrier_map.get(carrier_code, batch_carrier)
+                    break  # Success, exit retry loop
+
+                except requests.exceptions.Timeout as e:
+                    wait = min(2 ** retry, 8)
+                    print(f"ShipStation timeout for {tracking_number}, retry {retry + 1}/{max_retries} after {wait}s: {e}")
+                    if retry < max_retries - 1:
+                        time.sleep(wait)
+                    else:
+                        print(f"ShipStation failed after {max_retries} retries for {tracking_number}")
+
+                except Exception as e:
+                    wait = min(2 ** retry, 8)
+                    print(f"ShipStation error for {tracking_number}, retry {retry + 1}/{max_retries}: {e}")
+                    if retry < max_retries - 1:
+                        time.sleep(wait)
+                    else:
+                        print(f"ShipStation failed after {max_retries} retries for {tracking_number}")
+                    break
 
         # ── Shopify lookup ──
         shopify_found = False
@@ -1543,8 +1726,13 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 customer_name = shopify_info.get("customer_name", customer_name)
                 customer_email = shopify_info.get("customer_email", "")
                 order_id = shopify_info.get("order_id", order_id)
+                print(f"Shopify lookup successful for {tracking_number}: order {order_number}")
+            else:
+                print(f"Shopify lookup found no order for {tracking_number}")
         except Exception as e:
             print(f"Shopify error for {tracking_number}: {e}")
+            import traceback
+            traceback.print_exc()
 
         # ── Fallback carrier detection ──
         if not scan_carrier or scan_carrier == "":
@@ -1578,10 +1766,11 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 order_number = %s,
                 customer_name = %s,
                 order_id = %s,
+                customer_email = %s,
                 status = 'Complete'
             WHERE id = %s
             """,
-            (scan_carrier, order_number, customer_name, order_id, scan_id)
+            (scan_carrier, order_number, customer_name, order_id, customer_email, scan_id)
         )
         conn.commit()
         cursor.close()
@@ -1652,6 +1841,29 @@ def scan():
         elif batch_carrier == "Purolator":
             if len(code) == 34:
                 code = code[11:-11]
+
+        # ── Validate carrier before processing ──
+        # Detect carrier from tracking number format
+        detected_carrier = None
+        if code.startswith("1Z"):
+            detected_carrier = "UPS"
+        elif len(code) == 12 and code.isdigit():
+            detected_carrier = "Purolator"
+        elif len(code) == 10 and code.isdigit():
+            detected_carrier = "DHL"
+        elif code.startswith("2016"):
+            detected_carrier = "Canada Post"
+        elif code.startswith("LA") or len(code) == 30:
+            detected_carrier = "USPS"
+
+        # Reject if carrier doesn't match batch carrier
+        if detected_carrier and detected_carrier != batch_carrier:
+            error_msg = f"Not a {batch_carrier} label, please try again. (Detected: {detected_carrier})"
+            print(f"Carrier mismatch: expected {batch_carrier}, got {detected_carrier} for code {code}")
+            if is_ajax:
+                return jsonify({"success": False, "error": error_msg, "carrier_mismatch": True}), 400
+            flash(error_msg, "error")
+            return redirect(url_for("index"))
 
         # ─────────────────────────────────────────────────────────────────
         # ✨ NEW: Check for duplicate across ALL BATCHES in the database
@@ -1775,13 +1987,34 @@ def scan():
                 flash(f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})", "success")
             return redirect(url_for("index"))
 
-    except Exception as e:
+    except mysql.connector.errors.PoolError as e:
+        error_msg = "Database connection pool exhausted - please wait a moment and try again"
+        print(f"Pool exhaustion during scan: {e}")
         if is_ajax:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": error_msg}), 503
+        flash(error_msg, "error")
+        return redirect(url_for("index"))
+    except mysql.connector.Error as e:
+        error_msg = f"Database error: {e}"
+        print(f"MySQL error during scan: {e}")
+        if is_ajax:
+            return jsonify({"success": False, "error": "Database temporarily unavailable"}), 503
+        flash("Database temporarily unavailable, please try again", "error")
+        return redirect(url_for("index"))
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Unexpected error during scan: {e}")
+        import traceback
+        traceback.print_exc()
+        if is_ajax:
+            return jsonify({"success": False, "error": error_msg}), 500
         flash(f"Error processing scan: {e}", "error")
         return redirect(url_for("index"))
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass  # Connection might already be closed or not exist
 
 
 @app.route("/delete_scans", methods=["POST"])
@@ -1796,7 +2029,15 @@ def delete_scans():
         flash("No scans selected for deletion.", "error")
         return redirect(url_for("index"))
 
-    conn = get_mysql_connection()
+    try:
+        conn = get_mysql_connection()
+    except mysql.connector.errors.PoolError:
+        flash("Database connection pool busy - please wait a moment and try again", "error")
+        return redirect(url_for("index"))
+    except Exception as e:
+        flash(f"Database connection error: {e}", "error")
+        return redirect(url_for("index"))
+
     try:
         cursor = conn.cursor()
         placeholders = ",".join(["%s"] * len(scan_ids))
@@ -1807,14 +2048,22 @@ def delete_scans():
         flash(f"Deleted {len(scan_ids)} scan(s).", "success")
         return redirect(url_for("index"))
     except mysql.connector.Error as e:
-        flash(f"MySQL Error: {e}", "error")
+        print(f"MySQL error during delete: {e}")
+        flash("Database temporarily unavailable - delete failed, please try again", "error")
+        return redirect(url_for("index"))
+    except Exception as e:
+        print(f"Error deleting scans: {e}")
+        flash(f"Error: {e}", "error")
         return redirect(url_for("index"))
     finally:
         try:
             cursor.close()
         except Exception:
             pass
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.route("/delete_scan", methods=["POST"])
@@ -1824,27 +2073,42 @@ def delete_scan():
         flash("No scan specified for deletion.", "error")
         return redirect(url_for("all_scans"))
 
-    conn = get_mysql_connection()
+    try:
+        conn = get_mysql_connection()
+    except mysql.connector.errors.PoolError:
+        flash("Database connection pool busy - please wait a moment and try again", "error")
+        return redirect(url_for("all_scans"))
+    except Exception as e:
+        flash(f"Database connection error: {e}", "error")
+        return redirect(url_for("all_scans"))
+
     try:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM scans WHERE id = %s", (scan_id,))
         conn.commit()
         flash(f"Deleted scan #{scan_id}.", "success")
     except mysql.connector.Error as e:
-        flash(f"MySQL Error: {e}", "error")
+        print(f"MySQL error during delete: {e}")
+        flash("Database temporarily unavailable - delete failed, please try again", "error")
+    except Exception as e:
+        print(f"Error deleting scan: {e}")
+        flash(f"Error: {e}", "error")
     finally:
         try:
             cursor.close()
         except Exception:
             pass
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     return redirect(url_for("all_scans"))
 
 
 @app.route("/record_batch", methods=["POST"])
 def record_batch():
-    batch_id = session.pop("batch_id", None)
+    batch_id = session.get("batch_id")
     if not batch_id:
         flash("No batch open.", "error")
         return redirect(url_for("index"))
@@ -1865,11 +2129,14 @@ def record_batch():
         cursor.execute("""
           UPDATE batches
              SET pkg_count = %s,
-                 tracking_numbers = %s
+                 tracking_numbers = %s,
+                 status = 'recorded'
            WHERE id = %s
         """, (pkg_count, tracking_csv, batch_id))
         conn.commit()
-        flash(f"Batch #{batch_id} recorded with {pkg_count} parcel(s).", "success")
+
+        # Keep session for immediate notification, but allow viewing from batches page
+        flash(f"✓ Batch #{batch_id} marked as picked up ({pkg_count} parcels). Ready to notify customers.", "success")
         return redirect(url_for("index"))
     except mysql.connector.Error as e:
         flash(f"MySQL Error: {e}", "error")
@@ -1880,6 +2147,205 @@ def record_batch():
         except Exception:
             pass
         conn.close()
+
+
+@app.route("/finish_batch", methods=["POST"])
+def finish_batch():
+    """
+    Finish the current batch and clear session so user can create a new batch.
+    """
+    batch_id = session.pop("batch_id", None)
+    if batch_id:
+        flash(f"Batch #{batch_id} finished. You can now create a new batch.", "success")
+    return redirect(url_for("index"))
+
+
+@app.route("/save_batch_notes", methods=["POST"])
+def save_batch_notes():
+    """
+    Save notes for the current batch.
+    """
+    batch_id = session.get("batch_id")
+    if not batch_id:
+        flash("No batch open.", "error")
+        return redirect(url_for("index"))
+
+    notes = request.form.get("notes", "").strip()
+
+    try:
+        conn = get_mysql_connection()
+    except Exception as e:
+        flash(f"Database connection error: {e}", "error")
+        return redirect(url_for("index"))
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE batches SET notes = %s WHERE id = %s", (notes, batch_id))
+        conn.commit()
+        flash("Notes saved successfully.", "success")
+    except mysql.connector.Error as e:
+        flash(f"Error saving notes: {e}", "error")
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return redirect(url_for("index"))
+
+
+@app.route("/notify_customers", methods=["POST"])
+def notify_customers():
+    """
+    Send Klaviyo notifications to customers for all orders in the batch.
+    Only notifies each order number once (prevents duplicate notifications).
+    """
+    batch_id = session.get("batch_id")
+    if not batch_id:
+        flash("No batch open.", "error")
+        return redirect(url_for("index"))
+
+    try:
+        conn = get_mysql_connection()
+    except Exception as e:
+        flash(f"Database connection error: {e}", "error")
+        return redirect(url_for("index"))
+
+    try:
+        cursor = conn.cursor(dictionary=True)
+
+        # Get batch info
+        cursor.execute("SELECT carrier, status FROM batches WHERE id = %s", (batch_id,))
+        batch = cursor.fetchone()
+        if not batch:
+            flash("Batch not found.", "error")
+            return redirect(url_for("index"))
+
+        carrier = batch['carrier']
+        batch_status = batch.get('status', 'in_progress')
+
+        # Check if batch is recorded
+        if batch_status != 'recorded' and batch_status != 'notified':
+            flash("Please mark the batch as picked up first.", "warning")
+            return redirect(url_for("index"))
+
+        # Get all scans with customer emails
+        cursor.execute("""
+            SELECT DISTINCT
+                order_number,
+                customer_email,
+                customer_name,
+                tracking_number
+            FROM scans
+            WHERE batch_id = %s
+              AND order_number != 'N/A'
+              AND order_number != 'Processing...'
+              AND customer_email != ''
+              AND customer_email IS NOT NULL
+        """, (batch_id,))
+
+        scans = cursor.fetchall()
+
+        if not scans:
+            flash("No orders with email addresses found in this batch.", "warning")
+            return redirect(url_for("index"))
+
+        # Initialize Klaviyo API
+        try:
+            from klaviyo_api import KlaviyoAPI
+            klaviyo = KlaviyoAPI()
+        except Exception as e:
+            flash(f"Klaviyo API initialization failed: {e}", "error")
+            return redirect(url_for("index"))
+
+        # Track notifications
+        success_count = 0
+        skip_count = 0
+        error_count = 0
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for scan in scans:
+            order_number = scan['order_number']
+            customer_email = scan['customer_email']
+            tracking_number = scan['tracking_number']
+
+            # Check if this order was already notified (in ANY batch)
+            cursor.execute("""
+                SELECT id FROM notifications
+                WHERE order_number = %s
+                LIMIT 1
+            """, (order_number,))
+
+            if cursor.fetchone():
+                print(f"Skipping order {order_number} - already notified")
+                skip_count += 1
+                continue
+
+            # Send Klaviyo event
+            success = klaviyo.notify_order_shipped(
+                email=customer_email,
+                order_number=order_number,
+                tracking_number=tracking_number,
+                carrier=carrier
+            )
+
+            # Record notification attempt
+            try:
+                cursor.execute("""
+                    INSERT INTO notifications
+                        (batch_id, order_number, customer_email, tracking_number, notified_at, success, error_message)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (batch_id, order_number, customer_email, tracking_number, now, success, None if success else "Klaviyo API error"))
+                conn.commit()
+
+                if success:
+                    success_count += 1
+                else:
+                    error_count += 1
+            except mysql.connector.IntegrityError:
+                # Duplicate entry - order already notified
+                skip_count += 1
+                print(f"Order {order_number} already in notifications table")
+
+        # Update batch status to 'notified'
+        cursor.execute("""
+            UPDATE batches
+            SET status = 'notified', notified_at = %s
+            WHERE id = %s
+        """, (now, batch_id))
+        conn.commit()
+
+        # Build success message
+        message_parts = []
+        if success_count > 0:
+            message_parts.append(f"✉ {success_count} customer(s) notified")
+        if skip_count > 0:
+            message_parts.append(f"{skip_count} already notified")
+        if error_count > 0:
+            message_parts.append(f"{error_count} failed")
+
+        flash(" | ".join(message_parts), "success" if error_count == 0 else "warning")
+        return redirect(url_for("index"))
+
+    except Exception as e:
+        print(f"Error in notify_customers: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error sending notifications: {e}", "error")
+        return redirect(url_for("index"))
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.route("/all_batches", methods=["GET"])
