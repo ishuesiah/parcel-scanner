@@ -32,7 +32,10 @@ from flask import (
 )
 import mysql.connector
 from mysql.connector import pooling
-from datetime import datetime
+from datetime import datetime, timedelta
+import threading
+import csv
+import io
 
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 from klaviyo_events import KlaviyoEvents  # Klaviyo integration for event tracking
@@ -137,6 +140,144 @@ def get_ups_api():
     if _ups_api is None:
         _ups_api = UPSAPI()
     return _ups_api
+
+# ── Shipments Cache System ──
+def init_shipments_cache():
+    """
+    Initialize the shipments_cache table if it doesn't exist.
+    This table caches ShipStation shipment data for faster Check Shipments page loads.
+    """
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS shipments_cache (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                tracking_number VARCHAR(255) NOT NULL,
+                order_number VARCHAR(255),
+                customer_name VARCHAR(255),
+                carrier_code VARCHAR(50),
+                ship_date DATE,
+                shipstation_batch_number VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_tracking (tracking_number),
+                INDEX idx_ship_date (ship_date),
+                INDEX idx_order_number (order_number),
+                UNIQUE KEY unique_tracking (tracking_number)
+            )
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✓ Shipments cache table initialized")
+    except Exception as e:
+        print(f"❌ Error initializing shipments cache: {e}")
+
+# Initialize cache table on startup
+init_shipments_cache()
+
+def sync_shipments_from_shipstation():
+    """
+    Background sync function that pulls shipments from ShipStation and updates the cache.
+    Runs every 5 minutes in a background thread.
+    """
+    print("🔄 Starting shipments sync from ShipStation...")
+    try:
+        if not SHIPSTATION_API_KEY or not SHIPSTATION_API_SECRET:
+            print("⚠️ ShipStation credentials not configured, skipping sync")
+            return
+
+        start_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%dT%H:%M:%S")
+        page = 1
+        total_synced = 0
+
+        while True:
+            params = {
+                "shipDateStart": start_date,
+                "pageSize": 500,  # Max page size
+                "page": page,
+                "sortBy": "ShipDate",
+                "sortDir": "DESC"
+            }
+
+            response = requests.get(
+                "https://ssapi.shipstation.com/shipments",
+                auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                params=params,
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                print(f"❌ ShipStation sync error: {response.status_code}")
+                break
+
+            data = response.json()
+            shipments_data = data.get("shipments", [])
+
+            if not shipments_data:
+                break
+
+            # Batch insert/update into cache
+            conn = get_mysql_connection()
+            cursor = conn.cursor()
+
+            for ss_ship in shipments_data:
+                tracking_number = ss_ship.get("trackingNumber", "")
+                if not tracking_number:
+                    continue
+
+                order_number = ss_ship.get("orderNumber", "")
+                carrier_code = ss_ship.get("carrierCode", "").upper()
+                ship_date = ss_ship.get("shipDate", "")[:10]  # Just date part
+                shipstation_batch_number = ss_ship.get("batchNumber", "")
+
+                ship_to = ss_ship.get("shipTo", {})
+                customer_name = ship_to.get("name", "Unknown") if ship_to else "Unknown"
+
+                cursor.execute("""
+                    INSERT INTO shipments_cache
+                    (tracking_number, order_number, customer_name, carrier_code, ship_date, shipstation_batch_number)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        order_number = VALUES(order_number),
+                        customer_name = VALUES(customer_name),
+                        carrier_code = VALUES(carrier_code),
+                        ship_date = VALUES(ship_date),
+                        shipstation_batch_number = VALUES(shipstation_batch_number),
+                        updated_at = CURRENT_TIMESTAMP
+                """, (tracking_number, order_number, customer_name, carrier_code, ship_date, shipstation_batch_number))
+                total_synced += 1
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            print(f"✓ Synced page {page} ({len(shipments_data)} shipments)")
+
+            if page >= data.get("pages", 1):
+                break
+            page += 1
+
+        print(f"✅ Shipments sync complete! Total synced: {total_synced}")
+    except Exception as e:
+        print(f"❌ Error syncing shipments: {e}")
+
+def start_background_sync():
+    """
+    Start background thread that syncs shipments every 5 minutes.
+    """
+    def sync_loop():
+        while True:
+            sync_shipments_from_shipstation()
+            time.sleep(300)  # 5 minutes
+
+    thread = threading.Thread(target=sync_loop, daemon=True)
+    thread.start()
+    print("✓ Background shipments sync started (every 5 minutes)")
+
+# Start background sync on app startup
+start_background_sync()
 
 # ── Item Location Helpers ──
 def get_item_location(sku: str, item_name: str) -> str:
@@ -2223,6 +2364,12 @@ STUCK_ORDERS_TEMPLATE = r'''
           <p>No stuck orders found. All scans have customer information.</p>
         </div>
       {% else %}
+        <div style="margin-bottom: 16px;">
+          <button class="btn-fix" onclick="fixAllOrders()" id="fix-all-btn" style="font-size: 1rem; padding: 10px 20px;">
+            🔧 Fix All ({{ stuck_scans|length }} orders)
+          </button>
+          <span id="fix-all-status" style="margin-left: 12px; font-weight: 500;"></span>
+        </div>
         <table>
           <thead>
             <tr>
@@ -2338,6 +2485,60 @@ STUCK_ORDERS_TEMPLATE = r'''
         btn.textContent = 'Fix';
         row.classList.remove('fixing');
       }
+    }
+
+    async function fixAllOrders() {
+      const fixAllBtn = document.getElementById('fix-all-btn');
+      const statusSpan = document.getElementById('fix-all-status');
+      const rows = document.querySelectorAll('.stuck-row');
+
+      if (!confirm('Fix all stuck orders? This will attempt to fetch data for all ' + rows.length + ' orders.')) {
+        return;
+      }
+
+      fixAllBtn.disabled = true;
+      let fixed = 0;
+      let errors = 0;
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const scanId = row.id.replace('row-', '');
+        const tracking = document.getElementById('tracking-' + scanId).textContent;
+        const carrier = document.getElementById('carrier-' + scanId).textContent;
+
+        statusSpan.textContent = `Processing ${i + 1}/${rows.length}...`;
+
+        try {
+          const response = await fetch('/api/fix_order/' + scanId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tracking_number: tracking, carrier: carrier })
+          });
+
+          const result = await response.json();
+
+          if (result.success) {
+            row.style.backgroundColor = '#e0f7e9';
+            fixed++;
+          } else {
+            errors++;
+          }
+        } catch (error) {
+          errors++;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 200)); // Small delay between requests
+      }
+
+      statusSpan.textContent = `✅ Done! Fixed ${fixed}, Errors ${errors}`;
+
+      if (fixed > 0) {
+        setTimeout(() => {
+          window.location.reload();
+        }, 2000);
+      }
+
+      fixAllBtn.disabled = false;
     }
   </script>
 
@@ -4238,136 +4439,90 @@ def delete_location_rule():
 def check_shipments():
     """
     Check shipment status page.
-    Queries ShipStation for shipped orders, checks scan database, and queries UPS for tracking.
+    Pulls from cached shipments data, checks scan database, and queries UPS for tracking.
     Flags shipments that are stuck (label printed but not moving).
     """
     search_query = request.args.get("search", "").strip()
     page = int(request.args.get("page", 1))
     per_page = 50
 
-    if not SHIPSTATION_API_KEY or not SHIPSTATION_API_SECRET:
-        flash("ShipStation API credentials not configured.", "error")
-        return render_template_string(
-            CHECK_SHIPMENTS_TEMPLATE,
-            shipments=[],
-            search_query=search_query,
-            loading=False,
-            page=1,
-            total_pages=1,
-            total_shipments=0,
-            has_prev=False,
-            has_next=False,
-            prev_url="#",
-            next_url="#",
-            version=__version__
-        )
-
     try:
-        # Query ShipStation for shipped orders (last 120 days)
-        print(f"📦 Querying ShipStation for shipped orders (page {page})...")
+        # Query from cache instead of ShipStation API (much faster!)
+        print(f"📦 Querying shipments cache (page {page})...")
 
-        from datetime import timedelta
-        start_date = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%dT%H:%M:%S")
-
-        params = {
-            "shipDateStart": start_date,
-            "pageSize": per_page,
-            "page": page,
-            "sortBy": "ShipDate",
-            "sortDir": "DESC"
-        }
-
-        # Add search filter if provided
-        if search_query:
-            # Try to determine if it's an order number or tracking number
-            if search_query.isdigit():
-                params["orderNumber"] = search_query
-            else:
-                params["customerName"] = search_query
-
-        # Retry logic for rate limiting (429)
-        max_retries = 3
-        retry_delay = 2  # seconds
-        response = None
-
-        for attempt in range(max_retries):
-            response = requests.get(
-                "https://ssapi.shipstation.com/shipments",
-                auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-                params=params,
-                timeout=30
-            )
-
-            if response.status_code == 200:
-                break
-            elif response.status_code == 429:
-                if attempt < max_retries - 1:
-                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
-                    print(f"⚠️ Rate limited (429), retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
-                    time.sleep(wait_time)
-                else:
-                    flash("ShipStation API rate limit exceeded. Please wait a minute and try again.", "error")
-                    print(f"❌ ShipStation rate limit exceeded after {max_retries} attempts")
-            else:
-                flash(f"ShipStation API error: {response.status_code}", "error")
-                print(f"❌ ShipStation error: {response.status_code} - {response.text[:200]}")
-                break
-
-        if not response or response.status_code != 200:
-            return render_template_string(
-                CHECK_SHIPMENTS_TEMPLATE,
-                shipments=[],
-                search_query=search_query,
-                loading=False,
-                page=1,
-                total_pages=1,
-                total_shipments=0,
-                has_prev=False,
-                has_next=False,
-                prev_url="#",
-                next_url="#",
-                version=__version__
-            )
-
-        data = response.json()
-        total_shipments = data.get("total", 0)
-        total_pages = data.get("pages", 1)
-        shipments_data = data.get("shipments", [])
-
-        print(f"✓ Found {len(shipments_data)} shipments on page {page} of {total_pages} ({total_shipments} total)")
-
-        # Get scan data from our database
         conn = get_mysql_connection()
         cursor = conn.cursor(dictionary=True)
+
+        # Build search condition
+        search_condition = ""
+        search_params = []
+        if search_query:
+            search_condition = """
+                AND (
+                    sc.tracking_number LIKE %s
+                    OR sc.order_number LIKE %s
+                    OR sc.customer_name LIKE %s
+                )
+            """
+            search_like = f"%{search_query}%"
+            search_params = [search_like, search_like, search_like]
+
+        # Get total count for pagination
+        count_query = f"""
+            SELECT COUNT(*) as total
+            FROM shipments_cache sc
+            WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 120 DAY)
+            {search_condition}
+        """
+        cursor.execute(count_query, search_params)
+        total_shipments = cursor.fetchone()['total']
+        total_pages = max(1, (total_shipments + per_page - 1) // per_page)
+
+        # Get paginated shipments from cache
+        offset = (page - 1) * per_page
+        query = f"""
+            SELECT
+                sc.tracking_number,
+                sc.order_number,
+                sc.customer_name,
+                sc.carrier_code,
+                sc.ship_date,
+                sc.shipstation_batch_number,
+                s.scan_date
+            FROM shipments_cache sc
+            LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
+            WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 120 DAY)
+            {search_condition}
+            GROUP BY sc.tracking_number
+            ORDER BY sc.ship_date DESC
+            LIMIT %s OFFSET %s
+        """
+        cursor.execute(query, search_params + [per_page, offset])
+        cached_shipments = cursor.fetchall()
+
+        print(f"✓ Found {len(cached_shipments)} shipments on page {page} of {total_pages} ({total_shipments} total)")
 
         # Process each shipment
         shipments = []
         ups_api = get_ups_api()
 
-        for ss_ship in shipments_data:
-            tracking_number = ss_ship.get("trackingNumber", "")
-            order_number = ss_ship.get("orderNumber", "")
-            carrier_code = ss_ship.get("carrierCode", "").upper()
-            ship_date = ss_ship.get("shipDate", "")[:10]  # Just the date part
+        for cached_ship in cached_shipments:
+            tracking_number = cached_ship.get("tracking_number", "")
+            order_number = cached_ship.get("order_number", "")
+            carrier_code = cached_ship.get("carrier_code", "").upper()
+            ship_date = str(cached_ship.get("ship_date", ""))
+            customer_name = cached_ship.get("customer_name", "Unknown")
+            shipstation_batch = cached_ship.get("shipstation_batch_number", "")
 
-            # Get customer name
-            ship_to = ss_ship.get("shipTo", {})
-            customer_name = ship_to.get("name", "Unknown")
-
-            # Check if scanned in our database
-            cursor.execute(
-                "SELECT scan_date FROM scans WHERE tracking_number = %s ORDER BY scan_date DESC LIMIT 1",
-                (tracking_number,)
-            )
-            scan_record = cursor.fetchone()
-            scanned = scan_record is not None
+            # Check if scanned (from the LEFT JOIN)
+            scan_date_obj = cached_ship.get("scan_date")
+            scanned = scan_date_obj is not None
             scan_date = ""
-            if scan_record and scan_record.get("scan_date"):
-                scan_date_obj = scan_record.get("scan_date")
+            if scan_date_obj:
                 if isinstance(scan_date_obj, str):
-                    scan_date = scan_date_obj[:10]  # Already a string, just take date part
+                    scan_date = scan_date_obj[:10]
                 else:
-                    scan_date = scan_date_obj.strftime("%Y-%m-%d")  # Convert datetime to string
+                    scan_date = scan_date_obj.strftime("%Y-%m-%d")
 
             # Get UPS tracking status (only for UPS shipments)
             ups_status = "unknown"
@@ -4375,22 +4530,31 @@ def check_shipments():
             ups_last_activity = "—"
 
             if carrier_code == "UPS" and tracking_number:
-                ups_tracking = ups_api.get_tracking_status(tracking_number)
-                ups_status = ups_tracking.get("status", "unknown")
-                ups_status_text = ups_tracking.get("status_description", "Unknown")
-                ups_last_activity = ups_tracking.get("last_activity", "—")
+                try:
+                    ups_tracking = ups_api.get_tracking_status(tracking_number)
+                    ups_status = ups_tracking.get("status", "unknown")
+                    ups_status_text = ups_tracking.get("status_description", "Unknown")
+                    ups_last_activity = ups_tracking.get("last_activity", "—")
 
-                # Clean up status text
-                if ups_status == "label_created":
-                    ups_status_text = "Label Created"
-                elif ups_status == "in_transit":
-                    ups_status_text = "In Transit"
-                elif ups_status == "delivered":
-                    ups_status_text = "Delivered"
-                elif ups_status == "exception":
-                    ups_status_text = "Exception/Delay"
-                elif ups_status == "error":
-                    ups_status_text = "API Error"
+                    # Clean up status text
+                    if ups_status == "label_created":
+                        ups_status_text = "Label Created"
+                    elif ups_status == "in_transit":
+                        ups_status_text = "In Transit"
+                    elif ups_status == "delivered":
+                        ups_status_text = "Delivered"
+                    elif ups_status == "exception":
+                        ups_status_text = "Exception/Delay"
+                    elif ups_status == "error":
+                        # Don't show full error in UI, just log it
+                        ups_status = "unknown"
+                        ups_status_text = "—"
+                        print(f"⚠️ UPS error for {tracking_number}: {ups_tracking.get('error', 'Unknown error')}")
+                except Exception as e:
+                    # Non-blocking UPS errors
+                    print(f"⚠️ UPS exception for {tracking_number}: {e}")
+                    ups_status = "unknown"
+                    ups_status_text = "—"
 
             # Determine if shipment should be flagged
             flag = False
