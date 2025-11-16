@@ -188,63 +188,16 @@ LOGIN_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>Login – H&amp;O Parcel Scans</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
   <style>
-      @import url("https://d3a1s2k5oq9b60.cloudfront.net/WF-062340-d8eba8d3266ba707a7e48a89247d3873.css?fsf=22601");
-  @font-face {
-  font-family: "ABC Arizona Flare Regular";
-  src: url("Webfont-062340-003957-022601-e4892a18d562a49278782e582c6385b87590aea0.woff2") format("woff2"), url("Webfont-062340-003957-022601-6707a17205951254095bffe39e6cf21dc9435ddd.woff") format("woff");
-  }
-
-      @font-face {
-        font-family: 'Arizona Regular';
-        src: url("https://cdn.shopify.com/s/files/1/0280/1175/7703/files/Arizona_Flare_Light.woff2?v=1745606070") format("woff2");
-        font-weight: normal;
-        font-display: swap;
-      }
-
-      @font-face {
-        font-family: 'Arizona Italic';
-        src: url("https://cdn.shopify.com/s/files/1/0280/1175/7703/files/Webfont-062340-003957-022602-3d874fa6cd082c5453f60ea524707bf1a00ad7d7.woff2?v=1745605778") format("woff2");
-        font-weight: normal;
-        font-style: italic;
-        font-display: swap;
-      }
-          @font-face {
-          font-family: 'SprigSansRegular';
-          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-Regular.woff2?v=1724296405') format('woff2');
-          font-weight: 300;
-          font-style: normal;
-          font-display: swap;
-        }
-
-        @font-face {
-          font-family: 'SprigSansRegularItalic';
-          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-RegularItalic.woff2?v=1724296404') format('woff2');
-          font-weight: 400;
-          font-style: italic;
-          font-display: swap;
-        }
-
-        @font-face {
-          font-family: 'SprigSansMedium';
-          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-Bold.woff2?v=1724296404') format('woff2');
-          font-weight: 500;
-          font-style: normal;
-          font-display: swap;
-        }
-
-        @font-face {
-          font-family: 'SprigSansMediumItalic';
-          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-Sprig-MediumItalic.woff2?v=1724305674') format('woff2');
-          font-weight: 500;
-          font-style: italic;
-          font-display: swap;
-        }
     html, body {
       height: 100%;
       margin: 0;
-      font-family: "SprigSansRegular", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa;
+      font-family: "Figtree", sans-serif;
+      font-optical-sizing: auto;
+      background-color: #fbfaf5;
       color: #333;
       display: flex;
       align-items: center;
@@ -278,7 +231,7 @@ LOGIN_TEMPLATE = r'''
       margin: 0 auto;
       padding: 10px 0;
       font-size: 1rem;
-      background-color: #2d85f8;
+      background-color: #534bc4;
       color: #fff;
       border: none;
       border-radius: 4px;
@@ -323,13 +276,17 @@ MAIN_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>H&O Parcel Scans</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
   <style>
     /* Reset & Base */
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       height: 100%;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa;
+      font-family: "Figtree", sans-serif;
+      font-optical-sizing: auto;
+      background-color: #fbfaf5;
       color: #333;
     }
 
@@ -344,9 +301,9 @@ MAIN_TEMPLATE = r'''
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
     .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
     .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; text-decoration: none; }
+    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
     .sidebar .logout:hover { text-decoration: underline; }
 
     /* ── MAIN CONTENT ── */
@@ -355,8 +312,8 @@ MAIN_TEMPLATE = r'''
       padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid;
       animation: slideIn 0.3s ease-out;
     }
-    .flash.success { background-color: #e0f7e9; color: #2f7a45; border-color: #b2e6c2; }
-    .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
+    .flash.success { background-color: #e0f7e9; color: #199b76; border-color: #b2e6c2; }
+    .flash.error   { background-color: #fdecea; color: #952746; border-color: #f5c6cb; }
     .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
 
     @keyframes slideIn {
@@ -371,9 +328,9 @@ MAIN_TEMPLATE = r'''
       margin-top: 4px; margin-bottom: 12px; font-size: 0.95rem;
     }
     .btn { padding: 8px 12px; font-size: 0.9rem; border: none; border-radius: 4px; cursor: pointer; transition: all 0.2s; }
-    .btn-new { background-color: #2d85f8; color: white; }
-    .btn-delete { background-color: #e74c3c; color: white; }
-    .btn-batch { background-color: #27ae60; color: white; }
+    .btn-new { background-color: #534bc4; color: white; }
+    .btn-delete { background-color: #952746; color: white; }
+    .btn-batch { background-color: #199b76; color: white; }
     .btn:hover { opacity: 0.92; transform: translateY(-1px); }
     .btn:active { transform: translateY(0); }
     .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
@@ -398,17 +355,17 @@ MAIN_TEMPLATE = r'''
     }
     .scan-status.show { display: block; }
     .scan-status.processing { background-color: #fff4e5; color: #8a6100; border: 1px solid #ffe0b2; }
-    .scan-status.success { background-color: #e0f7e9; color: #2f7a45; border: 1px solid #b2e6c2; }
-    .scan-status.error { background-color: #fdecea; color: #a33a2f; border: 1px solid #f5c6cb; }
+    .scan-status.success { background-color: #e0f7e9; color: #199b76; border: 1px solid #b2e6c2; }
+    .scan-status.error { background-color: #fdecea; color: #952746; border: 1px solid #f5c6cb; }
 
     table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
     th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
-    th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
-    tr:nth-child(even) { background-color: #fafafa; }
+    th { background-color: #eeeee5; text-align: left; font-weight: 600; }
+    tr:nth-child(even) { background-color: #fbfaf5; }
     tr:hover { background-color: #f1f1f1; }
     .duplicate-row { background-color: #fdecea !important; }
     .duplicate-row:hover { background-color: #fbd5d0 !important; }
-    td a { color: #2d85f8; text-decoration: none; font-weight: 500; }
+    td a { color: #534bc4; text-decoration: none; font-weight: 500; }
     td a:hover { text-decoration: underline; }
     td input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
     
@@ -426,7 +383,7 @@ MAIN_TEMPLATE = r'''
     .batch-info h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 4px; }
     .batch-info p { color: #666; font-size: 0.9rem; margin: 2px 0; }
     .batch-actions { display: flex; gap: 12px; align-items: center; }
-    .batch-actions a { color: #e74c3c; text-decoration: none; font-size: 0.9rem; font-weight: 500; }
+    .batch-actions a { color: #952746; text-decoration: none; font-size: 0.9rem; font-weight: 500; }
     .batch-actions a:hover { text-decoration: underline; }
 
     /* Actions bar for delete */
@@ -448,7 +405,7 @@ MAIN_TEMPLATE = r'''
       width: 14px;
       height: 14px;
       border: 2px solid #f3f3f3;
-      border-top: 2px solid #2d85f8;
+      border-top: 2px solid #534bc4;
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
       margin-left: 8px;
@@ -520,7 +477,7 @@ MAIN_TEMPLATE = r'''
             <p style="margin-top: 8px;">
               <strong>Status:</strong>
               {% if batch_status == 'notified' %}
-                <span style="color: #27ae60;">✉ Notified</span>
+                <span style="color: #199b76;">✉ Notified</span>
               {% elif batch_status == 'recorded' %}
                 <span style="color: #f39c12;">✓ Picked Up (Ready to notify)</span>
               {% else %}
@@ -987,64 +944,15 @@ ALL_BATCHES_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>All Batches – H&O Parcel Scans</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
   <style>
-      @import url("https://d3a1s2k5oq9b60.cloudfront.net/WF-062340-d8eba8d3266ba707a7e48a89247d3873.css?fsf=22601");
-  @font-face {
-  font-family: "ABC Arizona Flare Regular";
-  src: url("Webfont-062340-003957-022601-e4892a18d562a49278782e582c6385b87590aea0.woff2") format("woff2"), url("Webfont-062340-003957-022601-6707a17205951254095bffe39e6cf21dc9435ddd.woff") format("woff");
-  }
-
-      @font-face {
-        font-family: 'Arizona Regular';
-        src: url("https://cdn.shopify.com/s/files/1/0280/1175/7703/files/Arizona_Flare_Light.woff2?v=1745606070") format("woff2");
-        font-weight: normal;
-        font-display: swap;
-      }
-
-      @font-face {
-        font-family: 'Arizona Italic';
-        src: url("https://cdn.shopify.com/s/files/1/0280/1175/7703/files/Webfont-062340-003957-022602-3d874fa6cd082c5453f60ea524707bf1a00ad7d7.woff2?v=1745605778") format("woff2");
-        font-weight: normal;
-        font-style: italic;
-        font-display: swap;
-      }
-          @font-face {
-          font-family: 'SprigSansRegular';
-          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-Regular.woff2?v=1724296405') format('woff2');
-          font-weight: 300;
-          font-style: normal;
-          font-display: swap;
-        }
-
-        @font-face {
-          font-family: 'SprigSansRegularItalic';
-          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-RegularItalic.woff2?v=1724296404') format('woff2');
-          font-weight: 400;
-          font-style: italic;
-          font-display: swap;
-        }
-
-        @font-face {
-          font-family: 'SprigSansMedium';
-          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-SprigSans-Bold.woff2?v=1724296404') format('woff2');
-          font-weight: 500;
-          font-style: normal;
-          font-display: swap;
-        }
-
-        @font-face {
-          font-family: 'SprigSansMediumItalic';
-          src: url('https://cdn.shopify.com/s/files/1/0280/1175/7703/files/FAIRE-Sprig-MediumItalic.woff2?v=1724305674') format('woff2');
-          font-weight: 500;
-          font-style: italic;
-          font-display: swap;
-        }
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+                                      * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       height: 100%;
-      font-family: "SprigSansRegular", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa; color: #333;
+      font-family: "Figtree", sans-serif;
+      background-color: #fbfaf5; color: #333;
     }
     .container { display: flex; height: 100vh; }
     .sidebar {
@@ -1054,27 +962,27 @@ ALL_BATCHES_TEMPLATE = r'''
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
     .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
     .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; text-decoration: none; }
+    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
     .sidebar .logout:hover { text-decoration: underline; }
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash {
       padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid;
     }
-    .flash.success { background-color: #e0f7e9; color: #2f7a45; border-color: #b2e6c2; }
-    .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
+    .flash.success { background-color: #e0f7e9; color: #199b76; border-color: #b2e6c2; }
+    .flash.error   { background-color: #fdecea; color: #952746; border-color: #f5c6cb; }
     .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
     h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
     table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
     th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
-    th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
-    tr:nth-child(even) { background-color: #fafafa; }
+    th { background-color: #eeeee5; text-align: left; font-weight: 600; }
+    tr:nth-child(even) { background-color: #fbfaf5; }
     tr:hover { background-color: #f1f1f1; }
     .batch-link { color: #2d85f8; text-decoration: none; font-weight: 500; }
     .batch-link:hover { text-decoration: underline; }
     .btn-delete-small {
-      padding: 4px 8px; font-size: 0.8rem; background-color: #e74c3c; color: #fff;
+      padding: 4px 8px; font-size: 0.8rem; background-color: #952746; color: #fff;
       border: none; border-radius: 4px; cursor: pointer;
     }
     .btn-delete-small:hover { opacity: 0.92; }
@@ -1133,7 +1041,7 @@ ALL_BATCHES_TEMPLATE = r'''
               <td>
                 {% set batch_status = b.get('status', 'in_progress') %}
                 {% if batch_status == 'notified' %}
-                  <span style="color: #27ae60; font-weight: 500;">✉ Notified</span>
+                  <span style="color: #199b76; font-weight: 500;">✉ Notified</span>
                 {% elif batch_status == 'recorded' %}
                   <span style="color: #f39c12; font-weight: 500;">✓ Picked Up</span>
                 {% else %}
@@ -1170,12 +1078,16 @@ BATCH_VIEW_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>Batch #{{ batch.id }} – H&O Parcel Scans</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       height: 100%;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa; color: #333;
+      font-family: "Figtree", sans-serif;
+      font-optical-sizing: auto;
+      background-color: #fbfaf5; color: #333;
     }
     .container { display: flex; height: 100vh; }
     .sidebar {
@@ -1185,16 +1097,16 @@ BATCH_VIEW_TEMPLATE = r'''
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
     .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
     .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; text-decoration: none; }
+    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
     .sidebar .logout:hover { text-decoration: underline; }
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash {
       padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid;
     }
-    .flash.success { background-color: #e0f7e9; color: #2f7a45; border-color: #b2e6c2; }
-    .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
+    .flash.success { background-color: #e0f7e9; color: #199b76; border-color: #b2e6c2; }
+    .flash.error   { background-color: #fdecea; color: #952746; border-color: #f5c6cb; }
     .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
     .batch-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
     .batch-header h2 { font-size: 1.5rem; color: #2c3e50; }
@@ -1204,11 +1116,11 @@ BATCH_VIEW_TEMPLATE = r'''
     h3 { color: #2c3e50; margin-top: 16px; margin-bottom: 8px; font-size: 1.25rem; }
     table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
     th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
-    th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
-    tr:nth-child(even) { background-color: #fafafa; }
+    th { background-color: #eeeee5; text-align: left; font-weight: 600; }
+    tr:nth-child(even) { background-color: #fbfaf5; }
     tr:hover { background-color: #f1f1f1; }
     .duplicate-row { background-color: #fdecea !important; }
-    td a { color: #2d85f8; text-decoration: none; font-weight: 500; }
+    td a { color: #534bc4; text-decoration: none; font-weight: 500; }
     td a:hover { text-decoration: underline; }
   </style>
 </head>
@@ -1320,12 +1232,16 @@ PICK_AND_PACK_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>Pick and Pack – H&O Parcel Scans</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       height: 100%;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa; color: #333;
+      font-family: "Figtree", sans-serif;
+      font-optical-sizing: auto;
+      background-color: #fbfaf5; color: #333;
     }
     .container { display: flex; height: 100vh; }
     .sidebar {
@@ -1335,15 +1251,15 @@ PICK_AND_PACK_TEMPLATE = r'''
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
     .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
     .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; text-decoration: none; }
+    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
     .sidebar .logout:hover { text-decoration: underline; }
 
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid; }
-    .flash.success { background-color: #e0f7e9; color: #2f7a45; border-color: #b2e6c2; }
-    .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
+    .flash.success { background-color: #e0f7e9; color: #199b76; border-color: #b2e6c2; }
+    .flash.error   { background-color: #fdecea; color: #952746; border-color: #f5c6cb; }
     .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
 
     h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
@@ -1419,18 +1335,18 @@ PICK_AND_PACK_TEMPLATE = r'''
     }
     .verify-form button {
       padding: 12px 24px; font-size: 16px; border: none; border-radius: 4px;
-      background-color: #27ae60; color: #fff; cursor: pointer; font-weight: 600;
+      background-color: #199b76; color: #fff; cursor: pointer; font-weight: 600;
     }
     .verify-form button:hover { opacity: 0.92; }
 
     .error-box {
-      background-color: #fdecea; border-left: 4px solid #e74c3c;
+      background-color: #fdecea; border-left: 4px solid #952746;
       padding: 16px; margin-bottom: 20px; border-radius: 4px;
     }
     .error-box p { color: #a33a2f; font-weight: 500; }
     .error-box button {
       margin-top: 12px; padding: 8px 16px; font-size: 14px; border: none;
-      border-radius: 4px; background-color: #e74c3c; color: #fff; cursor: pointer;
+      border-radius: 4px; background-color: #952746; color: #fff; cursor: pointer;
     }
     .error-box button:hover { opacity: 0.92; }
   </style>
@@ -1660,12 +1576,16 @@ ITEM_LOCATIONS_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>Item Locations – H&O Parcel Scans</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       height: 100%;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa; color: #333;
+      font-family: "Figtree", sans-serif;
+      font-optical-sizing: auto;
+      background-color: #fbfaf5; color: #333;
     }
     .container { display: flex; height: 100vh; }
     .sidebar {
@@ -1675,15 +1595,15 @@ ITEM_LOCATIONS_TEMPLATE = r'''
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
     .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
     .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; text-decoration: none; }
+    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
     .sidebar .logout:hover { text-decoration: underline; }
 
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid; }
-    .flash.success { background-color: #e0f7e9; color: #2f7a45; border-color: #b2e6c2; }
-    .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
+    .flash.success { background-color: #e0f7e9; color: #199b76; border-color: #b2e6c2; }
+    .flash.error   { background-color: #fdecea; color: #952746; border-color: #f5c6cb; }
 
     h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
 
@@ -1701,7 +1621,7 @@ ITEM_LOCATIONS_TEMPLATE = r'''
     .form-group.narrow { flex: 0 0 150px; }
     .add-btn {
       padding: 10px 24px; font-size: 14px; border: none; border-radius: 4px;
-      background-color: #27ae60; color: #fff; cursor: pointer; font-weight: 600;
+      background-color: #199b76; color: #fff; cursor: pointer; font-weight: 600;
     }
     .add-btn:hover { opacity: 0.92; }
 
@@ -1717,7 +1637,7 @@ ITEM_LOCATIONS_TEMPLATE = r'''
     .rule-type-sku { background-color: #d4edda; color: #155724; }
     .rule-type-keyword { background-color: #cce5ff; color: #004085; }
     .delete-btn {
-      padding: 6px 12px; font-size: 0.85rem; background-color: #e74c3c; color: #fff;
+      padding: 6px 12px; font-size: 0.85rem; background-color: #952746; color: #fff;
       border: none; border-radius: 4px; cursor: pointer;
     }
     .delete-btn:hover { opacity: 0.92; }
@@ -1841,12 +1761,16 @@ ALL_SCANS_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>All Scans – H&O Parcel Scans</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       height: 100%;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa; color: #333;
+      font-family: "Figtree", sans-serif;
+      font-optical-sizing: auto;
+      background-color: #fbfaf5; color: #333;
     }
     .container { display: flex; height: 100vh; }
     .sidebar {
@@ -1856,15 +1780,15 @@ ALL_SCANS_TEMPLATE = r'''
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
     .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
     .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; text-decoration: none; }
+    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
     .sidebar .logout:hover { text-decoration: underline; }
 
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid; }
-    .flash.success { background-color: #e0f7e9; color: #2f7a45; border-color: #b2e6c2; }
-    .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
+    .flash.success { background-color: #e0f7e9; color: #199b76; border-color: #b2e6c2; }
+    .flash.error   { background-color: #fdecea; color: #952746; border-color: #f5c6cb; }
     .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
 
     h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
@@ -1881,14 +1805,14 @@ ALL_SCANS_TEMPLATE = r'''
 
     table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
     th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
-    th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
-    tr:nth-child(even) { background-color: #fafafa; }
+    th { background-color: #eeeee5; text-align: left; font-weight: 600; }
+    tr:nth-child(even) { background-color: #fbfaf5; }
     tr:hover { background-color: #f1f1f1; }
     .duplicate-row { background-color: #fdecea !important; }
-    td a { color: #2d85f8; text-decoration: none; font-weight: 500; }
+    td a { color: #534bc4; text-decoration: none; font-weight: 500; }
     td a:hover { text-decoration: underline; }
     .btn-delete-small {
-      padding: 4px 8px; font-size: 0.8rem; background-color: #e74c3c; color: #fff; border: none; border-radius: 4px; cursor: pointer;
+      padding: 4px 8px; font-size: 0.8rem; background-color: #952746; color: #fff; border: none; border-radius: 4px; cursor: pointer;
     }
     .btn-delete-small:hover { opacity: 0.92; }
   </style>
@@ -2051,12 +1975,16 @@ STUCK_ORDERS_TEMPLATE = r'''
 <head>
   <meta charset="utf-8">
   <title>Fix Stuck Orders – H&O Parcel Scans</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       height: 100%;
-      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-      background-color: #f5f6fa; color: #333;
+      font-family: "Figtree", sans-serif;
+      font-optical-sizing: auto;
+      background-color: #fbfaf5; color: #333;
     }
     .container { display: flex; height: 100vh; }
     .sidebar {
@@ -2066,15 +1994,15 @@ STUCK_ORDERS_TEMPLATE = r'''
     .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
     .sidebar ul { list-style: none; margin-top: 8px; }
     .sidebar li { margin-bottom: 16px; }
-    .sidebar a { text-decoration: none; color: #2d85f8; font-size: 1rem; font-weight: 500; }
+    .sidebar a { text-decoration: none; color: #534bc4; font-size: 1rem; font-weight: 500; }
     .sidebar a:hover { text-decoration: underline; }
-    .sidebar .logout { margin-top: auto; color: #e74c3c; font-size: 0.95rem; text-decoration: none; }
+    .sidebar .logout { margin-top: auto; color: #952746; font-size: 0.95rem; text-decoration: none; }
     .sidebar .logout:hover { text-decoration: underline; }
 
     .main-content { flex: 1; overflow-y: auto; padding: 24px; }
     .flash { padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid; }
-    .flash.success { background-color: #e0f7e9; color: #2f7a45; border-color: #b2e6c2; }
-    .flash.error   { background-color: #fdecea; color: #a33a2f; border-color: #f5c6cb; }
+    .flash.success { background-color: #e0f7e9; color: #199b76; border-color: #b2e6c2; }
+    .flash.error   { background-color: #fdecea; color: #952746; border-color: #f5c6cb; }
     .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
 
     h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
@@ -2083,11 +2011,11 @@ STUCK_ORDERS_TEMPLATE = r'''
 
     table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
     th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
-    th { background-color: #f2f2f2; text-align: left; font-weight: 600; }
-    tr:nth-child(even) { background-color: #fafafa; }
+    th { background-color: #eeeee5; text-align: left; font-weight: 600; }
+    tr:nth-child(even) { background-color: #fbfaf5; }
     tr:hover { background-color: #f1f1f1; }
     .stuck-row { background-color: #fff3cd !important; }
-    td a { color: #2d85f8; text-decoration: none; font-weight: 500; }
+    td a { color: #534bc4; text-decoration: none; font-weight: 500; }
     td a:hover { text-decoration: underline; }
 
     .btn-fix {
