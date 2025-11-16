@@ -146,19 +146,28 @@ class ShopifyAPI:
             return self._order_cache[tracking_number]
 
         try:
+            # Expanded search: look for any order with fulfillments in last 120 days
             params = {
-                "fulfillment_status": "shipped",
+                "fulfillment_status": "any",  # Changed from "shipped" to "any" to catch all fulfillment statuses
                 "status": "any",
                 "limit": 250,
                 "fields": "id,order_number,customer,fulfillments"
             }
-            created_at_min = (datetime.now() - timedelta(days=60)).isoformat()
+            created_at_min = (datetime.now() - timedelta(days=120)).isoformat()  # Increased from 60 to 120 days
             params["created_at_min"] = created_at_min
 
+            print(f"🔍 Shopify: Searching for tracking '{tracking_number}' in orders from last 120 days...")
+
+            orders_checked = 0
             for order in self._get_paginated_orders(params):
+                orders_checked += 1
                 fulfillments = order.get("fulfillments", [])
                 for f in fulfillments:
-                    if f.get("tracking_number") == tracking_number:
+                    shopify_tracking = f.get("tracking_number", "")
+
+                    # Try exact match first
+                    if shopify_tracking == tracking_number:
+                        print(f"✅ Shopify: Found exact match in order #{order.get('order_number')}")
                         cust = order.get("customer", {}) or {}
                         order_data = {
                             "order_number": str(order.get("order_number", "N/A")),
@@ -171,6 +180,24 @@ class ShopifyAPI:
                         }
                         self._order_cache[tracking_number] = order_data
                         return order_data
+
+                    # Try case-insensitive match with spaces removed
+                    if shopify_tracking.replace(" ", "").upper() == tracking_number.replace(" ", "").upper():
+                        print(f"✅ Shopify: Found fuzzy match in order #{order.get('order_number')} ('{shopify_tracking}' vs '{tracking_number}')")
+                        cust = order.get("customer", {}) or {}
+                        order_data = {
+                            "order_number": str(order.get("order_number", "N/A")),
+                            "customer_name": (
+                                f"{cust.get('first_name','')} {cust.get('last_name','')}".strip()
+                                or "N/A"
+                            ),
+                            "customer_email": cust.get("email", ""),
+                            "order_id": str(order.get("id", ""))
+                        }
+                        self._order_cache[tracking_number] = order_data
+                        return order_data
+
+            print(f"❌ Shopify: No match found after checking {orders_checked} orders")
             return {
                 "order_number": "N/A",
                 "customer_name": "No Order Found",
