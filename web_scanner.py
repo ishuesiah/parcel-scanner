@@ -1257,6 +1257,7 @@ BATCH_VIEW_TEMPLATE = r'''
           <tr>
             <th>Tracking</th>
             <th>Carrier</th>
+            <th>SS Batch</th>
             <th>Order #</th>
             <th>Customer</th>
             <th>Scan Time</th>
@@ -1268,6 +1269,7 @@ BATCH_VIEW_TEMPLATE = r'''
             <tr class="{{ 'duplicate-row' if row.status.startswith('Duplicate') else '' }}">
               <td>{{ row.tracking_number }}</td>
               <td>{{ row.carrier }}</td>
+              <td>{{ row.shipstation_batch_number or '' }}</td>
               <td>
                 {% if row.order_id %}
                   <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
@@ -1935,6 +1937,7 @@ ALL_SCANS_TEMPLATE = r'''
           <tr>
             <th>Tracking</th>
             <th>Carrier</th>
+            <th>SS Batch</th>
             <th>Order #</th>
             <th>Customer</th>
             <th>Scan Time</th>
@@ -1948,6 +1951,7 @@ ALL_SCANS_TEMPLATE = r'''
             <tr class="{{ 'duplicate-row' if s.status.startswith('Duplicate') else '' }}">
               <td>{{ s.tracking_number }}</td>
               <td>{{ s.carrier }}</td>
+              <td>{{ s.shipstation_batch_number or '' }}</td>
               <td>
                 {% if s.order_id %}
                   <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
@@ -2149,6 +2153,7 @@ STUCK_ORDERS_TEMPLATE = r'''
             <tr>
               <th>Tracking #</th>
               <th>Carrier</th>
+              <th>SS Batch</th>
               <th>Order #</th>
               <th>Customer</th>
               <th>Scan Date</th>
@@ -2162,6 +2167,7 @@ STUCK_ORDERS_TEMPLATE = r'''
               <tr class="stuck-row" id="row-{{ s.id }}">
                 <td id="tracking-{{ s.id }}">{{ s.tracking_number }}</td>
                 <td id="carrier-{{ s.id }}">{{ s.carrier }}</td>
+                <td id="ss-batch-{{ s.id }}">{{ s.shipstation_batch_number or '' }}</td>
                 <td id="order-{{ s.id }}">
                   <span class="{{ 'status-processing' if s.order_number == 'Processing...' else '' }}">
                     {{ s.order_number }}
@@ -2503,6 +2509,7 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
     order_id = ""
     customer_email = ""
     scan_carrier = batch_carrier
+    shipstation_batch_number = ""
 
     conn = None
     try:
@@ -2557,6 +2564,10 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                         ship_to = first.get("shipTo", {})
                         customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
                         carrier_code = first.get("carrierCode", "").lower()
+                        shipstation_batch_number = first.get("batchNumber", "")  # Capture ShipStation batch number
+
+                        if shipstation_batch_number:
+                            print(f"📦 ShipStation: Found batch #{shipstation_batch_number} for tracking {tracking_number}")
 
                         carrier_map = {
                             "ups": "UPS",
@@ -2639,10 +2650,11 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 customer_name = %s,
                 order_id = %s,
                 customer_email = %s,
+                shipstation_batch_number = %s,
                 status = 'Complete'
             WHERE id = %s
             """,
-            (scan_carrier, order_number, customer_name, order_id, customer_email, scan_id)
+            (scan_carrier, order_number, customer_name, order_id, customer_email, shipstation_batch_number, scan_id)
         )
         conn.commit()
         cursor.close()
@@ -2790,11 +2802,11 @@ def scan():
             """
             INSERT INTO scans
               (tracking_number, carrier, order_number, customer_name,
-               scan_date, status, order_id, customer_email, batch_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               scan_date, status, order_id, customer_email, batch_id, shipstation_batch_number)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (code, scan_carrier, order_number, customer_name,
-             now_str, status, order_id, "", batch_id)
+             now_str, status, order_id, "", batch_id, "")
         )
         conn.commit()
         scan_id = cursor.lastrowid
@@ -3268,6 +3280,7 @@ def view_batch(batch_id):
           SELECT id,
                  tracking_number,
                  carrier,
+                 shipstation_batch_number,
                  order_number,
                  customer_name,
                  scan_date,
@@ -3441,6 +3454,7 @@ def all_scans():
                 id,
                 tracking_number,
                 carrier,
+                shipstation_batch_number,
                 order_number,
                 customer_name,
                 scan_date,
@@ -3459,6 +3473,7 @@ def all_scans():
                 id,
                 tracking_number,
                 carrier,
+                shipstation_batch_number,
                 order_number,
                 customer_name,
                 scan_date,
@@ -3661,6 +3676,7 @@ def stuck_orders():
             id,
             tracking_number,
             carrier,
+            shipstation_batch_number,
             order_number,
             customer_name,
             scan_date,
@@ -3728,6 +3744,7 @@ def fix_order(scan_id):
             customer_email = ""
             order_id = ""
             scan_carrier = carrier or scan.get('carrier', '')
+            shipstation_batch_number = ""
 
             # ── ShipStation lookup ──
             shopify_found = False
@@ -3750,6 +3767,10 @@ def fix_order(scan_id):
                         ship_to = first.get("shipTo", {})
                         customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
                         carrier_code = first.get("carrierCode", "").lower()
+                        shipstation_batch_number = first.get("batchNumber", "")
+
+                        if shipstation_batch_number:
+                            print(f"📦 ShipStation: Found batch #{shipstation_batch_number} for tracking {tracking_number}")
 
                         carrier_map = {
                             "ups": "UPS",
@@ -3786,10 +3807,11 @@ def fix_order(scan_id):
                     customer_name = %s,
                     customer_email = %s,
                     order_id = %s,
+                    shipstation_batch_number = %s,
                     status = %s
                 WHERE id = %s
                 """,
-                (scan_carrier, order_number, customer_name, customer_email, order_id,
+                (scan_carrier, order_number, customer_name, customer_email, order_id, shipstation_batch_number,
                  'Complete' if (order_number != 'N/A' or customer_name != 'Not Found') else 'Processing',
                  scan_id)
             )
