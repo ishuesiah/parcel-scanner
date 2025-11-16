@@ -456,8 +456,21 @@ MAIN_TEMPLATE = r'''
             </p>
           </div>
           <div class="batch-actions">
-            <a href="#" onclick="return confirmCancelBatch();">Cancel This Batch</a>
+            <form action="{{ url_for('finish_batch') }}" method="post" style="margin: 0; display: inline;">
+              <button type="submit" class="btn btn-new" style="padding: 6px 12px; font-size: 0.85rem;">Finish & Start New</button>
+            </form>
+            <a href="#" onclick="return confirmCancelBatch();" style="margin-left: 12px;">Cancel This Batch</a>
           </div>
+        </div>
+
+        <!-- Batch Notes -->
+        <div class="scan-section" style="margin-bottom: 12px;">
+          <form action="{{ url_for('save_batch_notes') }}" method="post">
+            <label for="batch_notes"><strong>Batch Notes:</strong></label><br>
+            <textarea name="notes" id="batch_notes" rows="2" style="width: 100%; max-width: 600px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; font-size: 0.95rem; margin-top: 4px;">{{ current_batch.get('notes', '') }}</textarea>
+            <br>
+            <button type="submit" class="btn btn-new" style="margin-top: 8px;">Save Notes</button>
+          </form>
         </div>
 
         <!-- Scan form with async capability -->
@@ -482,6 +495,7 @@ MAIN_TEMPLATE = r'''
               <button type="submit" class="btn btn-delete" id="delete-btn">Delete Selected</button>
             </form>
             <button type="button" class="btn btn-new" onclick="window.location.reload()">Refresh</button>
+            <button type="button" class="btn btn-new" onclick="saveBatch()">Save</button>
             {% if batch_status == 'notified' %}
               <form action="{{ url_for('notify_customers') }}" method="post" style="margin: 0;">
                 <button type="submit" class="btn btn-new">Resend Notifications</button>
@@ -868,6 +882,12 @@ MAIN_TEMPLATE = r'''
         window.location.href = '{{ url_for("cancel_batch") }}';
       }
       return false;
+    }
+
+    // ── Save batch ──
+    function saveBatch() {
+      // Just reload the page to save current state
+      window.location.reload();
     }
 
     // ── Auto-dismiss flash messages ──
@@ -1446,7 +1466,7 @@ def index():
 
         # Fetch batch metadata
         cursor.execute("""
-          SELECT id, created_at, carrier
+          SELECT id, created_at, carrier, status, notes
             FROM batches
            WHERE id = %s
         """, (batch_id,))
@@ -2051,7 +2071,7 @@ def delete_scan():
 
 @app.route("/record_batch", methods=["POST"])
 def record_batch():
-    batch_id = session.get("batch_id")  # Keep batch_id in session (don't pop)
+    batch_id = session.get("batch_id")
     if not batch_id:
         flash("No batch open.", "error")
         return redirect(url_for("index"))
@@ -2077,6 +2097,8 @@ def record_batch():
            WHERE id = %s
         """, (pkg_count, tracking_csv, batch_id))
         conn.commit()
+
+        # Keep session for immediate notification, but allow viewing from batches page
         flash(f"✓ Batch #{batch_id} marked as picked up ({pkg_count} parcels). Ready to notify customers.", "success")
         return redirect(url_for("index"))
     except mysql.connector.Error as e:
@@ -2088,6 +2110,55 @@ def record_batch():
         except Exception:
             pass
         conn.close()
+
+
+@app.route("/finish_batch", methods=["POST"])
+def finish_batch():
+    """
+    Finish the current batch and clear session so user can create a new batch.
+    """
+    batch_id = session.pop("batch_id", None)
+    if batch_id:
+        flash(f"Batch #{batch_id} finished. You can now create a new batch.", "success")
+    return redirect(url_for("index"))
+
+
+@app.route("/save_batch_notes", methods=["POST"])
+def save_batch_notes():
+    """
+    Save notes for the current batch.
+    """
+    batch_id = session.get("batch_id")
+    if not batch_id:
+        flash("No batch open.", "error")
+        return redirect(url_for("index"))
+
+    notes = request.form.get("notes", "").strip()
+
+    try:
+        conn = get_mysql_connection()
+    except Exception as e:
+        flash(f"Database connection error: {e}", "error")
+        return redirect(url_for("index"))
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE batches SET notes = %s WHERE id = %s", (notes, batch_id))
+        conn.commit()
+        flash("Notes saved successfully.", "success")
+    except mysql.connector.Error as e:
+        flash(f"Error saving notes: {e}", "error")
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return redirect(url_for("index"))
 
 
 @app.route("/notify_customers", methods=["POST"])

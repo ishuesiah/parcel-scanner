@@ -1,19 +1,34 @@
--- Database migrations for notification feature
+-- ===================================================================
+-- PARCEL SCANNER DATABASE MIGRATIONS
+-- ===================================================================
 -- Run these SQL commands on your MySQL database
+--
+-- IMPORTANT: Run these commands ONE AT A TIME and check for errors
+-- If a column already exists, you'll get an error - that's okay, skip it
+-- ===================================================================
 
--- Add customer_email column to scans table
+-- STEP 1: Add customer_email column to scans table
+-- This stores customer email for Klaviyo notifications
 ALTER TABLE scans
 ADD COLUMN customer_email VARCHAR(255) DEFAULT '' AFTER order_id;
 
--- Add status column to batches table
+-- STEP 2: Add status column to batches table
+-- Tracks batch lifecycle: 'in_progress' → 'recorded' → 'notified'
 ALTER TABLE batches
 ADD COLUMN status VARCHAR(20) DEFAULT 'in_progress' AFTER carrier;
 
--- Add notified_at timestamp to batches table
+-- STEP 3: Add notified_at timestamp to batches table
+-- Records when Klaviyo notifications were sent
 ALTER TABLE batches
 ADD COLUMN notified_at DATETIME NULL AFTER status;
 
--- Create notifications table to track which orders have been notified
+-- STEP 4: Add notes column to batches table
+-- Allows users to add notes/comments for each batch
+ALTER TABLE batches
+ADD COLUMN notes TEXT NULL AFTER notified_at;
+
+-- STEP 5: Create notifications table
+-- Tracks which orders have been notified to prevent duplicates
 CREATE TABLE IF NOT EXISTS notifications (
     id INT AUTO_INCREMENT PRIMARY KEY,
     batch_id INT NOT NULL,
@@ -27,3 +42,47 @@ CREATE TABLE IF NOT EXISTS notifications (
     INDEX idx_batch_id (batch_id),
     UNIQUE KEY unique_order_notification (order_number, batch_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ===================================================================
+-- VERIFICATION: Run this to check if all columns exist
+-- ===================================================================
+SELECT
+    'scans.customer_email' as column_name,
+    COUNT(*) as exists_count
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'scans'
+  AND COLUMN_NAME = 'customer_email'
+UNION ALL
+SELECT
+    'batches.status',
+    COUNT(*)
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'batches'
+  AND COLUMN_NAME = 'status'
+UNION ALL
+SELECT
+    'batches.notified_at',
+    COUNT(*)
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'batches'
+  AND COLUMN_NAME = 'notified_at'
+UNION ALL
+SELECT
+    'batches.notes',
+    COUNT(*)
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'batches'
+  AND COLUMN_NAME = 'notes'
+UNION ALL
+SELECT
+    'notifications table',
+    COUNT(*)
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'notifications';
+
+-- All rows should show '1' in exists_count column if migrations are complete
