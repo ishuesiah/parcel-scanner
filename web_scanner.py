@@ -2905,6 +2905,7 @@ def pick_and_pack():
             else:
                 # Try to fetch order from Shopify
                 try:
+                    shopify_api = get_shopify_api()
                     order_data = shopify_api.get_order_details_for_verification(search_identifier)
 
                     if not order_data:
