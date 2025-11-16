@@ -2774,11 +2774,11 @@ def scan():
             """
             INSERT INTO scans
               (tracking_number, carrier, order_number, customer_name,
-               scan_date, status, order_id, batch_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+               scan_date, status, order_id, customer_email, batch_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (code, scan_carrier, order_number, customer_name,
-             now_str, status, order_id, batch_id)
+             now_str, status, order_id, "", batch_id)
         )
         conn.commit()
         scan_id = cursor.lastrowid
@@ -3694,6 +3694,7 @@ def fix_order(scan_id):
             # Initialize with defaults
             order_number = "N/A"
             customer_name = "Not Found"
+            customer_email = ""
             order_id = ""
             scan_carrier = carrier or scan.get('carrier', '')
 
@@ -3740,6 +3741,7 @@ def fix_order(scan_id):
                     shopify_found = True
                     order_number = shopify_info.get("order_number", order_number)
                     customer_name = shopify_info.get("customer_name", customer_name)
+                    customer_email = shopify_info.get("customer_email", "")
                     order_id = shopify_info.get("order_id", order_id)
             except Exception as e:
                 print(f"Shopify error for {tracking_number}: {e}")
@@ -3751,11 +3753,12 @@ def fix_order(scan_id):
                 SET carrier = %s,
                     order_number = %s,
                     customer_name = %s,
+                    customer_email = %s,
                     order_id = %s,
                     status = %s
                 WHERE id = %s
                 """,
-                (scan_carrier, order_number, customer_name, order_id,
+                (scan_carrier, order_number, customer_name, customer_email, order_id,
                  'Complete' if (order_number != 'N/A' or customer_name != 'Not Found') else 'Processing',
                  scan_id)
             )
