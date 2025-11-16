@@ -16,6 +16,16 @@ class KlaviyoAPI:
         if not self.api_key:
             raise RuntimeError("Missing KLAVIYO_API_KEY in environment variables")
 
+        # Debug: Log API key format (first/last 4 chars only for security)
+        key_preview = f"{self.api_key[:4]}...{self.api_key[-4:]}" if len(self.api_key) > 8 else "TOO_SHORT"
+        print(f"🔑 Klaviyo API Key loaded: {key_preview} (length: {len(self.api_key)})")
+
+        # Validate key format
+        if not self.api_key.startswith("pk_"):
+            print(f"⚠️ WARNING: API key should start with 'pk_' for Private Key")
+            print(f"   Your key starts with: {self.api_key[:10]}...")
+            print(f"   Make sure you're using a PRIVATE API KEY, not a PUBLIC KEY")
+
         self.api_version = "2024-10-15"  # Latest Klaviyo API version
         self.session = requests.Session()
         self.session.headers.update({
@@ -107,6 +117,20 @@ class KlaviyoAPI:
                 # Handle 4xx errors (bad request, etc.)
                 if 400 <= resp.status_code < 500:
                     print(f"❌ Klaviyo client error {resp.status_code}: {resp.text[:500]}")
+                    if resp.status_code == 401:
+                        print(f"")
+                        print(f"🔴 AUTHENTICATION ERROR - Your Klaviyo API key is invalid!")
+                        print(f"   Possible causes:")
+                        print(f"   1. Wrong API key (check KLAVIYO_API_KEY environment variable)")
+                        print(f"   2. Using PUBLIC key instead of PRIVATE key")
+                        print(f"   3. API key was revoked or expired")
+                        print(f"   4. Extra spaces/newlines in the environment variable")
+                        print(f"")
+                        print(f"   How to fix:")
+                        print(f"   → Go to Klaviyo → Settings → API Keys")
+                        print(f"   → Create a new PRIVATE API KEY (starts with 'pk_')")
+                        print(f"   → Copy it and set KLAVIYO_API_KEY=pk_your_key_here")
+                        print(f"")
                     return False
 
                 resp.raise_for_status()
