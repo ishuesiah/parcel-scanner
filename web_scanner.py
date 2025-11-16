@@ -2342,7 +2342,7 @@ def all_batches():
     try:
         cursor = conn.cursor(dictionary=True)
         cursor.execute("""
-          SELECT id, carrier, created_at, pkg_count, tracking_numbers
+          SELECT id, carrier, created_at, pkg_count, tracking_numbers, status, notified_at, notes
             FROM batches
            ORDER BY created_at DESC
         """)
@@ -2367,7 +2367,7 @@ def view_batch(batch_id):
     try:
         cursor = conn.cursor(dictionary=True)
         cursor.execute("""
-          SELECT id, carrier, created_at, pkg_count, tracking_numbers
+          SELECT id, carrier, created_at, pkg_count, tracking_numbers, status, notified_at, notes
             FROM batches
            WHERE id = %s
         """, (batch_id,))
