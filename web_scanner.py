@@ -1306,22 +1306,40 @@ PICK_AND_PACK_TEMPLATE = r'''
     }
     .verification-notice strong { color: #8a6100; }
 
-    .line-items { margin-top: 16px; }
-    .line-item {
-      border: 1px solid #e0e0e0; padding: 14px; margin-bottom: 12px;
-      border-radius: 4px; display: flex; align-items: flex-start;
+    .scanner-box {
+      background-color: #e8f4f8; border: 2px solid #3498db; padding: 16px;
+      border-radius: 4px; margin-bottom: 20px;
     }
-    .line-item input[type="checkbox"] {
-      width: 20px; height: 20px; margin-right: 14px; margin-top: 2px; cursor: pointer;
+    .scanner-box label { font-weight: 600; color: #2c3e50; display: block; margin-bottom: 8px; }
+    .scanner-box input[type="text"] {
+      width: 100%; padding: 10px; font-size: 16px; border: 2px solid #3498db;
+      border-radius: 4px; font-family: monospace;
     }
-    .item-details { flex: 1; }
-    .item-name { font-weight: 600; color: #2c3e50; font-size: 1rem; margin-bottom: 6px; }
-    .item-meta { font-size: 0.9rem; color: #666; }
-    .item-meta span { margin-right: 16px; }
+    .scan-feedback {
+      margin-top: 10px; padding: 10px; border-radius: 4px; font-weight: 600; display: none;
+    }
+    .scan-feedback.success { background-color: #d4edda; color: #155724; display: block; }
+    .scan-feedback.error { background-color: #f8d7da; color: #721c24; display: block; }
+
+    .items-table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    .items-table th { background-color: #f8f9fa; padding: 12px 8px; text-align: left;
+                      border-bottom: 2px solid #dee2e6; font-weight: 600; color: #495057; }
+    .items-table td { padding: 12px 8px; border-bottom: 1px solid #dee2e6; vertical-align: top; }
+    .items-table tr:hover { background-color: #f8f9fa; }
+    .items-table tr.matched { background-color: #d4edda; animation: highlight 0.5s ease; }
+    @keyframes highlight {
+      0% { background-color: #a3e4a0; }
+      100% { background-color: #d4edda; }
+    }
+    .items-table input[type="checkbox"] { width: 20px; height: 20px; cursor: pointer; }
+    .item-name { font-weight: 600; color: #2c3e50; display: block; margin-bottom: 4px; }
+    .item-variant { color: #6c757d; font-size: 0.9rem; display: block; margin-bottom: 4px; }
     .item-properties {
-      margin-top: 8px; padding: 8px; background-color: #f8f9fa;
+      margin-top: 6px; padding: 6px; background-color: #f8f9fa;
       border-radius: 3px; font-size: 0.85rem; color: #555;
     }
+    .qty-normal { color: #333; }
+    .qty-red { color: #dc3545; font-weight: 700; }
 
     .verify-form { margin-top: 24px; }
     .verify-form textarea {
@@ -1415,45 +1433,136 @@ PICK_AND_PACK_TEMPLATE = r'''
             </div>
           {% endif %}
 
+          <div class="scanner-box">
+            <label for="barcode_scanner">📦 Scan Barcode / Enter SKU:</label>
+            <input type="text" id="barcode_scanner" placeholder="Scan item barcode here..." autocomplete="off">
+            <div id="scan_feedback" class="scan-feedback"></div>
+          </div>
+
           <h3>Line Items - Check off each item as you pack:</h3>
 
-          <form method="post" action="{{ url_for('pick_and_pack') }}" class="verify-form">
+          <form method="post" action="{{ url_for('pick_and_pack') }}" class="verify-form" id="verify_form">
             <input type="hidden" name="action" value="verify">
             <input type="hidden" name="order_number" value="{{ order_data.order_number }}">
             <input type="hidden" name="tracking_number" value="{{ order_data.tracking_number or '' }}">
             <input type="hidden" name="shopify_order_id" value="{{ order_data.shopify_order_id }}">
             <input type="hidden" name="total_items" value="{{ order_data.total_items }}">
 
-            <div class="line-items">
-              {% for item in order_data.line_items %}
-                <div class="line-item">
-                  <input type="checkbox" name="item_{{ loop.index }}" id="item_{{ loop.index }}" value="{{ item.id }}">
-                  <div class="item-details">
-                    <label for="item_{{ loop.index }}" class="item-name">
-                      {{ item.name }}
-                      {% if item.variant_title %}({{ item.variant_title }}){% endif %}
-                    </label>
-                    <div class="item-meta">
-                      <span><strong>SKU:</strong> {{ item.sku }}</span>
-                      <span><strong>Qty:</strong> {{ item.quantity }}</span>
-                    </div>
-                    {% if item.properties %}
-                      <div class="item-properties">
-                        {% for prop in item.properties %}
-                          <div>{{ prop }}</div>
-                        {% endfor %}
-                      </div>
-                    {% endif %}
-                  </div>
-                </div>
-              {% endfor %}
-            </div>
+            <table class="items-table">
+              <thead>
+                <tr>
+                  <th style="width: 50px;">✓</th>
+                  <th>Item Details</th>
+                  <th style="width: 150px;">SKU</th>
+                  <th style="width: 80px; text-align: center;">Quantity</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in order_data.line_items %}
+                  <tr id="row_{{ loop.index }}" data-sku="{{ item.sku }}">
+                    <td>
+                      <input type="checkbox" name="item_{{ loop.index }}" id="item_{{ loop.index }}" value="{{ item.id }}">
+                    </td>
+                    <td>
+                      <label for="item_{{ loop.index }}" class="item-name">{{ item.name }}</label>
+                      {% if item.variant_title %}
+                        <span class="item-variant">{{ item.variant_title }}</span>
+                      {% endif %}
+                      {% if item.properties %}
+                        <div class="item-properties">
+                          {% for prop in item.properties %}
+                            <div>{{ prop }}</div>
+                          {% endfor %}
+                        </div>
+                      {% endif %}
+                    </td>
+                    <td style="font-family: monospace; font-size: 0.95rem;">{{ item.sku }}</td>
+                    <td style="text-align: center;">
+                      <span class="{{ 'qty-red' if item.quantity > 1 else 'qty-normal' }}">{{ item.quantity }}</span>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
 
-            <label for="notes"><strong>Notes (optional):</strong></label>
+            <label for="notes" style="margin-top: 24px; display: block;"><strong>Notes (optional):</strong></label>
             <textarea name="notes" id="notes" rows="3" placeholder="Add any notes about this verification..."></textarea>
 
             <button type="submit">✅ Verify Order</button>
           </form>
+
+          <script>
+            // Barcode scanner logic
+            const barcodeInput = document.getElementById('barcode_scanner');
+            const feedbackDiv = document.getElementById('scan_feedback');
+            const allRows = document.querySelectorAll('.items-table tbody tr');
+
+            // Focus on barcode input when page loads
+            barcodeInput.focus();
+
+            barcodeInput.addEventListener('keypress', function(e) {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                const scannedSku = this.value.trim().toUpperCase();
+
+                if (!scannedSku) {
+                  return;
+                }
+
+                // Find matching SKU
+                let found = false;
+                allRows.forEach(row => {
+                  const rowSku = row.dataset.sku.toUpperCase();
+                  if (rowSku === scannedSku) {
+                    found = true;
+
+                    // Get the checkbox for this row
+                    const checkbox = row.querySelector('input[type="checkbox"]');
+
+                    // Check the checkbox
+                    checkbox.checked = true;
+
+                    // Add matched class for visual feedback
+                    row.classList.add('matched');
+                    setTimeout(() => row.classList.remove('matched'), 2000);
+
+                    // Show success feedback
+                    feedbackDiv.className = 'scan-feedback success';
+                    feedbackDiv.textContent = '✓ Match found! Item checked.';
+
+                    // Scroll row into view
+                    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }
+                });
+
+                if (!found) {
+                  // Show error feedback
+                  feedbackDiv.className = 'scan-feedback error';
+                  feedbackDiv.textContent = '✗ Error: Wrong item. Please double-check the SKU.';
+
+                  // Play error sound if available
+                  try {
+                    const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+Dy');
+                  } catch(e) {}
+                }
+
+                // Clear input and refocus
+                this.value = '';
+                setTimeout(() => {
+                  feedbackDiv.className = 'scan-feedback';
+                  feedbackDiv.textContent = '';
+                  this.focus();
+                }, 2000);
+              }
+            });
+
+            // Keep focus on barcode scanner
+            document.addEventListener('click', function(e) {
+              if (e.target.type !== 'checkbox' && e.target.type !== 'submit' && e.target.type !== 'textarea') {
+                barcodeInput.focus();
+              }
+            });
+          </script>
         </div>
       {% endif %}
 
