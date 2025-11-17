@@ -3079,11 +3079,15 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                         order_number = first.get("orderNumber", "N/A")
                         ship_to = first.get("shipTo", {})
                         customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
+                        customer_email = ship_to.get("email", "") if ship_to else ""  # Get email from ShipStation!
                         carrier_code = first.get("carrierCode", "").lower()
                         shipstation_batch_number = first.get("batchNumber", "")  # Capture ShipStation batch number
 
                         if shipstation_batch_number:
                             print(f"📦 ShipStation: Found batch #{shipstation_batch_number} for tracking {tracking_number}")
+
+                        if customer_email:
+                            print(f"📧 ShipStation: Found email {customer_email} for {tracking_number}")
 
                         carrier_map = {
                             "ups": "UPS",
@@ -3123,9 +3127,13 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 shopify_found = True
                 order_number = shopify_info.get("order_number", order_number)
                 customer_name = shopify_info.get("customer_name", customer_name)
-                customer_email = shopify_info.get("customer_email", "")
+                # Only update email if Shopify has one (don't overwrite ShipStation's email)
+                shopify_email = shopify_info.get("customer_email", "")
+                if shopify_email:
+                    customer_email = shopify_email
+                    print(f"📧 Shopify: Found email {customer_email} for {tracking_number}")
                 order_id = shopify_info.get("order_id", order_id)
-                print(f"Shopify lookup successful for {tracking_number}: order {order_number}")
+                print(f"✅ Shopify lookup successful for {tracking_number}: order {order_number}")
             else:
                 print(f"Shopify lookup found no order for {tracking_number}")
         except Exception as e:
@@ -4284,11 +4292,15 @@ def fix_order(scan_id):
                         order_number = first.get("orderNumber", "N/A")
                         ship_to = first.get("shipTo", {})
                         customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
+                        customer_email = ship_to.get("email", "") if ship_to else ""  # Get email from ShipStation!
                         carrier_code = first.get("carrierCode", "").lower()
                         shipstation_batch_number = first.get("batchNumber", "")
 
                         if shipstation_batch_number:
                             print(f"📦 ShipStation: Found batch #{shipstation_batch_number} for tracking {tracking_number}")
+
+                        if customer_email:
+                            print(f"📧 ShipStation: Found email {customer_email} for {tracking_number}")
 
                         carrier_map = {
                             "ups": "UPS",
@@ -4311,7 +4323,11 @@ def fix_order(scan_id):
                     shopify_found = True
                     order_number = shopify_info.get("order_number", order_number)
                     customer_name = shopify_info.get("customer_name", customer_name)
-                    customer_email = shopify_info.get("customer_email", "")
+                    # Only update email if Shopify has one (don't overwrite ShipStation's email)
+                    shopify_email = shopify_info.get("customer_email", "")
+                    if shopify_email:
+                        customer_email = shopify_email
+                        print(f"📧 Shopify: Found email {customer_email} for {tracking_number}")
                     order_id = shopify_info.get("order_id", order_id)
             except Exception as e:
                 print(f"Shopify error for {tracking_number}: {e}")
