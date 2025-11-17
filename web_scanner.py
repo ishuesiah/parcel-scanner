@@ -3077,17 +3077,54 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                         shipstation_found = True
                         first = shipments[0]
                         order_number = first.get("orderNumber", "N/A")
+
+                        # Debug: Log what ShipStation is returning
+                        print(f"🔍 DEBUG ShipStation fields: {list(first.keys())}")
+
+                        # Try to get email from multiple possible locations
+                        customer_email = ""
+
+                        # Check shipment-level fields for email
+                        if "customerEmail" in first:
+                            customer_email = first.get("customerEmail", "")
+                            print(f"📧 Found customerEmail: {customer_email}")
+                        elif "buyerEmail" in first:
+                            customer_email = first.get("buyerEmail", "")
+                            print(f"📧 Found buyerEmail: {customer_email}")
+
+                        # Check shipTo object
                         ship_to = first.get("shipTo", {})
+                        if not customer_email and ship_to:
+                            if "email" in ship_to:
+                                customer_email = ship_to.get("email", "")
+                                print(f"📧 Found email in shipTo: {customer_email}")
+                            print(f"   shipTo keys: {list(ship_to.keys())}")
+
+                        # Check billTo object
+                        bill_to = first.get("billTo", {})
+                        if not customer_email and bill_to and "email" in bill_to:
+                            customer_email = bill_to.get("email", "")
+                            print(f"📧 Found email in billTo: {customer_email}")
+
+                        # Check advancedOptions
+                        advanced_options = first.get("advancedOptions", {})
+                        if not customer_email and advanced_options:
+                            for field in ["customField1", "customField2", "customField3"]:
+                                value = advanced_options.get(field, "")
+                                if "@" in str(value):
+                                    customer_email = value
+                                    print(f"📧 Found email in {field}: {customer_email}")
+                                    break
+
                         customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
-                        customer_email = ship_to.get("email", "") if ship_to else ""  # Get email from ShipStation!
                         carrier_code = first.get("carrierCode", "").lower()
-                        shipstation_batch_number = first.get("batchNumber", "")  # Capture ShipStation batch number
+                        shipstation_batch_number = first.get("batchNumber", "")
 
                         if shipstation_batch_number:
-                            print(f"📦 ShipStation: Found batch #{shipstation_batch_number} for tracking {tracking_number}")
+                            print(f"📦 ShipStation batch: #{shipstation_batch_number}")
 
-                        if customer_email:
-                            print(f"📧 ShipStation: Found email {customer_email} for {tracking_number}")
+                        if not customer_email:
+                            print(f"⚠️ NO EMAIL found in ShipStation for {tracking_number}")
 
                         carrier_map = {
                             "ups": "UPS",
@@ -4299,17 +4336,44 @@ def fix_order(scan_id):
                     if shipments:
                         first = shipments[0]
                         order_number = first.get("orderNumber", "N/A")
+
+                        # Debug: Log what ShipStation is returning
+                        print(f"🔍 DEBUG ShipStation fields: {list(first.keys())}")
+
+                        # Try to get email from multiple possible locations
+                        customer_email = ""
+
+                        # Check shipment-level fields
+                        if "customerEmail" in first:
+                            customer_email = first.get("customerEmail", "")
+                            print(f"📧 Found customerEmail: {customer_email}")
+                        elif "buyerEmail" in first:
+                            customer_email = first.get("buyerEmail", "")
+                            print(f"📧 Found buyerEmail: {customer_email}")
+
+                        # Check shipTo
                         ship_to = first.get("shipTo", {})
+                        if not customer_email and ship_to:
+                            if "email" in ship_to:
+                                customer_email = ship_to.get("email", "")
+                                print(f"📧 Found email in shipTo: {customer_email}")
+                            print(f"   shipTo keys: {list(ship_to.keys())}")
+
+                        # Check billTo
+                        bill_to = first.get("billTo", {})
+                        if not customer_email and bill_to and "email" in bill_to:
+                            customer_email = bill_to.get("email", "")
+                            print(f"📧 Found email in billTo: {customer_email}")
+
                         customer_name = ship_to.get("name", "No Name") if ship_to else "No Name"
-                        customer_email = ship_to.get("email", "") if ship_to else ""  # Get email from ShipStation!
                         carrier_code = first.get("carrierCode", "").lower()
                         shipstation_batch_number = first.get("batchNumber", "")
 
                         if shipstation_batch_number:
-                            print(f"📦 ShipStation: Found batch #{shipstation_batch_number} for tracking {tracking_number}")
+                            print(f"📦 ShipStation batch: #{shipstation_batch_number}")
 
-                        if customer_email:
-                            print(f"📧 ShipStation: Found email {customer_email} for {tracking_number}")
+                        if not customer_email:
+                            print(f"⚠️ NO EMAIL found in ShipStation for {tracking_number}")
 
                         carrier_map = {
                             "ups": "UPS",
