@@ -4281,7 +4281,7 @@ def fix_order(scan_id):
                         url,
                         auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
                         headers={"Accept": "application/json"},
-                        timeout=6
+                        timeout=15  # Increased from 6 to 15 seconds
                     )
                     resp.raise_for_status()
                     data = resp.json()
