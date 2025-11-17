@@ -3229,28 +3229,37 @@ def scan():
         cursor.close()
         batch_carrier = (row[0] if row else "") or ""
 
-        # ── Validate carrier BEFORE normalization ──
-        # Detect carrier from tracking number format (using ORIGINAL code)
-        detected_carrier = None
-        if code.startswith("1Z"):
-            detected_carrier = "UPS"
-        elif len(code) == 12 and code.isdigit():
-            detected_carrier = "Purolator"
-        elif len(code) == 10 and code.isdigit():
-            detected_carrier = "DHL"
-        elif len(code) >= 16 and (code[:4].isdigit() or code.startswith("CA")):
-            # Canada Post: 16 chars, often starts with digits or "CA"
-            detected_carrier = "Canada Post"
-        elif code.startswith("LA") or len(code) == 30:
-            detected_carrier = "USPS"
+        # ── STRICT CARRIER VALIDATION (BEFORE normalization) ──
+        # Must match the batch carrier's expected format, reject everything else
+        validation_error = None
 
-        # Reject if carrier doesn't match batch carrier (BEFORE normalization!)
-        if detected_carrier and detected_carrier != batch_carrier:
-            error_msg = f"❌ Not a {batch_carrier} label! (Detected: {detected_carrier})"
-            print(f"🚫 Carrier mismatch: expected {batch_carrier}, got {detected_carrier} for code {code}")
+        if batch_carrier == "UPS":
+            # UPS: MUST start with "1Z"
+            if not code.startswith("1Z"):
+                validation_error = f"❌ Not a UPS label! UPS tracking numbers must start with '1Z'. (Scanned: {code[:20]}...)"
+
+        elif batch_carrier == "Canada Post":
+            # Canada Post: MUST be 16+ chars starting with digits or "CA"
+            if not (len(code) >= 16 and (code[:4].isdigit() or code.startswith("CA"))):
+                validation_error = f"❌ Not a Canada Post label! Expected 16+ characters starting with digits or 'CA'. (Scanned: {code[:20]}...)"
+
+        elif batch_carrier == "Purolator":
+            # Purolator: MUST be 12 digits (after normalization it would be 12 digits)
+            # Before normalization, it could be 34 chars
+            if not (len(code) == 12 and code.isdigit()) and len(code) != 34:
+                validation_error = f"❌ Not a Purolator label! Expected 12 digits or 34-character barcode. (Scanned: {code[:20]}...)"
+
+        elif batch_carrier == "DHL":
+            # DHL: MUST be 10 digits
+            if not (len(code) == 10 and code.isdigit()):
+                validation_error = f"❌ Not a DHL label! Expected 10-digit tracking number. (Scanned: {code[:20]}...)"
+
+        # If validation failed, reject the scan immediately
+        if validation_error:
+            print(f"🚫 REJECTED: {validation_error}")
             if is_ajax:
-                return jsonify({"success": False, "error": error_msg, "carrier_mismatch": True}), 400
-            flash(error_msg, "error")
+                return jsonify({"success": False, "error": validation_error, "carrier_mismatch": True}), 400
+            flash(validation_error, "error")
             return redirect(url_for("index"))
 
         # NOW normalize codes for specific carriers (AFTER validation)
