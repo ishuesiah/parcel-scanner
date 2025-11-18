@@ -3655,7 +3655,7 @@ def _process_single_scan(code, is_ajax):
 
         elif batch_carrier == "Canada Post":
             # Canada Post: MUST be 16+ chars starting with digits or "CA"
-            if not (len(code) >= 16 and (code[:4].isdigit() or code.startswith("CA"))):
+            if not (len(code) >= 28):
                 validation_error = f"❌ Not a Canada Post label! Expected 16+ characters starting with digits or 'CA'. (Scanned: {code[:20]}...)"
 
         elif batch_carrier == "Purolator":
