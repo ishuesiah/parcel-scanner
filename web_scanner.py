@@ -41,6 +41,7 @@ from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this f
 from klaviyo_events import KlaviyoEvents  # Klaviyo integration for event tracking
 from ups_api import UPSAPI  # UPS tracking integration
 from tracking_utils import split_concatenated_tracking_numbers  # Tracking number split detection
+from address_utils import is_po_box, check_po_box_compatibility  # PO Box detection
 
 app = Flask(__name__)
 
@@ -3432,6 +3433,25 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                             "purolator": "Purolator",
                         }
                         scan_carrier = carrier_map.get(carrier_code, batch_carrier)
+
+                        # ── PO BOX DETECTION ──
+                        # Check if shipping address contains PO Box and carrier is incompatible
+                        if ship_to:
+                            address_lines = [
+                                ship_to.get("street1", ""),
+                                ship_to.get("street2", ""),
+                                ship_to.get("street3", "")
+                            ]
+                            full_address = " ".join([line for line in address_lines if line])
+
+                            is_valid, po_box_error = check_po_box_compatibility(full_address, scan_carrier)
+                            if not is_valid:
+                                # PO Box + incompatible carrier detected!
+                                print(f"🚫 PO BOX ALERT: {po_box_error}")
+                                # Update order_number to show PO BOX warning
+                                order_number = f"⚠️ PO BOX - {order_number}"
+                                customer_name = f"🚫 PO BOX ({scan_carrier}) - {customer_name}"
+
                     break  # Success, exit retry loop
 
                 except requests.exceptions.Timeout as e:
@@ -4087,7 +4107,8 @@ def notify_customers():
                 order_number,
                 customer_email,
                 customer_name,
-                tracking_number
+                tracking_number,
+                order_id
             FROM scans
             WHERE batch_id = %s
               AND order_number != 'N/A'
@@ -4132,10 +4153,18 @@ def notify_customers():
         error_count = 0
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Initialize Shopify API to fetch line items
+        try:
+            shopify_api = get_shopify_api()
+        except Exception as e:
+            print(f"⚠️ Shopify API not available: {e}")
+            shopify_api = None
+
         for scan in scans:
             order_number = scan['order_number']
             customer_email = scan['customer_email']
             tracking_number = scan['tracking_number']
+            order_id = scan.get('order_id', '')
 
             # Check if this order was already notified (in ANY batch)
             cursor.execute("""
@@ -4149,12 +4178,24 @@ def notify_customers():
                 skip_count += 1
                 continue
 
+            # Fetch line items from Shopify
+            line_items = []
+            if shopify_api and tracking_number:
+                try:
+                    order_data = shopify_api.get_order_by_tracking(tracking_number)
+                    line_items = order_data.get('line_items', [])
+                    if line_items:
+                        print(f"📦 Found {len(line_items)} items for order {order_number}")
+                except Exception as e:
+                    print(f"⚠️ Could not fetch line items for {order_number}: {e}")
+
             # Send Klaviyo event
             success = klaviyo.notify_order_shipped(
                 email=customer_email,
                 order_number=order_number,
                 tracking_number=tracking_number,
-                carrier=carrier
+                carrier=carrier,
+                line_items=line_items
             )
 
             # Record notification attempt
@@ -4993,8 +5034,8 @@ def check_shipments():
                 co.reason as cancel_reason,
                 co.cancelled_at
             FROM shipments_cache sc
-            LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
-            LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
+            LEFT JOIN scans s ON s.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
+            LEFT JOIN cancelled_orders co ON co.order_number COLLATE utf8mb4_unicode_ci = sc.order_number COLLATE utf8mb4_unicode_ci
             WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 120 DAY)
             {search_condition}
             GROUP BY sc.tracking_number, sc.order_number, sc.customer_name,

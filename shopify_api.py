@@ -151,7 +151,7 @@ class ShopifyAPI:
                 "fulfillment_status": "any",  # Changed from "shipped" to "any" to catch all fulfillment statuses
                 "status": "any",
                 "limit": 250,
-                "fields": "id,order_number,customer,fulfillments"
+                "fields": "id,order_number,customer,fulfillments,line_items"  # Added line_items
             }
             created_at_min = (datetime.now() - timedelta(days=365)).isoformat()  # Increased to 365 days
             params["created_at_min"] = created_at_min
@@ -169,6 +169,18 @@ class ShopifyAPI:
                     if shopify_tracking == tracking_number:
                         print(f"✅ Shopify: Found exact match in order #{order.get('order_number')}")
                         cust = order.get("customer", {}) or {}
+
+                        # Format line items for Klaviyo
+                        line_items = order.get("line_items", [])
+                        formatted_items = []
+                        for item in line_items:
+                            formatted_items.append({
+                                "name": item.get("name", ""),
+                                "quantity": item.get("quantity", 1),
+                                "price": str(item.get("price", "0.00")),
+                                "sku": item.get("sku", "")
+                            })
+
                         order_data = {
                             "order_number": str(order.get("order_number", "N/A")),
                             "customer_name": (
@@ -176,7 +188,8 @@ class ShopifyAPI:
                                 or "N/A"
                             ),
                             "customer_email": cust.get("email", ""),
-                            "order_id": str(order.get("id", ""))
+                            "order_id": str(order.get("id", "")),
+                            "line_items": formatted_items
                         }
                         self._order_cache[tracking_number] = order_data
                         return order_data
@@ -185,6 +198,18 @@ class ShopifyAPI:
                     if shopify_tracking.replace(" ", "").upper() == tracking_number.replace(" ", "").upper():
                         print(f"✅ Shopify: Found fuzzy match in order #{order.get('order_number')} ('{shopify_tracking}' vs '{tracking_number}')")
                         cust = order.get("customer", {}) or {}
+
+                        # Format line items for Klaviyo
+                        line_items = order.get("line_items", [])
+                        formatted_items = []
+                        for item in line_items:
+                            formatted_items.append({
+                                "name": item.get("name", ""),
+                                "quantity": item.get("quantity", 1),
+                                "price": str(item.get("price", "0.00")),
+                                "sku": item.get("sku", "")
+                            })
+
                         order_data = {
                             "order_number": str(order.get("order_number", "N/A")),
                             "customer_name": (
@@ -192,7 +217,8 @@ class ShopifyAPI:
                                 or "N/A"
                             ),
                             "customer_email": cust.get("email", ""),
-                            "order_id": str(order.get("id", ""))
+                            "order_id": str(order.get("id", "")),
+                            "line_items": formatted_items
                         }
                         self._order_cache[tracking_number] = order_data
                         return order_data
@@ -214,14 +240,16 @@ class ShopifyAPI:
                 "order_number": "N/A",
                 "customer_name": "No Order Found",
                 "customer_email": "",
-                "order_id": None
+                "order_id": None,
+                "line_items": []
             }
         except Exception as e:
             return {
                 "order_number": "N/A",
                 "customer_name": f"Error: {e}",
                 "customer_email": "",
-                "order_id": None
+                "order_id": None,
+                "line_items": []
             }
 
     def _search_by_order_number(self, order_number: str) -> Optional[Dict[str, Any]]:
@@ -241,7 +269,7 @@ class ShopifyAPI:
                 "name": clean_order_number,  # Shopify uses 'name' field for order number
                 "status": "any",
                 "limit": 1,
-                "fields": "id,order_number,customer,fulfillments"
+                "fields": "id,order_number,customer,fulfillments,line_items"  # Added line_items
             }
 
             response, _ = self._make_request("orders.json", params=params)
@@ -255,6 +283,17 @@ class ShopifyAPI:
                 if fulfillments and fulfillments[0]:
                     tracking = fulfillments[0].get("tracking_number")
 
+                # Format line items
+                line_items = order.get("line_items", [])
+                formatted_items = []
+                for item in line_items:
+                    formatted_items.append({
+                        "name": item.get("name", ""),
+                        "quantity": item.get("quantity", 1),
+                        "price": str(item.get("price", "0.00")),
+                        "sku": item.get("sku", "")
+                    })
+
                 return {
                     "order_number": str(order.get("order_number", "N/A")),
                     "customer_name": (
@@ -263,7 +302,8 @@ class ShopifyAPI:
                     ),
                     "customer_email": cust.get("email", ""),
                     "order_id": str(order.get("id", "")),
-                    "tracking_number": tracking
+                    "tracking_number": tracking,
+                    "line_items": formatted_items
                 }
 
             return None

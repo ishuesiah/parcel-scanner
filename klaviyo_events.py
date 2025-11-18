@@ -38,7 +38,8 @@ class KlaviyoEvents:
         customer_email: str,
         carrier: str = "",
         order_id: Optional[str] = None,
-        batch_id: Optional[int] = None
+        batch_id: Optional[int] = None,
+        line_items: Optional[list] = None
     ) -> bool:
         """
         Send a 'Parcel Scanned' event to Klaviyo.
@@ -51,6 +52,7 @@ class KlaviyoEvents:
             carrier: Detected carrier (e.g., "UPS", "FedEx")
             order_id: Shopify order ID
             batch_id: Internal batch ID
+            line_items: List of items in the order (from Shopify)
 
         Returns:
             bool: True if event was sent successfully, False otherwise
@@ -95,7 +97,8 @@ class KlaviyoEvents:
                             "order_id": order_id,
                             "batch_id": batch_id,
                             "scan_time": datetime.now().isoformat(),
-                            "customer_name": customer_name
+                            "customer_name": customer_name,
+                            "items": line_items if line_items else []
                         },
                         "time": datetime.now().isoformat(),
                         "value": 1

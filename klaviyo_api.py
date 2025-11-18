@@ -154,7 +154,7 @@ class KlaviyoAPI:
         print(f"❌ Klaviyo event failed for {email} after {max_retries} retries")
         return False
 
-    def notify_order_shipped(self, email: str, order_number: str, tracking_number: str, carrier: str) -> bool:
+    def notify_order_shipped(self, email: str, order_number: str, tracking_number: str, carrier: str, line_items: list = None) -> bool:
         """
         Convenience method to send "Parcel Scanned" event.
 
@@ -163,6 +163,7 @@ class KlaviyoAPI:
             order_number: Order number
             tracking_number: Tracking number
             carrier: Carrier name (UPS, Canada Post, etc.)
+            line_items: List of items in the order
 
         Returns:
             True if successful, False otherwise
@@ -170,7 +171,8 @@ class KlaviyoAPI:
         properties = {
             "order_number": order_number,
             "tracking_number": tracking_number,
-            "carrier": carrier
+            "carrier": carrier,
+            "items": line_items if line_items else []
         }
 
         return self.track_event(email, "Parcel Scanned", properties)
