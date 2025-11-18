@@ -2862,6 +2862,27 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
     .status-unknown { background-color: #f5f5f5; color: #666; }
     .status-error { background-color: #fdecea; color: #952746; }
 
+    .cancelled-row {
+      background-color: #fdecea !important;
+      opacity: 0.7;
+    }
+    .btn-cancel {
+      padding: 4px 8px; font-size: 0.8rem; border-radius: 4px;
+      border: 1px solid #952746; background: white; color: #952746;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .btn-cancel:hover {
+      background-color: #952746; color: white;
+    }
+    .btn-uncancel {
+      padding: 4px 8px; font-size: 0.8rem; border-radius: 4px;
+      border: 1px solid #199b76; background: white; color: #199b76;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .btn-uncancel:hover {
+      background-color: #199b76; color: white;
+    }
+
     .flag-critical {
       color: #952746; font-weight: 700; font-size: 1.3rem;
       animation: pulse 2s ease-in-out infinite;
@@ -2948,13 +2969,17 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
               <th>Scanned?</th>
               <th>UPS Status</th>
               <th>Last Activity</th>
+              <th>Cancelled?</th>
+              <th>Action</th>
             </tr>
           </thead>
           <tbody>
             {% for ship in shipments %}
-              <tr>
+              <tr {% if ship.is_cancelled %}class="cancelled-row"{% endif %}>
                 <td>
-                  {% if ship.flag %}
+                  {% if ship.is_cancelled %}
+                    <span style="color: #952746; font-size: 1.3rem;" title="ORDER CANCELLED">🚫</span>
+                  {% elif ship.flag %}
                     {% if ship.flag_severity == 'critical' %}
                       <span class="flag-critical" title="{{ ship.flag_reason }}">🚨</span>
                     {% else %}
@@ -2982,10 +3007,60 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
                   </span>
                 </td>
                 <td style="font-size: 0.85rem;">{{ ship.ups_last_activity }}</td>
+                <td>
+                  {% if ship.is_cancelled %}
+                    <span style="color: #952746; font-weight: 600;">🚫 CANCELLED</span>
+                    <div style="font-size: 0.8rem; color: #666; margin-top: 4px;">{{ ship.cancel_reason }}</div>
+                  {% else %}
+                    <span style="color: #666;">—</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if ship.is_cancelled %}
+                    <form method="post" action="{{ url_for('uncancel_order') }}" style="display:inline;">
+                      <input type="hidden" name="order_number" value="{{ ship.order_number }}">
+                      <button type="submit" class="btn-uncancel">✓ Restore</button>
+                    </form>
+                  {% else %}
+                    <button type="button" class="btn-cancel" onclick="cancelOrder('{{ ship.order_number }}', '{{ ship.tracking_number }}')">🚫 Cancel</button>
+                  {% endif %}
+                </td>
               </tr>
             {% endfor %}
           </tbody>
         </table>
+
+        <script>
+        function cancelOrder(orderNumber, trackingNumber) {
+          const reason = prompt("Reason for cancellation:", "Customer requested cancellation");
+          if (reason !== null) {
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = "{{ url_for('cancel_order') }}";
+
+            const orderInput = document.createElement('input');
+            orderInput.type = 'hidden';
+            orderInput.name = 'order_number';
+            orderInput.value = orderNumber;
+            form.appendChild(orderInput);
+
+            const trackingInput = document.createElement('input');
+            trackingInput.type = 'hidden';
+            trackingInput.name = 'tracking_number';
+            trackingInput.value = trackingNumber;
+            form.appendChild(trackingInput);
+
+            const reasonInput = document.createElement('input');
+            reasonInput.type = 'hidden';
+            reasonInput.name = 'reason';
+            reasonInput.value = reason;
+            form.appendChild(reasonInput);
+
+            document.body.appendChild(form);
+            form.submit();
+          }
+        }
+        </script>
 
         <div class="pagination">
           <button onclick="window.location.href='{{ prev_url }}'" {% if not has_prev %}disabled{% endif %}>← Previous</button>
@@ -3592,22 +3667,69 @@ def _process_single_scan(code, is_ajax):
                 code = code[11:-11]
 
         # ─────────────────────────────────────────────────────────────────
-        # ✨ NEW: Check for duplicate across ALL BATCHES in the database
+        # ✨ CHECK FOR CANCELLED ORDERS (BEFORE duplicate check)
         # ─────────────────────────────────────────────────────────────────
         cursor = conn.cursor(dictionary=True)
+
+        # First, get the order number for this tracking number (if known)
+        cursor.execute(
+            """
+            SELECT order_number FROM scans
+            WHERE tracking_number = %s
+            ORDER BY scan_date DESC
+            LIMIT 1
+            """,
+            (code,)
+        )
+        scan_with_order = cursor.fetchone()
+
+        # Check if this order is cancelled
+        order_to_check = scan_with_order.get('order_number') if scan_with_order else None
+        if order_to_check and order_to_check not in ('Processing...', 'N/A', ''):
+            cursor.execute(
+                """
+                SELECT reason FROM cancelled_orders
+                WHERE order_number = %s
+                """,
+                (order_to_check,)
+            )
+            cancelled = cursor.fetchone()
+
+            if cancelled:
+                cancel_reason = cancelled.get('reason', 'Order cancelled')
+                error_msg = f"🚫 CANCELLED ORDER: {order_to_check} - DO NOT SHIP\nReason: {cancel_reason}"
+                print(f"🚫 CANCELLED: {error_msg}")
+
+                cursor.close()
+                conn.close()
+
+                if is_ajax:
+                    return jsonify({
+                        "success": False,
+                        "error": error_msg,
+                        "cancelled_order": True,
+                        "order_number": order_to_check,
+                        "cancel_reason": cancel_reason
+                    }), 400
+                flash(error_msg, "error")
+                return redirect(url_for("index"))
+
+        # ─────────────────────────────────────────────────────────────────
+        # ✨ Check for duplicate across ALL BATCHES in the database
+        # ─────────────────────────────────────────────────────────────────
         cursor.execute(
             """
             SELECT batch_id, scan_date, order_number, customer_name, order_id, carrier
-            FROM scans 
-            WHERE tracking_number = %s 
-            ORDER BY scan_date DESC 
+            FROM scans
+            WHERE tracking_number = %s
+            ORDER BY scan_date DESC
             LIMIT 1
             """,
             (code,)
         )
         existing_scan = cursor.fetchone()
         cursor.close()
-        
+
         # Determine if this is a duplicate and create appropriate status message
         if existing_scan:
             is_duplicate = True
@@ -4866,12 +4988,18 @@ def check_shipments():
                 sc.carrier_code,
                 sc.ship_date,
                 sc.shipstation_batch_number,
-                s.scan_date
+                MAX(s.scan_date) as scan_date,
+                co.id as cancelled_id,
+                co.reason as cancel_reason,
+                co.cancelled_at
             FROM shipments_cache sc
             LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
+            LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
             WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 120 DAY)
             {search_condition}
-            GROUP BY sc.tracking_number
+            GROUP BY sc.tracking_number, sc.order_number, sc.customer_name,
+                     sc.carrier_code, sc.ship_date, sc.shipstation_batch_number,
+                     co.id, co.reason, co.cancelled_at
             ORDER BY sc.ship_date DESC
             LIMIT %s OFFSET %s
         """
@@ -4891,6 +5019,10 @@ def check_shipments():
             ship_date = str(cached_ship.get("ship_date", ""))
             customer_name = cached_ship.get("customer_name", "Unknown")
             shipstation_batch = cached_ship.get("shipstation_batch_number", "")
+
+            # Check if cancelled (from the LEFT JOIN)
+            is_cancelled = cached_ship.get("cancelled_id") is not None
+            cancel_reason = cached_ship.get("cancel_reason", "")
 
             # Check if scanned (from the LEFT JOIN)
             scan_date_obj = cached_ship.get("scan_date")
@@ -4985,7 +5117,9 @@ def check_shipments():
                 "ups_last_activity": ups_last_activity,
                 "flag": flag,
                 "flag_reason": flag_reason,
-                "flag_severity": flag_severity
+                "flag_severity": flag_severity,
+                "is_cancelled": is_cancelled,
+                "cancel_reason": cancel_reason
             })
 
         cursor.close()
@@ -5031,6 +5165,92 @@ def check_shipments():
             next_url="#",
             version=__version__
         )
+
+
+@app.route("/cancel_order", methods=["POST"])
+def cancel_order():
+    """
+    Mark an order as cancelled so it shows up as "DO NOT SHIP" when scanned.
+    """
+    order_number = request.form.get("order_number", "").strip()
+    tracking_number = request.form.get("tracking_number", "").strip()
+    reason = request.form.get("reason", "Order cancelled").strip()
+
+    if not order_number:
+        flash("Order number is required to cancel an order.", "error")
+        return redirect(url_for("check_shipments"))
+
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Check if already cancelled
+        cursor.execute("SELECT id FROM cancelled_orders WHERE order_number = %s", (order_number,))
+        if cursor.fetchone():
+            flash(f"Order #{order_number} is already marked as cancelled.", "warning")
+            cursor.close()
+            conn.close()
+            return redirect(url_for("check_shipments"))
+
+        # Insert into cancelled_orders table
+        cursor.execute(
+            """
+            INSERT INTO cancelled_orders (order_number, tracking_number, reason, cancelled_by)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (order_number, tracking_number, reason, "Customer Service")
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        flash(f"✓ Order #{order_number} marked as CANCELLED. It will show 'DO NOT SHIP' when scanned.", "success")
+        return redirect(url_for("check_shipments"))
+
+    except Exception as e:
+        print(f"Error cancelling order: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error cancelling order: {str(e)}", "error")
+        return redirect(url_for("check_shipments"))
+
+
+@app.route("/uncancel_order", methods=["POST"])
+def uncancel_order():
+    """
+    Remove cancellation status from an order.
+    """
+    order_number = request.form.get("order_number", "").strip()
+
+    if not order_number:
+        flash("Order number is required.", "error")
+        return redirect(url_for("check_shipments"))
+
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Delete from cancelled_orders
+        cursor.execute("DELETE FROM cancelled_orders WHERE order_number = %s", (order_number,))
+        conn.commit()
+
+        deleted_count = cursor.rowcount
+        cursor.close()
+        conn.close()
+
+        if deleted_count > 0:
+            flash(f"✓ Order #{order_number} cancellation removed. Order is now active.", "success")
+        else:
+            flash(f"Order #{order_number} was not found in cancelled orders.", "warning")
+
+        return redirect(url_for("check_shipments"))
+
+    except Exception as e:
+        print(f"Error uncancelling order: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error uncancelling order: {str(e)}", "error")
+        return redirect(url_for("check_shipments"))
 
 
 if __name__ == "__main__":
