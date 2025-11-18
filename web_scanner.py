@@ -263,18 +263,139 @@ def sync_shipments_from_shipstation():
     except Exception as e:
         print(f"❌ Error syncing shipments: {e}")
 
+def backfill_missing_emails():
+    """
+    Backfill customer emails for scans that are missing email addresses.
+    Fetches from ShipStation first, then Shopify as fallback.
+    """
+    print("🔄 Starting email backfill for scans with missing emails...")
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # Find scans without customer email
+        cursor.execute("""
+            SELECT id, tracking_number, order_id
+            FROM scans
+            WHERE (customer_email IS NULL OR customer_email = '')
+            ORDER BY scan_date DESC
+            LIMIT 500
+        """)
+        scans = cursor.fetchall()
+
+        if not scans:
+            print("✓ No scans need email backfill")
+            cursor.close()
+            conn.close()
+            return
+
+        print(f"📧 Found {len(scans)} scans missing customer email")
+        updated = 0
+
+        for scan in scans:
+            scan_id = scan['id']
+            tracking_number = scan['tracking_number']
+            email = None
+
+            # Try ShipStation first
+            try:
+                if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+                    response = requests.get(
+                        "https://ssapi.shipstation.com/shipments",
+                        auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                        params={"trackingNumber": tracking_number},
+                        timeout=10
+                    )
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        shipments = data.get("shipments", [])
+
+                        if shipments:
+                            first = shipments[0]
+
+                            # Check multiple possible email locations
+                            if "customerEmail" in first and first.get("customerEmail"):
+                                email = first.get("customerEmail")
+                            elif "buyerEmail" in first and first.get("buyerEmail"):
+                                email = first.get("buyerEmail")
+
+                            if not email:
+                                ship_to = first.get("shipTo", {})
+                                if ship_to and ship_to.get("email"):
+                                    email = ship_to.get("email")
+
+                            if not email:
+                                bill_to = first.get("billTo", {})
+                                if bill_to and bill_to.get("email"):
+                                    email = bill_to.get("email")
+
+                            if not email:
+                                advanced = first.get("advancedOptions", {})
+                                for field in ["customField1", "customField2", "customField3"]:
+                                    value = advanced.get(field, "")
+                                    if "@" in str(value):
+                                        email = value
+                                        break
+
+                    time.sleep(0.5)  # Rate limiting
+            except Exception as e:
+                print(f"  ShipStation error for {tracking_number}: {e}")
+
+            # Try Shopify if ShipStation didn't work
+            if not email and scan['order_id']:
+                try:
+                    shopify_api = get_shopify_api()
+                    if shopify_api and shopify_api.access_token:
+                        order = shopify_api.get_order(scan['order_id'])
+                        if order and order.get('customer') and order['customer'].get('email'):
+                            email = order['customer']['email']
+                        time.sleep(0.5)  # Rate limiting
+                except Exception as e:
+                    print(f"  Shopify error for order {scan['order_id']}: {e}")
+
+            # Update database if we found an email
+            if email:
+                cursor.execute("""
+                    UPDATE scans
+                    SET customer_email = %s
+                    WHERE id = %s
+                """, (email, scan_id))
+                conn.commit()
+                updated += 1
+                print(f"  ✓ Updated {tracking_number}: {email}")
+
+        cursor.close()
+        conn.close()
+        print(f"✅ Email backfill complete! Updated {updated}/{len(scans)} scans")
+    except Exception as e:
+        print(f"❌ Error during email backfill: {e}")
+
 def start_background_sync():
     """
     Start background thread that syncs shipments every 5 minutes.
+    Also runs email backfill on startup and once per day.
     """
     def sync_loop():
+        # Run backfill immediately on startup
+        backfill_missing_emails()
+
+        last_backfill = datetime.now()
+
         while True:
             sync_shipments_from_shipstation()
+
+            # Run backfill once per day
+            if (datetime.now() - last_backfill).total_seconds() > 86400:  # 24 hours
+                backfill_missing_emails()
+                last_backfill = datetime.now()
+
             time.sleep(300)  # 5 minutes
 
     thread = threading.Thread(target=sync_loop, daemon=True)
     thread.start()
     print("✓ Background shipments sync started (every 5 minutes)")
+    print("✓ Email backfill will run on startup and once per day")
 
 # Start background sync on app startup
 start_background_sync()
