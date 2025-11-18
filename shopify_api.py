@@ -146,17 +146,17 @@ class ShopifyAPI:
             return self._order_cache[tracking_number]
 
         try:
-            # Expanded search: look for any order with fulfillments in last 120 days
+            # Expanded search: look for any order with fulfillments in last 365 days
             params = {
                 "fulfillment_status": "any",  # Changed from "shipped" to "any" to catch all fulfillment statuses
                 "status": "any",
                 "limit": 250,
                 "fields": "id,order_number,customer,fulfillments"
             }
-            created_at_min = (datetime.now() - timedelta(days=120)).isoformat()  # Increased from 60 to 120 days
+            created_at_min = (datetime.now() - timedelta(days=365)).isoformat()  # Increased to 365 days
             params["created_at_min"] = created_at_min
 
-            print(f"🔍 Shopify: Searching for tracking '{tracking_number}' in orders from last 120 days...")
+            print(f"🔍 Shopify: Searching for tracking '{tracking_number}' in orders from last 365 days...")
 
             orders_checked = 0
             for order in self._get_paginated_orders(params):
@@ -197,7 +197,19 @@ class ShopifyAPI:
                         self._order_cache[tracking_number] = order_data
                         return order_data
 
-            print(f"❌ Shopify: No match found after checking {orders_checked} orders")
+            print(f"❌ Shopify: No match found by tracking after checking {orders_checked} orders")
+
+            # Fallback: Try searching by order number if tracking looks like an order number
+            # Order numbers are typically numeric (e.g., "1234" or "#1234")
+            if tracking_number.replace("#", "").isdigit():
+                print(f"🔍 Shopify: Attempting fallback search by order number '{tracking_number}'...")
+                order_search_result = self._search_by_order_number(tracking_number)
+                if order_search_result and order_search_result.get("order_id"):
+                    print(f"✅ Shopify: Found order by order number search!")
+                    self._order_cache[tracking_number] = order_search_result
+                    return order_search_result
+
+            print(f"❌ Shopify: No match found by any method")
             return {
                 "order_number": "N/A",
                 "customer_name": "No Order Found",
@@ -211,6 +223,54 @@ class ShopifyAPI:
                 "customer_email": "",
                 "order_id": None
             }
+
+    def _search_by_order_number(self, order_number: str) -> Optional[Dict[str, Any]]:
+        """
+        Search for an order by order number.
+
+        Args:
+            order_number: Order number to search for (with or without # prefix)
+
+        Returns:
+            Dict with order info if found, None otherwise
+        """
+        try:
+            clean_order_number = order_number.lstrip('#')
+
+            params = {
+                "name": clean_order_number,  # Shopify uses 'name' field for order number
+                "status": "any",
+                "limit": 1,
+                "fields": "id,order_number,customer,fulfillments"
+            }
+
+            response, _ = self._make_request("orders.json", params=params)
+            if response and "orders" in response and response["orders"]:
+                order = response["orders"][0]
+                cust = order.get("customer", {}) or {}
+
+                # Get tracking number from first fulfillment if available
+                tracking = None
+                fulfillments = order.get("fulfillments", [])
+                if fulfillments and fulfillments[0]:
+                    tracking = fulfillments[0].get("tracking_number")
+
+                return {
+                    "order_number": str(order.get("order_number", "N/A")),
+                    "customer_name": (
+                        f"{cust.get('first_name','')} {cust.get('last_name','')}".strip()
+                        or "N/A"
+                    ),
+                    "customer_email": cust.get("email", ""),
+                    "order_id": str(order.get("id", "")),
+                    "tracking_number": tracking
+                }
+
+            return None
+
+        except Exception as e:
+            print(f"Error searching by order number: {e}")
+            return None
 
     def clear_cache(self):
         self._order_cache.clear()

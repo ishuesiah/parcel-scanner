@@ -40,6 +40,7 @@ import io
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 from klaviyo_events import KlaviyoEvents  # Klaviyo integration for event tracking
 from ups_api import UPSAPI  # UPS tracking integration
+from tracking_utils import split_concatenated_tracking_numbers  # Tracking number split detection
 
 app = Flask(__name__)
 
@@ -263,6 +264,104 @@ def sync_shipments_from_shipstation():
     except Exception as e:
         print(f"❌ Error syncing shipments: {e}")
 
+def backfill_split_tracking_numbers():
+    """
+    Backfill split tracking numbers - finds concatenated tracking numbers and splits them.
+    """
+    print("🔄 Checking for concatenated tracking numbers to split...")
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # Find scans that might have concatenated tracking numbers
+        cursor.execute("""
+            SELECT id, tracking_number, carrier, order_number, customer_name,
+                   customer_email, batch_id, scan_date, status, order_id,
+                   shipstation_batch_number
+            FROM scans
+            WHERE (
+                LENGTH(tracking_number) = 36 OR   -- Two UPS
+                LENGTH(tracking_number) = 32 OR   -- Two Canada Post
+                LENGTH(tracking_number) = 24      -- Two FedEx/Purolator
+            )
+            AND status NOT LIKE '%Split%'  -- Don't re-process already split scans
+            ORDER BY scan_date DESC
+            LIMIT 100
+        """)
+        scans = cursor.fetchall()
+
+        if not scans:
+            print("✓ No concatenated tracking numbers found")
+            cursor.close()
+            conn.close()
+            return
+
+        print(f"🔍 Found {len(scans)} scans with suspicious lengths, checking for splits...")
+        total_split = 0
+        total_created = 0
+
+        for scan in scans:
+            tracking_number = scan['tracking_number']
+            split_numbers = split_concatenated_tracking_numbers(tracking_number)
+
+            if len(split_numbers) > 1:
+                print(f"  📦 Splitting scan #{scan['id']}: {tracking_number}")
+                print(f"     Into {len(split_numbers)}: {', '.join(split_numbers)}")
+
+                # Create new scan records for each split tracking number
+                for individual_tracking in split_numbers:
+                    from tracking_utils import detect_carrier
+                    detected_carrier = detect_carrier(individual_tracking)
+
+                    cursor.execute(
+                        """
+                        INSERT INTO scans
+                          (tracking_number, carrier, order_number, customer_name,
+                           scan_date, status, order_id, customer_email, batch_id, shipstation_batch_number)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            individual_tracking,
+                            detected_carrier,
+                            "Processing...",
+                            "Looking up...",
+                            scan['scan_date'],
+                            "Split from concatenated scan",
+                            "",
+                            "",
+                            scan['batch_id'],
+                            ""
+                        )
+                    )
+                    total_created += 1
+
+                # Mark original as split
+                cursor.execute(
+                    """
+                    UPDATE scans
+                    SET status = %s, order_number = %s
+                    WHERE id = %s
+                    """,
+                    (f"Split into {len(split_numbers)} scans", f"SPLIT ({len(split_numbers)})", scan['id'])
+                )
+
+                conn.commit()
+                total_split += 1
+
+        cursor.close()
+        conn.close()
+
+        if total_split > 0:
+            print(f"✅ Split {total_split} concatenated scans into {total_created} new scans")
+        else:
+            print("✓ No concatenated tracking numbers needed splitting")
+
+    except Exception as e:
+        print(f"❌ Error during split tracking backfill: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def backfill_missing_emails():
     """
     Backfill customer emails for scans that are missing email addresses.
@@ -374,19 +473,21 @@ def backfill_missing_emails():
 def start_background_sync():
     """
     Start background thread that syncs shipments every 5 minutes.
-    Also runs email backfill on startup and once per day.
+    Also runs email backfill and split tracking backfill on startup and once per day.
     """
     def sync_loop():
-        # Run backfill immediately on startup
-        backfill_missing_emails()
+        # Run backfills immediately on startup
+        backfill_split_tracking_numbers()  # First, split any concatenated tracking numbers
+        backfill_missing_emails()  # Then, fill missing emails for all scans (including newly split ones)
 
         last_backfill = datetime.now()
 
         while True:
             sync_shipments_from_shipstation()
 
-            # Run backfill once per day
+            # Run backfills once per day
             if (datetime.now() - last_backfill).total_seconds() > 86400:  # 24 hours
+                backfill_split_tracking_numbers()
                 backfill_missing_emails()
                 last_backfill = datetime.now()
 
@@ -395,7 +496,7 @@ def start_background_sync():
     thread = threading.Thread(target=sync_loop, daemon=True)
     thread.start()
     print("✓ Background shipments sync started (every 5 minutes)")
-    print("✓ Email backfill will run on startup and once per day")
+    print("✓ Split tracking & email backfill will run on startup and once per day")
 
 # Start background sync on app startup
 start_background_sync()
@@ -3358,19 +3459,80 @@ def scan():
     """
     INSTANT scan endpoint - inserts to database immediately,
     then processes APIs in background thread.
-    
+
     ✨ NEW: Checks for duplicates across ALL batches in the database,
     not just the current batch.
+
+    ✨ NEW: Automatically detects and splits concatenated tracking numbers
+    (e.g., two UPS numbers stuck together like 1ZAC508867380623021ZAC50882034286504)
     """
     code = request.form.get("code", "").strip()
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
-    
+
     if not code:
         if is_ajax:
             return jsonify({"success": False, "error": "No code received."}), 400
         flash("No code received.", "error")
         return redirect(url_for("index"))
 
+    # ═══════════════════════════════════════════════════════════════════
+    # ✨ SPLIT DETECTION: Check if multiple tracking numbers are stuck together
+    # ═══════════════════════════════════════════════════════════════════
+    split_codes = split_concatenated_tracking_numbers(code)
+
+    if len(split_codes) > 1:
+        # Multiple tracking numbers detected! Process each one separately
+        print(f"🔍 SPLIT DETECTED: {len(split_codes)} tracking numbers found in '{code}'")
+
+        # Process each tracking number through the scan logic
+        all_scans = []
+        all_messages = []
+
+        for i, individual_code in enumerate(split_codes, 1):
+            print(f"   Processing split {i}/{len(split_codes)}: {individual_code}")
+
+            # Process this individual scan
+            result = _process_single_scan(individual_code, is_ajax)
+
+            if isinstance(result, tuple):  # Error response
+                # If any scan fails, return the error
+                return result
+            elif isinstance(result, dict):  # AJAX response
+                all_scans.append(result.get("scan"))
+                all_messages.append(result.get("message"))
+            # For redirects, we'll collect and show summary
+
+        # Return combined result for AJAX
+        if is_ajax:
+            combined_message = f"✓ SPLIT SCAN: {len(split_codes)} tracking numbers processed\n" + "\n".join(all_messages)
+            return jsonify({
+                "success": True,
+                "split_detected": True,
+                "scans": all_scans,
+                "message": combined_message,
+                "count": len(split_codes)
+            })
+        else:
+            flash(f"✓ SPLIT SCAN: Processed {len(split_codes)} tracking numbers from concatenated input", "success")
+            for msg in all_messages:
+                flash(msg, "info")
+            return redirect(url_for("index"))
+
+    # Single tracking number - process normally
+    return _process_single_scan(code, is_ajax)
+
+
+def _process_single_scan(code, is_ajax):
+    """
+    Process a single tracking number scan.
+
+    Args:
+        code: The tracking number to process
+        is_ajax: Whether this is an AJAX request
+
+    Returns:
+        JSON response for AJAX, redirect for regular requests
+    """
     batch_id = session.get("batch_id")
     if not batch_id:
         if is_ajax:
