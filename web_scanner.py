@@ -282,7 +282,7 @@ def backfill_split_tracking_numbers():
             FROM scans
             WHERE (
                 LENGTH(tracking_number) = 36 OR   -- Two UPS
-                LENGTH(tracking_number) = 32 OR   -- Two Canada Post
+                LENGTH(tracking_number) = 56 OR   -- Two Canada Post (28 chars each)
                 LENGTH(tracking_number) = 24      -- Two FedEx/Purolator
             )
             AND status NOT LIKE '%Split%'  -- Don't re-process already split scans
@@ -3503,8 +3503,10 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 scan_carrier = "DHL"
             elif tracking_number.startswith("1Z"):
                 scan_carrier = "UPS"
-            elif tracking_number.startswith("2016"):
+            elif len(tracking_number) == 16:
+                # Canada Post: After normalization, 28-char barcode becomes 16-char tracking number
                 scan_carrier = "Canada Post"
+                print(f"📮 Detected Canada Post by 16-char length: {tracking_number}")
             elif tracking_number.startswith("LA") or len(tracking_number) == 30:
                 scan_carrier = "USPS"
             else:
@@ -3654,9 +3656,9 @@ def _process_single_scan(code, is_ajax):
                 validation_error = f"❌ Not a UPS label! UPS tracking numbers must start with '1Z'. (Scanned: {code[:20]}...)"
 
         elif batch_carrier == "Canada Post":
-            # Canada Post: MUST be 16+ chars starting with digits or "CA"
-            if not (len(code) >= 28):
-                validation_error = f"❌ Not a Canada Post label! Expected 16+ characters starting with digits or 'CA'. (Scanned: {code[:20]}...)"
+            # Canada Post: MUST be exactly 28 chars
+            if len(code) != 28:
+                validation_error = f"❌ Not a Canada Post label! Expected 28 characters. (Scanned: {code[:20]}... - Length: {len(code)})"
 
         elif batch_carrier == "Purolator":
             # Purolator: MUST be 12 digits (after normalization it would be 12 digits)
@@ -3680,8 +3682,10 @@ def _process_single_scan(code, is_ajax):
         # NOW normalize codes for specific carriers (AFTER validation)
         original_code = code
         if batch_carrier == "Canada Post":
-            if len(code) >= 12:
+            # Canada Post: 28-character barcode -> extract middle 16 chars
+            if len(code) == 28:
                 code = code[7:-5]
+                print(f"📮 Canada Post: Normalized {original_code} -> {code}")
         elif batch_carrier == "Purolator":
             if len(code) == 34:
                 code = code[11:-11]
@@ -4160,11 +4164,16 @@ def notify_customers():
             print(f"⚠️ Shopify API not available: {e}")
             shopify_api = None
 
-        for scan in scans:
+        total_to_process = len(scans)
+
+        for idx, scan in enumerate(scans, 1):
             order_number = scan['order_number']
             customer_email = scan['customer_email']
             tracking_number = scan['tracking_number']
             order_id = scan.get('order_id', '')
+
+            # Progress logging
+            print(f"📧 [{idx}/{total_to_process}] Processing {order_number} ({customer_email})")
 
             # Check if this order was already notified (in ANY batch)
             cursor.execute("""
@@ -4174,7 +4183,7 @@ def notify_customers():
             """, (order_number,))
 
             if cursor.fetchone():
-                print(f"Skipping order {order_number} - already notified")
+                print(f"   ⏭️  Skipping - already notified")
                 skip_count += 1
                 continue
 
@@ -4182,14 +4191,16 @@ def notify_customers():
             line_items = []
             if shopify_api and tracking_number:
                 try:
+                    print(f"   📦 Fetching line items from Shopify...")
                     order_data = shopify_api.get_order_by_tracking(tracking_number)
                     line_items = order_data.get('line_items', [])
                     if line_items:
-                        print(f"📦 Found {len(line_items)} items for order {order_number}")
+                        print(f"   ✓ Found {len(line_items)} items")
                 except Exception as e:
-                    print(f"⚠️ Could not fetch line items for {order_number}: {e}")
+                    print(f"   ⚠️ Could not fetch line items: {e}")
 
             # Send Klaviyo event
+            print(f"   📤 Sending email to Klaviyo...")
             success = klaviyo.notify_order_shipped(
                 email=customer_email,
                 order_number=order_number,
@@ -4209,12 +4220,22 @@ def notify_customers():
 
                 if success:
                     success_count += 1
+                    print(f"   ✅ Email sent successfully")
                 else:
                     error_count += 1
+                    print(f"   ❌ Failed to send email")
             except mysql.connector.IntegrityError:
                 # Duplicate entry - order already notified
                 skip_count += 1
-                print(f"Order {order_number} already in notifications table")
+                print(f"   ⏭️  Already in notifications table")
+
+        print(f"\n{'='*60}")
+        print(f"NOTIFICATION SUMMARY")
+        print(f"{'='*60}")
+        print(f"✅ Sent:    {success_count}")
+        print(f"⏭️  Skipped: {skip_count}")
+        print(f"❌ Failed:  {error_count}")
+        print(f"{'='*60}\n")
 
         # Update batch status to 'notified'
         cursor.execute("""

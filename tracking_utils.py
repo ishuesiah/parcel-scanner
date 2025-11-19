@@ -24,8 +24,8 @@ def detect_carrier(tracking_number: str) -> str:
     if tracking.startswith("1Z") and len(tracking) == 18:
         return "UPS"
 
-    # Canada Post: Typically starts with various prefixes, 16 digits
-    if tracking.startswith("2016") or (len(tracking) == 16 and tracking.isdigit()):
+    # Canada Post: 16 characters after normalization (normalized from 28-char barcode)
+    if len(tracking) == 16:
         return "Canada Post"
 
     # Purolator: 12 digits
@@ -86,19 +86,18 @@ def split_concatenated_tracking_numbers(tracking_number: str) -> List[str]:
                 return [first, second]
 
     # ═══════════════════════════════════════════════════════════════
-    # Canada Post: Two 16-digit numbers
+    # Canada Post: Two 28-character barcodes (Note: after normalization they become 16 chars each)
     # ═══════════════════════════════════════════════════════════════
-    if len(tracking) == 32 and tracking.isdigit():
-        first = tracking[:16]
-        second = tracking[16:]
+    if len(tracking) == 56:  # Two 28-char barcodes stuck together
+        first = tracking[:28]
+        second = tracking[28:]
 
-        # Both should be valid Canada Post format
-        if detect_carrier(first) == "Canada Post" and detect_carrier(second) == "Canada Post":
-            print(f"🔍 SPLIT DETECTED: Canada Post concatenation")
-            print(f"   Original: {tracking}")
-            print(f"   Split 1:  {first}")
-            print(f"   Split 2:  {second}")
-            return [first, second]
+        # Both should be 28 characters (Canada Post barcode format)
+        print(f"🔍 SPLIT DETECTED: Canada Post concatenation")
+        print(f"   Original: {tracking}")
+        print(f"   Split 1:  {first}")
+        print(f"   Split 2:  {second}")
+        return [first, second]
 
     # ═══════════════════════════════════════════════════════════════
     # FedEx: Two 12-digit numbers (24 total)
@@ -228,7 +227,7 @@ if __name__ == "__main__":
     ]
 
     for test in test_cases:
-        print(f"\nTest: {test}")
+        print(f"\nTest: {test[:50]}{'...' if len(test) > 50 else ''}")
         result = split_concatenated_tracking_numbers(test)
         if len(result) > 1:
             print(f"  ✅ SPLIT: {len(result)} numbers detected")
