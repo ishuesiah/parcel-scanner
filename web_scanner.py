@@ -4439,7 +4439,15 @@ def retry_fetch_scan():
 @app.route("/all_scans", methods=["GET"])
 def all_scans():
     order_search = request.args.get("order_number", "").strip()
-    page = int(request.args.get("page", 1))
+
+    # Safely parse page parameter with validation
+    try:
+        page = int(request.args.get("page", 1))
+        if page < 1:
+            page = 1
+    except (ValueError, TypeError):
+        page = 1
+
     per_page = 100
     offset = (page - 1) * per_page
 
@@ -4462,7 +4470,12 @@ def all_scans():
             cursor.execute("SELECT COUNT(*) as total FROM scans")
 
         total_scans = cursor.fetchone()['total']
-        total_pages = (total_scans + per_page - 1) // per_page  # Ceiling division
+        total_pages = max(1, (total_scans + per_page - 1) // per_page)  # Ensure at least 1 page
+
+        # Validate page is within bounds
+        if page > total_pages and total_scans > 0:
+            page = total_pages
+            offset = (page - 1) * per_page
 
         # Get paginated results
         if order_search:
@@ -4517,11 +4530,21 @@ def all_scans():
         )
     except mysql.connector.errors.OperationalError as e:
         print(f"MySQL connection error in all_scans: {e}")
-        flash("Database connection error. Please try again.", "error")
+        import traceback
+        traceback.print_exc()
+        flash("Database connection error. Please try again in a moment.", "error")
+        return redirect(url_for("index"))
+    except mysql.connector.Error as e:
+        print(f"MySQL error in all_scans: {e}")
+        import traceback
+        traceback.print_exc()
+        flash("Database error occurred. Please contact support if this persists.", "error")
         return redirect(url_for("index"))
     except Exception as e:
-        print(f"Error in all_scans: {e}")
-        flash("An error occurred while loading scans.", "error")
+        print(f"Unexpected error in all_scans: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"An error occurred while loading scans: {str(e)}", "error")
         return redirect(url_for("index"))
     finally:
         if cursor:
