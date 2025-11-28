@@ -2913,6 +2913,53 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
     .loading {
       text-align: center; padding: 40px; color: #666;
     }
+
+    .filter-buttons {
+      display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;
+      background: white; padding: 16px; border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .filter-btn {
+      padding: 10px 16px; font-size: 0.9rem; border-radius: 6px;
+      cursor: pointer; transition: all 0.2s; text-decoration: none;
+      display: inline-flex; align-items: center; gap: 8px;
+      border: 2px solid transparent;
+    }
+    .filter-btn-all {
+      background: #534bc4; color: white; border-color: #534bc4;
+    }
+    .filter-btn-all:hover { opacity: 0.9; }
+    .filter-btn-all.inactive {
+      background: white; color: #534bc4;
+    }
+    .filter-btn-warning {
+      background: #e67e00; color: white; border-color: #e67e00;
+    }
+    .filter-btn-warning:hover { opacity: 0.9; }
+    .filter-btn-warning.inactive {
+      background: white; color: #e67e00;
+    }
+    .filter-btn-critical {
+      background: #952746; color: white; border-color: #952746;
+    }
+    .filter-btn-critical:hover { opacity: 0.9; }
+    .filter-btn-critical.inactive {
+      background: white; color: #952746;
+    }
+    .filter-btn-info {
+      background: #1976d2; color: white; border-color: #1976d2;
+    }
+    .filter-btn-info:hover { opacity: 0.9; }
+    .filter-btn-info.inactive {
+      background: white; color: #1976d2;
+    }
+    .filter-count {
+      background: rgba(255,255,255,0.3); padding: 2px 8px;
+      border-radius: 10px; font-size: 0.8rem; font-weight: 600;
+    }
+    .filter-btn.inactive .filter-count {
+      background: rgba(0,0,0,0.1);
+    }
   </style>
 </head>
 <body>
@@ -2946,11 +2993,36 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
       <div class="search-box">
         <form method="get" action="{{ url_for('check_shipments') }}">
           <input type="text" name="search" placeholder="Search by customer name, order #, or tracking #..." value="{{ search_query }}" autofocus>
+          <input type="hidden" name="filter" value="{{ current_filter }}">
           <button type="submit" class="btn btn-search">🔍 Search</button>
           {% if search_query %}
-            <a href="{{ url_for('check_shipments') }}" style="margin-left: 8px; color: #534bc4;">Clear</a>
+            <a href="{{ url_for('check_shipments', filter=current_filter) }}" style="margin-left: 8px; color: #534bc4;">Clear</a>
           {% endif %}
         </form>
+      </div>
+
+      <!-- Filter Buttons -->
+      <div class="filter-buttons">
+        <a href="{{ url_for('check_shipments', search=search_query) }}"
+           class="filter-btn filter-btn-all {{ '' if current_filter == 'all' else 'inactive' }}">
+          📋 All Shipments
+          <span class="filter-count">{{ stats.total }}</span>
+        </a>
+        <a href="{{ url_for('check_shipments', filter='scanned_not_delivered', search=search_query) }}"
+           class="filter-btn filter-btn-warning {{ '' if current_filter == 'scanned_not_delivered' else 'inactive' }}">
+          ⚠️ Scanned, Not Delivered
+          <span class="filter-count">{{ stats.scanned_not_delivered }}</span>
+        </a>
+        <a href="{{ url_for('check_shipments', filter='not_scanned_not_delivered', search=search_query) }}"
+           class="filter-btn filter-btn-critical {{ '' if current_filter == 'not_scanned_not_delivered' else 'inactive' }}">
+          🚨 Not Scanned, Not Delivered
+          <span class="filter-count">{{ stats.not_scanned_not_delivered }}</span>
+        </a>
+        <a href="{{ url_for('check_shipments', filter='not_printed', search=search_query) }}"
+           class="filter-btn filter-btn-info {{ '' if current_filter == 'not_printed' else 'inactive' }}">
+          🖨️ Not Printed (Awaiting)
+          <span class="filter-count">{{ stats.not_printed }}</span>
+        </a>
       </div>
 
       {% if loading %}
@@ -5026,14 +5098,29 @@ def check_shipments():
     Check shipment status page.
     Pulls from cached shipments data, checks scan database, and queries UPS for tracking.
     Flags shipments that are stuck (label printed but not moving).
+
+    Filters:
+    - all: Show all shipments
+    - scanned_not_delivered: Scanned in our system but not delivered yet
+    - not_scanned_not_delivered: Not scanned and not delivered
+    - not_printed: Orders awaiting shipment from ShipStation
     """
     search_query = request.args.get("search", "").strip()
+    current_filter = request.args.get("filter", "all")
     page = int(request.args.get("page", 1))
     per_page = 50
 
+    # Initialize stats
+    stats = {
+        "total": 0,
+        "scanned_not_delivered": 0,
+        "not_scanned_not_delivered": 0,
+        "not_printed": 0
+    }
+
     try:
         # Query from cache instead of ShipStation API (much faster!)
-        print(f"📦 Querying shipments cache (page {page})...")
+        print(f"📦 Querying shipments cache (page {page}, filter={current_filter})...")
 
         conn = get_mysql_connection()
         cursor = conn.cursor(dictionary=True)
@@ -5189,7 +5276,18 @@ def check_shipments():
                 except:
                     pass
 
-            shipments.append({
+            # Check if delivered
+            is_delivered = ups_status == "delivered"
+
+            # Update stats (always count these, even with filters)
+            stats["total"] += 1
+            if scanned and not is_delivered:
+                stats["scanned_not_delivered"] += 1
+            if not scanned and not is_delivered:
+                stats["not_scanned_not_delivered"] += 1
+
+            # Build shipment data
+            ship_data = {
                 "order_number": order_number,
                 "customer_name": customer_name,
                 "tracking_number": tracking_number,
@@ -5205,21 +5303,97 @@ def check_shipments():
                 "flag_severity": flag_severity,
                 "is_cancelled": is_cancelled,
                 "cancel_reason": cancel_reason
-            })
+            }
+
+            # Apply filter
+            if current_filter == "all":
+                shipments.append(ship_data)
+            elif current_filter == "scanned_not_delivered":
+                if scanned and not is_delivered:
+                    shipments.append(ship_data)
+            elif current_filter == "not_scanned_not_delivered":
+                if not scanned and not is_delivered:
+                    shipments.append(ship_data)
+            # Note: "not_printed" filter is handled separately below
 
         cursor.close()
         conn.close()
 
+        # Handle "not_printed" filter - Get orders awaiting shipment from ShipStation
+        if current_filter == "not_printed":
+            try:
+                if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+                    print("📋 Fetching awaiting_shipment orders from ShipStation...")
+                    resp = requests.get(
+                        "https://ssapi.shipstation.com/orders",
+                        auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                        params={
+                            "orderStatus": "awaiting_shipment",
+                            "pageSize": 500,
+                            "sortBy": "OrderDate",
+                            "sortDir": "DESC"
+                        },
+                        timeout=30
+                    )
+                    if resp.status_code == 200:
+                        awaiting_orders = resp.json().get("orders", [])
+                        stats["not_printed"] = len(awaiting_orders)
+
+                        # Replace shipments list with awaiting orders
+                        shipments = []
+                        for order in awaiting_orders:
+                            ship_to = order.get("shipTo", {}) or {}
+                            customer_name = ship_to.get("name", "N/A")
+                            shipments.append({
+                                "order_number": order.get("orderNumber", "N/A"),
+                                "customer_name": customer_name,
+                                "tracking_number": "Not Shipped Yet",
+                                "carrier": "N/A",
+                                "ship_date": order.get("orderDate", "")[:10] if order.get("orderDate") else "N/A",
+                                "scanned": False,
+                                "scan_date": "",
+                                "ups_status": "not_printed",
+                                "ups_status_text": "Awaiting Shipment",
+                                "ups_last_activity": "—",
+                                "flag": True,
+                                "flag_reason": "📋 Order not yet printed/shipped",
+                                "flag_severity": "warning",
+                                "is_cancelled": False,
+                                "cancel_reason": ""
+                            })
+                        total_shipments = len(shipments)
+                        total_pages = 1
+                    else:
+                        print(f"⚠️ ShipStation awaiting orders error: {resp.status_code}")
+            except Exception as e:
+                print(f"⚠️ Error fetching awaiting orders: {e}")
+        else:
+            # Get not_printed count for stats (separate API call)
+            try:
+                if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+                    resp = requests.get(
+                        "https://ssapi.shipstation.com/orders",
+                        auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                        params={"orderStatus": "awaiting_shipment", "pageSize": 1},
+                        timeout=10
+                    )
+                    if resp.status_code == 200:
+                        stats["not_printed"] = resp.json().get("total", 0)
+            except Exception as e:
+                print(f"⚠️ Error getting awaiting orders count: {e}")
+
         # Pagination URLs
         has_prev = page > 1
         has_next = page < total_pages
-        prev_url = url_for("check_shipments", page=page-1, search=search_query) if has_prev else "#"
-        next_url = url_for("check_shipments", page=page+1, search=search_query) if has_next else "#"
+        prev_url = url_for("check_shipments", page=page-1, search=search_query, filter=current_filter) if has_prev else "#"
+        next_url = url_for("check_shipments", page=page+1, search=search_query, filter=current_filter) if has_next else "#"
 
         return render_template_string(
             CHECK_SHIPMENTS_TEMPLATE,
             shipments=shipments,
             search_query=search_query,
+            current_filter=current_filter,
+            stats=stats,
             loading=False,
             page=page,
             total_pages=total_pages,
@@ -5240,6 +5414,8 @@ def check_shipments():
             CHECK_SHIPMENTS_TEMPLATE,
             shipments=[],
             search_query=search_query,
+            current_filter=current_filter,
+            stats={"total": 0, "scanned_not_delivered": 0, "not_scanned_not_delivered": 0, "not_printed": 0},
             loading=False,
             page=1,
             total_pages=1,
