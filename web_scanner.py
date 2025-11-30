@@ -4494,10 +4494,14 @@ def all_batches():
     conn = get_mysql_connection()
     try:
         cursor = conn.cursor(dictionary=True)
+        # Calculate pkg_count dynamically from scans table (so it updates immediately)
         cursor.execute("""
-          SELECT id, carrier, created_at, pkg_count, tracking_numbers, status, notified_at, notes
-            FROM batches
-           ORDER BY created_at DESC
+          SELECT b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes,
+                 COUNT(s.id) as pkg_count
+            FROM batches b
+            LEFT JOIN scans s ON s.batch_id = b.id
+           GROUP BY b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes
+           ORDER BY b.created_at DESC
         """)
         batches = cursor.fetchall()
         return render_template_string(
@@ -5292,8 +5296,8 @@ def check_shipments():
                 SUM(CASE WHEN s.tracking_number IS NULL AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL)
                          AND sc.ship_date <= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as not_scanned_not_delivered
             FROM shipments_cache sc
-            LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
-            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+            LEFT JOIN scans s ON s.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
+            LEFT JOIN tracking_status_cache tc ON tc.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
             WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
         """
         cursor.execute(stats_query)
@@ -5382,8 +5386,8 @@ def check_shipments():
             count_query = f"""
                 SELECT COUNT(DISTINCT sc.tracking_number) as total
                 FROM shipments_cache sc
-                LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
-                LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+                LEFT JOIN scans s ON s.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
+                LEFT JOIN tracking_status_cache tc ON tc.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
                 WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
                 {filter_condition}
                 {search_condition}
@@ -5412,9 +5416,9 @@ def check_shipments():
                     co.id as cancelled_id,
                     co.reason as cancel_reason
                 FROM shipments_cache sc
-                LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
-                LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
-                LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
+                LEFT JOIN scans s ON s.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
+                LEFT JOIN tracking_status_cache tc ON tc.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
+                LEFT JOIN cancelled_orders co ON co.order_number COLLATE utf8mb4_unicode_ci = sc.order_number COLLATE utf8mb4_unicode_ci
                 WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
                 {filter_condition}
                 {search_condition}
