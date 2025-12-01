@@ -74,6 +74,11 @@ class UPSAPI:
                 token_data = response.json()
                 self.access_token = token_data.get("access_token")
                 expires_in = token_data.get("expires_in", 3600)  # Default 1 hour
+                # Convert to int in case API returns string
+                try:
+                    expires_in = int(expires_in)
+                except (ValueError, TypeError):
+                    expires_in = 3600
                 self.token_expires_at = time.time() + expires_in - 60  # Refresh 1 min early
                 print(f"✅ UPS OAuth token obtained (expires in {expires_in}s)")
                 return self.access_token
