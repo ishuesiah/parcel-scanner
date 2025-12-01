@@ -62,14 +62,14 @@ INACTIVITY_TIMEOUT = 30 * 60
 # ── MySQL connection pool ──
 db_pool = mysql.connector.pooling.MySQLConnectionPool(
     pool_name="flask_pool",
-    pool_size=15,  # Increased from 5 to 15 to handle concurrent scans + background threads
+    pool_size=10,  # Reduced to avoid overwhelming Kinsta's connection limits
     pool_reset_session=True,
     host=os.environ["MYSQL_HOST"],
     port=int(os.environ.get("MYSQL_PORT", 30603)),
     user=os.environ["MYSQL_USER"],
     password=os.environ["MYSQL_PASSWORD"],
     database=os.environ["MYSQL_DATABASE"],
-    connection_timeout=10,  # 10 second timeout for getting a connection from pool
+    connection_timeout=30,  # Increased timeout
     autocommit=False,  # Explicit transaction control
 )
 
@@ -124,6 +124,66 @@ def get_mysql_connection():
             else:
                 print(f"❌ Database connection error: {e}")
                 raise
+
+
+def execute_with_retry(query_func, max_retries=3):
+    """
+    Execute a database operation with retry logic for connection drops during query.
+
+    Args:
+        query_func: A function that takes (conn, cursor) and performs the database operation
+        max_retries: Maximum number of retry attempts
+
+    Returns:
+        The result of query_func
+
+    Example:
+        def my_query(conn, cursor):
+            cursor.execute("SELECT * FROM table")
+            return cursor.fetchall()
+        result = execute_with_retry(my_query)
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        conn = None
+        cursor = None
+        try:
+            conn = get_mysql_connection()
+            cursor = conn.cursor(dictionary=True)
+            result = query_func(conn, cursor)
+            return result
+        except mysql.connector.errors.OperationalError as e:
+            last_error = e
+            error_code = e.errno if hasattr(e, 'errno') else 0
+            # 2013 = Lost connection during query, 2006 = MySQL server has gone away
+            if error_code in [2006, 2013] and attempt < max_retries - 1:
+                wait = min(2 ** attempt, 8)
+                print(f"⚠️ Lost connection during query, retry {attempt + 1}/{max_retries} after {wait}s")
+                time.sleep(wait)
+                continue
+            raise
+        except mysql.connector.errors.InterfaceError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                wait = min(2 ** attempt, 8)
+                print(f"⚠️ Interface error, retry {attempt + 1}/{max_retries} after {wait}s: {e}")
+                time.sleep(wait)
+                continue
+            raise
+        finally:
+            if cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    if last_error:
+        raise last_error
 
 # Read shop URL for building admin links
 SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
@@ -234,26 +294,36 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
     Only updates entries older than 2 hours unless force_refresh=True.
     """
     if not tracking_numbers:
+        print("⚠️ update_ups_tracking_cache called with no tracking numbers")
         return
 
     ups_api = get_ups_api()
     if not ups_api.enabled:
+        print("⚠️ UPS API is not enabled (missing credentials?)")
         return
 
-    conn = get_mysql_connection()
-    cursor = conn.cursor(dictionary=True)
+    print(f"📦 update_ups_tracking_cache called with {len(tracking_numbers)} numbers, force_refresh={force_refresh}")
+
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor(dictionary=True)
+    except Exception as e:
+        print(f"❌ Failed to get MySQL connection in update_ups_tracking_cache: {e}")
+        return
 
     try:
         # Filter to only UPS tracking numbers (start with 1Z)
-        ups_tracking = [t for t in tracking_numbers if t.startswith("1Z")]
+        ups_tracking = [t for t in tracking_numbers if t and t.startswith("1Z")]
         if not ups_tracking:
+            print("⚠️ No valid 1Z tracking numbers to update")
             return
 
         # Check which ones need updating (older than 2 hours or not in cache)
-        placeholders = ",".join(["%s"] * len(ups_tracking))
         if force_refresh:
             to_update = ups_tracking
+            print(f"🔄 Force refresh: will update all {len(to_update)} tracking numbers")
         else:
+            placeholders = ",".join(["%s"] * len(ups_tracking))
             cursor.execute(f"""
                 SELECT tracking_number, updated_at FROM tracking_status_cache
                 WHERE tracking_number IN ({placeholders})
@@ -273,10 +343,19 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
             return
 
         print(f"🔄 Updating UPS tracking cache for {len(to_update)} tracking numbers...")
+        updated_count = 0
+        error_count = 0
 
         for tracking_number in to_update[:20]:  # Limit to 20 per request to avoid rate limits
             try:
                 result = ups_api.get_tracking_status(tracking_number)
+
+                if result.get("status") == "error":
+                    print(f"⚠️ UPS API error for {tracking_number}: {result.get('error', 'Unknown error')}")
+                    error_count += 1
+                    continue
+
+                print(f"✅ UPS {tracking_number}: status={result.get('status')}, est={result.get('estimated_delivery', 'N/A')}")
 
                 cursor.execute("""
                     INSERT INTO tracking_status_cache
@@ -296,7 +375,7 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
                     tracking_number,
                     "UPS",
                     result.get("status", "unknown"),
-                    result.get("status_description", "")[:500],
+                    result.get("status_description", "")[:500] if result.get("status_description") else "",
                     result.get("estimated_delivery", ""),
                     result.get("location", ""),
                     result.get("last_activity", ""),
@@ -304,8 +383,12 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
                     result.get("raw_status_code", "")
                 ))
                 conn.commit()
+                updated_count += 1
             except Exception as e:
                 print(f"⚠️ Error caching tracking for {tracking_number}: {e}")
+                error_count += 1
+
+        print(f"✓ UPS tracking cache update complete: {updated_count} updated, {error_count} errors")
 
         print(f"✓ Updated {min(len(to_update), 20)} tracking statuses")
 
@@ -5643,10 +5726,19 @@ def check_shipments():
             conn.close()
 
             # Refresh tracking cache in background (don't block page load)
-            if tracking_to_refresh and (refresh_tracking or len(tracking_to_refresh) <= 5):
-                print(f"🔄 Refreshing {len(tracking_to_refresh)} tracking statuses in background...")
+            # If user clicked "Refresh Tracking" button, force refresh all visible shipments
+            if refresh_tracking:
+                # Get all UPS tracking numbers from current page for force refresh
+                all_tracking = [s["tracking_number"] for s in shipments if s.get("tracking_number", "").startswith("1Z")]
+                if all_tracking:
+                    print(f"🔄 User requested refresh: force-refreshing {len(all_tracking)} tracking statuses...")
+                    import threading
+                    threading.Thread(target=update_ups_tracking_cache, args=(all_tracking[:20], True)).start()
+            elif tracking_to_refresh and len(tracking_to_refresh) <= 10:
+                # Auto-refresh stale/missing tracking data (small batches only)
+                print(f"🔄 Auto-refreshing {len(tracking_to_refresh)} stale tracking statuses...")
                 import threading
-                threading.Thread(target=update_ups_tracking_cache, args=(tracking_to_refresh[:20],)).start()
+                threading.Thread(target=update_ups_tracking_cache, args=(tracking_to_refresh[:20], False)).start()
 
         # Pagination URLs
         has_prev = page > 1
