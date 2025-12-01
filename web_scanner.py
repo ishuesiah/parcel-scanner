@@ -390,8 +390,6 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
 
         print(f"✓ UPS tracking cache update complete: {updated_count} updated, {error_count} errors")
 
-        print(f"✓ Updated {min(len(to_update), 20)} tracking statuses")
-
     except Exception as e:
         print(f"❌ Error updating tracking cache: {e}")
     finally:
@@ -5617,6 +5615,9 @@ def check_shipments():
                     if not tracking_updated or (datetime.now() - tracking_updated).seconds > 7200:
                         tracking_to_refresh.append(tracking_number)
 
+                # Save original status for flag logic (before we modify it for display)
+                original_ups_status = ups_status
+
                 # Format status display with user-friendly messages
                 if ups_status == "delivered":
                     ups_status_text = "✅ Delivered"
@@ -5687,7 +5688,7 @@ def check_shipments():
                             flag = True
                             flag_severity = "critical"
                             flag_reason = f"🚨 CRITICAL: Label created {days_since_ship} days ago but NEVER SCANNED!"
-                        elif scanned and ups_status == "label_created" and days_since_ship >= 3:
+                        elif scanned and original_ups_status == "label_created" and days_since_ship >= 3:
                             flag = True
                             flag_severity = "critical"
                             flag_reason = f"🚨 Scanned {days_since_ship} days ago but UPS shows no pickup."
@@ -5695,7 +5696,7 @@ def check_shipments():
                             flag = True
                             flag_severity = "warning"
                             flag_reason = f"⚠️ Not scanned after {days_since_ship} days."
-                        elif ups_status == "exception":
+                        elif original_ups_status == "exception":
                             flag = True
                             flag_severity = "warning"
                             flag_reason = "⚠️ Shipment exception or delay."
