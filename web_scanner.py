@@ -75,39 +75,55 @@ db_pool = mysql.connector.pooling.MySQLConnectionPool(
 
 def get_mysql_connection():
     """
-    Get a connection from the pool with retry logic for pool exhaustion.
-    Validates connection is alive before returning.
+    Get a connection from the pool with robust retry logic.
+    Handles pool exhaustion, stale connections, and transient network issues.
     """
-    max_retries = 3
+    max_retries = 5
     for retry in range(max_retries):
         try:
             conn = db_pool.get_connection()
 
-            # Validate connection is alive
+            # Validate connection is alive with more attempts
             try:
-                conn.ping(reconnect=True, attempts=2, delay=1)
+                conn.ping(reconnect=True, attempts=3, delay=2)
             except Exception as ping_error:
-                print(f"Connection ping failed, getting new connection: {ping_error}")
+                print(f"⚠️ Connection ping failed (attempt {retry + 1}): {ping_error}")
                 try:
                     conn.close()
                 except Exception:
                     pass
                 if retry < max_retries - 1:
+                    wait = min(2 ** retry, 8)  # Exponential backoff: 1s, 2s, 4s, 8s
+                    time.sleep(wait)
                     continue
                 raise
 
             return conn
         except mysql.connector.errors.PoolError as e:
             if retry < max_retries - 1:
-                wait = 0.5 * (retry + 1)  # 0.5s, 1s, 1.5s
-                print(f"Connection pool exhausted, retry {retry + 1}/{max_retries} after {wait}s: {e}")
+                wait = min(2 ** retry, 8)  # Exponential backoff: 1s, 2s, 4s, 8s
+                print(f"⚠️ Connection pool exhausted, retry {retry + 1}/{max_retries} after {wait}s: {e}")
                 time.sleep(wait)
             else:
-                print(f"Failed to get database connection after {max_retries} retries")
+                print(f"❌ Failed to get database connection after {max_retries} retries")
+                raise
+        except mysql.connector.errors.InterfaceError as e:
+            # Handle "Lost connection" and similar transient errors
+            if retry < max_retries - 1:
+                wait = min(2 ** retry, 8)  # Exponential backoff: 1s, 2s, 4s, 8s
+                print(f"⚠️ MySQL connection error, retry {retry + 1}/{max_retries} after {wait}s: {e}")
+                time.sleep(wait)
+            else:
+                print(f"❌ Failed to connect to MySQL after {max_retries} retries: {e}")
                 raise
         except Exception as e:
-            print(f"Database connection error: {e}")
-            raise
+            if retry < max_retries - 1:
+                wait = min(2 ** retry, 8)
+                print(f"⚠️ Database error, retry {retry + 1}/{max_retries} after {wait}s: {e}")
+                time.sleep(wait)
+            else:
+                print(f"❌ Database connection error: {e}")
+                raise
 
 # Read shop URL for building admin links
 SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
@@ -2981,12 +2997,38 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
       display: inline-block; padding: 4px 8px; border-radius: 4px;
       font-size: 0.85rem; font-weight: 500;
     }
-    .status-label-created { background-color: #e3f2fd; color: #1976d2; }
-    .status-in-transit { background-color: #fff4e5; color: #8a6100; }
+    .status-label_created { background-color: #e3f2fd; color: #1976d2; }
+    .status-in_transit { background-color: #fff4e5; color: #8a6100; }
     .status-delivered { background-color: #e0f7e9; color: #199b76; }
+    .status-almost_there { background-color: #d4edda; color: #155724; font-weight: 600; }
+    .status-hasnt_moved { background-color: #fff3cd; color: #856404; }
     .status-exception { background-color: #fdecea; color: #952746; }
     .status-unknown { background-color: #f5f5f5; color: #666; }
+    .status-non_ups { background-color: #f5f5f5; color: #999; }
+    .status-not_printed { background-color: #e3f2fd; color: #1976d2; }
     .status-error { background-color: #fdecea; color: #952746; }
+
+    /* Loading overlay for page load */
+    .page-loading-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(255,255,255,0.9); z-index: 9999;
+      display: flex; flex-direction: column;
+      justify-content: center; align-items: center;
+    }
+    .page-loading-overlay.hidden { display: none; }
+    .spinner {
+      width: 50px; height: 50px;
+      border: 4px solid #e0e0e0;
+      border-top-color: #534bc4;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .loading-text {
+      margin-top: 16px; color: #534bc4; font-weight: 500; font-size: 1.1rem;
+    }
 
     .cancelled-row {
       background-color: #fdecea !important;
@@ -3088,6 +3130,23 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
   </style>
 </head>
 <body>
+  <!-- Loading overlay - shows while page is loading -->
+  <div id="pageLoadingOverlay" class="page-loading-overlay">
+    <div class="spinner"></div>
+    <div class="loading-text">Loading shipments...</div>
+  </div>
+  <script>
+    // Hide loading overlay when page is fully loaded
+    window.addEventListener('load', function() {
+      document.getElementById('pageLoadingOverlay').classList.add('hidden');
+    });
+    // Also hide after a timeout in case of slow loads
+    setTimeout(function() {
+      var overlay = document.getElementById('pageLoadingOverlay');
+      if (overlay) overlay.classList.add('hidden');
+    }, 10000);
+  </script>
+
   <div class="container">
     <div class="sidebar">
       <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
@@ -5475,21 +5534,61 @@ def check_shipments():
                     if not tracking_updated or (datetime.now() - tracking_updated).seconds > 7200:
                         tracking_to_refresh.append(tracking_number)
 
-                # Format status display
+                # Format status display with user-friendly messages
                 if ups_status == "delivered":
                     ups_status_text = "✅ Delivered"
+                    ups_status = "delivered"
                 elif ups_status == "in_transit":
-                    ups_status_text = "🚚 On the Way"
-                    if estimated_delivery:
-                        ups_status_text += f" - Est: {estimated_delivery}"
+                    # Check if it's "almost there" (out for delivery or has estimated delivery today/tomorrow)
+                    status_lower = (cached_ship.get("ups_status_text") or "").lower()
+                    if "out for delivery" in status_lower:
+                        ups_status_text = "🏃 Almost There!"
+                        ups_status = "almost_there"
+                    elif estimated_delivery:
+                        # Check if delivery is today or tomorrow
+                        try:
+                            from datetime import datetime
+                            est_lower = estimated_delivery.lower()
+                            today = datetime.now()
+                            if "today" in est_lower or today.strftime("%B %d").lower() in est_lower:
+                                ups_status_text = f"🏃 Almost There! (Today)"
+                                ups_status = "almost_there"
+                            elif "tomorrow" in est_lower:
+                                ups_status_text = f"🚚 On the Way (Tomorrow)"
+                                ups_status = "in_transit"
+                            else:
+                                ups_status_text = f"🚚 On the Way"
+                                if estimated_delivery:
+                                    ups_status_text += f" - Est: {estimated_delivery}"
+                        except:
+                            ups_status_text = f"🚚 On the Way"
+                            if estimated_delivery:
+                                ups_status_text += f" - Est: {estimated_delivery}"
+                    else:
+                        ups_status_text = "🚚 On the Way"
                 elif ups_status == "label_created":
-                    ups_status_text = "📦 Label Created"
+                    # Check how long since label was created
+                    try:
+                        ship_datetime = datetime.strptime(ship_date, "%Y-%m-%d")
+                        days_since = (datetime.now() - ship_datetime).days
+                        if days_since >= 3:
+                            ups_status_text = "😴 Hasn't Moved"
+                            ups_status = "hasnt_moved"
+                        else:
+                            ups_status_text = "📦 Label Created"
+                    except:
+                        ups_status_text = "📦 Label Created"
                 elif ups_status == "exception":
                     ups_status_text = "⚠️ Exception/Delay"
                 elif carrier_code != "UPS":
                     ups_status_text = "N/A (Non-UPS)"
-                elif not ups_status_text:
-                    ups_status_text = "—"
+                    ups_status = "non_ups"
+                elif not ups_status_text or ups_status_text == "-":
+                    # No cached data - needs refresh
+                    ups_status_text = "🔄 Loading..."
+                    ups_status = "unknown"
+                    if tracking_number.startswith("1Z"):
+                        tracking_to_refresh.append(tracking_number)
 
                 # Determine if shipment should be flagged
                 flag = False

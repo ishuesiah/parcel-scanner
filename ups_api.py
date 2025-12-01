@@ -176,6 +176,7 @@ class UPSAPI:
             current_status = package.get("currentStatus", {})
             status_code = current_status.get("code", "")
             status_desc = current_status.get("description", "Unknown")
+            status_type = current_status.get("type", "")
 
             # Get activity history
             activity = package.get("activity", [])
@@ -192,27 +193,94 @@ class UPSAPI:
                 country = loc.get("countryCode", "")
                 location = f"{city}, {state}, {country}".strip(", ")
 
-            # Determine simplified status
+            # Extract estimated delivery date from multiple possible locations
+            estimated_delivery = ""
+
+            # Try deliveryDate first
+            delivery_date = package.get("deliveryDate", [])
+            if delivery_date:
+                if isinstance(delivery_date, list) and len(delivery_date) > 0:
+                    dd = delivery_date[0]
+                    date_str = dd.get("date", "")
+                    if date_str:
+                        # Format: YYYYMMDD -> Month DD
+                        try:
+                            from datetime import datetime
+                            dt = datetime.strptime(date_str, "%Y%m%d")
+                            estimated_delivery = dt.strftime("%B %d")
+                        except:
+                            estimated_delivery = date_str
+                elif isinstance(delivery_date, dict):
+                    date_str = delivery_date.get("date", "")
+                    if date_str:
+                        try:
+                            from datetime import datetime
+                            dt = datetime.strptime(date_str, "%Y%m%d")
+                            estimated_delivery = dt.strftime("%B %d")
+                        except:
+                            estimated_delivery = date_str
+
+            # Try deliveryTime for more precision
+            delivery_time = package.get("deliveryTime", {})
+            if delivery_time:
+                start_time = delivery_time.get("startTime", "")
+                end_time = delivery_time.get("endTime", "")
+                if start_time and end_time and estimated_delivery:
+                    estimated_delivery += f" ({start_time}-{end_time})"
+
+            # Determine simplified status with more comprehensive mapping
             status = "unknown"
-            if status_code in ["011", "012"]:  # Delivered
+
+            # Check status type first (more reliable)
+            if status_type == "D":  # Delivered
                 status = "delivered"
-            elif status_code in ["M", "MP", "P"]:  # In transit / Moving
+            elif status_type == "I":  # In Transit
                 status = "in_transit"
-            elif status_code in ["I"]:  # Label created / Pre-shipment
+            elif status_type == "P":  # Pickup
+                status = "in_transit"
+            elif status_type == "M":  # Manifest/Billing info received
                 status = "label_created"
-            elif status_code in ["X"]:  # Exception / Delay
+            elif status_type == "X":  # Exception
                 status = "exception"
-            elif "transit" in status_desc.lower() or "transit" in last_activity_desc.lower():
-                status = "in_transit"
-            elif "delivered" in status_desc.lower():
-                status = "delivered"
-            elif "exception" in status_desc.lower() or "delay" in status_desc.lower():
+            elif status_type == "RS":  # Returned to Shipper
                 status = "exception"
+
+            # Fall back to status code if type didn't match
+            if status == "unknown":
+                if status_code in ["011", "012", "KB", "KM"]:  # Delivered codes
+                    status = "delivered"
+                elif status_code in ["M", "MP", "P", "J", "W", "A", "AR", "AF", "OR", "DP", "OT", "IT"]:
+                    # In transit codes: M=Manifest, MP=Manifest Pickup, P=Pickup,
+                    # J=Package in transit, W=Wait, A=Arrived, AR=Arrival, AF=At Facility,
+                    # OR=Out for delivery, DP=Departure, OT=On the way, IT=In transit
+                    status = "in_transit"
+                elif status_code in ["I", "MV", "NA"]:  # Label created / Pre-shipment
+                    status = "label_created"
+                elif status_code in ["X", "RS", "DJ", "D", "RD"]:  # Exception / Delay / Damage
+                    status = "exception"
+
+            # Fall back to text matching if still unknown
+            if status == "unknown":
+                combined_desc = f"{status_desc} {last_activity_desc}".lower()
+                if "delivered" in combined_desc:
+                    status = "delivered"
+                elif any(x in combined_desc for x in ["transit", "on the way", "in progress", "departed", "arrived", "processing", "cleared", "customs", "out for delivery", "facility"]):
+                    status = "in_transit"
+                elif any(x in combined_desc for x in ["label", "created", "billing", "shipper created", "ready for ups"]):
+                    status = "label_created"
+                elif any(x in combined_desc for x in ["exception", "delay", "damage", "return", "refused", "undeliverable"]):
+                    status = "exception"
+                else:
+                    # If we have any activity at all, assume it's moving
+                    if activity and len(activity) > 0:
+                        status = "in_transit"
 
             # Get delivery date if delivered
             delivered_date = None
             if status == "delivered" and last_activity.get("date"):
                 delivered_date = last_activity.get("date")
+
+            print(f"📊 UPS parsed: status={status}, code={status_code}, type={status_type}, desc={status_desc[:50]}, est={estimated_delivery}")
 
             return {
                 "status": status,
@@ -220,12 +288,15 @@ class UPSAPI:
                 "last_activity": last_activity.get("date", "") or last_activity.get("time", ""),
                 "location": location,
                 "delivered_date": delivered_date,
+                "estimated_delivery": estimated_delivery,
                 "raw_status_code": status_code,
                 "raw_status_desc": status_desc
             }
 
         except Exception as e:
             print(f"❌ Error parsing UPS response: {e}")
+            import traceback
+            traceback.print_exc()
             return {
                 "status": "error",
                 "status_description": "Failed to parse tracking data",
