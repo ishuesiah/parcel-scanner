@@ -220,6 +220,29 @@ def get_ups_api():
         _ups_api = UPSAPI()
     return _ups_api
 
+# ── Stats Cache (5 minute TTL) ──
+_stats_cache = {
+    "data": None,
+    "expires_at": 0
+}
+STATS_CACHE_TTL = 300  # 5 minutes
+
+def get_cached_stats():
+    """Get stats from cache if still valid, else return None."""
+    if _stats_cache["data"] and time.time() < _stats_cache["expires_at"]:
+        return _stats_cache["data"]
+    return None
+
+def set_cached_stats(stats):
+    """Store stats in cache with TTL."""
+    _stats_cache["data"] = stats.copy()
+    _stats_cache["expires_at"] = time.time() + STATS_CACHE_TTL
+
+def invalidate_stats_cache():
+    """Clear the stats cache (call after scans or status updates)."""
+    _stats_cache["data"] = None
+    _stats_cache["expires_at"] = 0
+
 # ── Shipments Cache System ──
 def init_shipments_cache():
     """
@@ -4172,6 +4195,9 @@ def _process_single_scan(code, is_ajax):
         scan_id = cursor.lastrowid
         cursor.close()
 
+        # Invalidate stats cache when new scan is recorded
+        invalidate_stats_cache()
+
         # ── Launch background thread for API calls (only if not duplicate) ──
         # Note: We still insert the scan record even if duplicate, but we don't
         # need to fetch order details for duplicates since they're already known
@@ -5432,38 +5458,62 @@ def check_shipments():
             search_params = [search_like, search_like, search_like]
 
         # ══════════════════════════════════════════════════════════════════════
-        # STEP 1: Calculate stats across ALL 90-day data using SQL (FAST!)
+        # STEP 1: Calculate stats (use cache if available, else query DB)
         # ══════════════════════════════════════════════════════════════════════
-        stats_query = """
-            SELECT
-                COUNT(*) as total,
-                SUM(CASE WHEN s.tracking_number IS NOT NULL AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL) THEN 1 ELSE 0 END) as scanned_not_delivered,
-                SUM(CASE WHEN s.tracking_number IS NULL AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL)
-                         AND sc.ship_date <= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as not_scanned_not_delivered
-            FROM shipments_cache sc
-            LEFT JOIN scans s ON s.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
-            LEFT JOIN tracking_status_cache tc ON tc.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
-            WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
-        """
-        cursor.execute(stats_query)
-        stats_row = cursor.fetchone()
-        stats["total"] = stats_row["total"] or 0
-        stats["scanned_not_delivered"] = stats_row["scanned_not_delivered"] or 0
-        stats["not_scanned_not_delivered"] = stats_row["not_scanned_not_delivered"] or 0
+        cached_stats = get_cached_stats()
+        if cached_stats and not refresh_tracking:
+            stats = cached_stats.copy()
+            print(f"📊 Using cached stats (TTL: {STATS_CACHE_TTL}s)")
+        else:
+            stats_query = """
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN s.tracking_number IS NOT NULL AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL) THEN 1 ELSE 0 END) as scanned_not_delivered,
+                    SUM(CASE WHEN s.tracking_number IS NULL AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL)
+                             AND sc.ship_date <= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as not_scanned_not_delivered
+                FROM shipments_cache sc
+                LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
+                LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+                WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+            """
+            cursor.execute(stats_query)
+            stats_row = cursor.fetchone()
+            stats["total"] = stats_row["total"] or 0
+            stats["scanned_not_delivered"] = stats_row["scanned_not_delivered"] or 0
+            stats["not_scanned_not_delivered"] = stats_row["not_scanned_not_delivered"] or 0
 
-        # Get not_printed count from ShipStation (cached separately)
-        try:
-            if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
-                resp = requests.get(
-                    "https://ssapi.shipstation.com/orders",
-                    auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-                    params={"orderStatus": "awaiting_shipment", "pageSize": 1},
-                    timeout=10
-                )
-                if resp.status_code == 200:
-                    stats["not_printed"] = resp.json().get("total", 0)
-        except Exception as e:
-            print(f"⚠️ Error getting awaiting orders count: {e}")
+            # Get not_printed count from ShipStation
+            try:
+                if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+                    resp = requests.get(
+                        "https://ssapi.shipstation.com/orders",
+                        auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                        params={"orderStatus": "awaiting_shipment", "pageSize": 1},
+                        timeout=10
+                    )
+                    if resp.status_code == 200:
+                        stats["not_printed"] = resp.json().get("total", 0)
+            except Exception as e:
+                print(f"⚠️ Error getting awaiting orders count: {e}")
+
+            # Cache the stats
+            set_cached_stats(stats)
+            print(f"📊 Stats calculated and cached")
+
+        # Legacy: Get not_printed count if not in cached stats (backwards compat)
+        if "not_printed" not in stats:
+            try:
+                if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+                    resp = requests.get(
+                        "https://ssapi.shipstation.com/orders",
+                        auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
+                        params={"orderStatus": "awaiting_shipment", "pageSize": 1},
+                        timeout=10
+                    )
+                    if resp.status_code == 200:
+                        stats["not_printed"] = resp.json().get("total", 0)
+            except Exception as e:
+                print(f"⚠️ Error getting awaiting orders count: {e}")
 
         print(f"📊 Stats: total={stats['total']}, scanned_not_delivered={stats['scanned_not_delivered']}, not_scanned_7days={stats['not_scanned_not_delivered']}, not_printed={stats['not_printed']}")
 
@@ -5531,8 +5581,8 @@ def check_shipments():
             count_query = f"""
                 SELECT COUNT(DISTINCT sc.tracking_number) as total
                 FROM shipments_cache sc
-                LEFT JOIN scans s ON s.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
-                LEFT JOIN tracking_status_cache tc ON tc.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
+                LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
+                LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
                 WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
                 {filter_condition}
                 {search_condition}
@@ -5561,9 +5611,9 @@ def check_shipments():
                     co.id as cancelled_id,
                     co.reason as cancel_reason
                 FROM shipments_cache sc
-                LEFT JOIN scans s ON s.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
-                LEFT JOIN tracking_status_cache tc ON tc.tracking_number COLLATE utf8mb4_unicode_ci = sc.tracking_number COLLATE utf8mb4_unicode_ci
-                LEFT JOIN cancelled_orders co ON co.order_number COLLATE utf8mb4_unicode_ci = sc.order_number COLLATE utf8mb4_unicode_ci
+                LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
+                LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+                LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
                 WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
                 {filter_condition}
                 {search_condition}
