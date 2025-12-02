@@ -757,9 +757,55 @@ def backfill_missing_emails():
     except Exception as e:
         print(f"❌ Error during email backfill: {e}")
 
+def refresh_ups_tracking_background():
+    """
+    Background function to refresh UPS tracking for non-delivered shipments.
+    Only updates shipments from the last 30 days that aren't marked delivered.
+    """
+    print("🚚 Starting background UPS tracking refresh...")
+    try:
+        ups_api = get_ups_api()
+        if not ups_api.enabled:
+            print("⚠️ UPS API not enabled, skipping tracking refresh")
+            return
+
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Find UPS tracking numbers that need refresh:
+        # - Shipped in last 30 days
+        # - Not yet delivered
+        # - Haven't been updated in last 2 hours
+        cursor.execute("""
+            SELECT sc.tracking_number
+            FROM shipments_cache sc
+            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+            WHERE sc.carrier_code = 'UPS'
+              AND sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+              AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL)
+              AND (tc.updated_at IS NULL OR tc.updated_at < DATE_SUB(NOW(), INTERVAL 2 HOUR))
+            ORDER BY sc.ship_date DESC
+            LIMIT 100
+        """)
+        to_refresh = [row['tracking_number'] for row in cursor.fetchall()]
+        cursor.close()
+        conn.close()
+
+        if to_refresh:
+            print(f"🚚 Refreshing {len(to_refresh)} UPS tracking statuses in background...")
+            update_ups_tracking_cache(to_refresh, force_refresh=True)
+            print(f"✅ Background UPS tracking refresh complete")
+        else:
+            print("✓ No UPS tracking needs refresh")
+
+    except Exception as e:
+        print(f"❌ Error in background UPS tracking refresh: {e}")
+
+
 def start_background_sync():
     """
     Start background thread that syncs shipments every 5 minutes.
+    Also runs UPS tracking refresh every 15 minutes.
     Also runs email backfill and split tracking backfill on startup and once per day.
     """
     def sync_loop():
@@ -768,9 +814,16 @@ def start_background_sync():
         backfill_missing_emails()  # Then, fill missing emails for all scans (including newly split ones)
 
         last_backfill = datetime.now()
+        ups_refresh_counter = 0  # Track cycles for UPS refresh
 
         while True:
             sync_shipments_from_shipstation()
+
+            # Run UPS tracking refresh every 15 minutes (every 3rd cycle)
+            ups_refresh_counter += 1
+            if ups_refresh_counter >= 3:
+                refresh_ups_tracking_background()
+                ups_refresh_counter = 0
 
             # Run backfills once per day
             if (datetime.now() - last_backfill).total_seconds() > 86400:  # 24 hours
@@ -783,6 +836,7 @@ def start_background_sync():
     thread = threading.Thread(target=sync_loop, daemon=True)
     thread.start()
     print("✓ Background shipments sync started (every 5 minutes)")
+    print("✓ Background UPS tracking refresh started (every 15 minutes)")
     print("✓ Split tracking & email backfill will run on startup and once per day")
 
 # Start background sync on app startup
@@ -3310,7 +3364,7 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
     <div class="main-content">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
         <h2>📦 Check Shipments</h2>
-        <a href="{{ url_for('check_shipments', filter=current_filter, search=search_query, refresh='1') }}"
+        <a href="{{ url_for('check_shipments', page=page, filter=current_filter, search=search_query, refresh='1') }}"
            class="btn btn-search" style="text-decoration: none;">🔄 Refresh Tracking</a>
       </div>
       <p style="margin-bottom: 16px; color: #666;">
