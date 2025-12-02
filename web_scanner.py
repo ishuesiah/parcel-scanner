@@ -59,64 +59,51 @@ app.secret_key = os.environ["FLASK_SECRET_KEY"]
 INACTIVITY_TIMEOUT = 30 * 60
 
 
-# ── MySQL connection pool ──
-db_pool = mysql.connector.pooling.MySQLConnectionPool(
-    pool_name="flask_pool",
-    pool_size=10,  # Reduced to avoid overwhelming Kinsta's connection limits
-    pool_reset_session=True,
-    host=os.environ["MYSQL_HOST"],
-    port=int(os.environ.get("MYSQL_PORT", 30603)),
-    user=os.environ["MYSQL_USER"],
-    password=os.environ["MYSQL_PASSWORD"],
-    database=os.environ["MYSQL_DATABASE"],
-    connection_timeout=30,  # Increased timeout
-    autocommit=False,  # Explicit transaction control
-)
+# ── MySQL connection settings (NO POOLING - more reliable for Kinsta) ──
+MYSQL_CONFIG = {
+    "host": os.environ["MYSQL_HOST"],
+    "port": int(os.environ.get("MYSQL_PORT", 30603)),
+    "user": os.environ["MYSQL_USER"],
+    "password": os.environ["MYSQL_PASSWORD"],
+    "database": os.environ["MYSQL_DATABASE"],
+    "connection_timeout": 30,
+    "autocommit": False,
+}
 
 def get_mysql_connection():
     """
-    Get a connection from the pool with robust retry logic.
-    Handles pool exhaustion, stale connections, and transient network issues.
+    Create a fresh MySQL connection with retry logic.
+    No pooling - avoids stale connection issues with Kinsta's managed MySQL.
     """
     max_retries = 5
+    last_error = None
+
     for retry in range(max_retries):
         try:
-            conn = db_pool.get_connection()
-
-            # Validate connection is alive with more attempts
-            try:
-                conn.ping(reconnect=True, attempts=3, delay=2)
-            except Exception as ping_error:
-                print(f"⚠️ Connection ping failed (attempt {retry + 1}): {ping_error}")
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                if retry < max_retries - 1:
-                    wait = min(2 ** retry, 8)  # Exponential backoff: 1s, 2s, 4s, 8s
-                    time.sleep(wait)
-                    continue
-                raise
-
+            conn = mysql.connector.connect(**MYSQL_CONFIG)
+            # Quick validation
+            conn.ping(reconnect=False)
             return conn
-        except mysql.connector.errors.PoolError as e:
-            if retry < max_retries - 1:
-                wait = min(2 ** retry, 8)  # Exponential backoff: 1s, 2s, 4s, 8s
-                print(f"⚠️ Connection pool exhausted, retry {retry + 1}/{max_retries} after {wait}s: {e}")
-                time.sleep(wait)
-            else:
-                print(f"❌ Failed to get database connection after {max_retries} retries")
-                raise
         except mysql.connector.errors.InterfaceError as e:
-            # Handle "Lost connection" and similar transient errors
+            last_error = e
             if retry < max_retries - 1:
-                wait = min(2 ** retry, 8)  # Exponential backoff: 1s, 2s, 4s, 8s
+                wait = min(2 ** retry, 8)
                 print(f"⚠️ MySQL connection error, retry {retry + 1}/{max_retries} after {wait}s: {e}")
                 time.sleep(wait)
             else:
                 print(f"❌ Failed to connect to MySQL after {max_retries} retries: {e}")
                 raise
+        except mysql.connector.errors.DatabaseError as e:
+            last_error = e
+            if retry < max_retries - 1:
+                wait = min(2 ** retry, 8)
+                print(f"⚠️ MySQL database error, retry {retry + 1}/{max_retries} after {wait}s: {e}")
+                time.sleep(wait)
+            else:
+                print(f"❌ Failed to connect to MySQL after {max_retries} retries: {e}")
+                raise
         except Exception as e:
+            last_error = e
             if retry < max_retries - 1:
                 wait = min(2 ** retry, 8)
                 print(f"⚠️ Database error, retry {retry + 1}/{max_retries} after {wait}s: {e}")
@@ -124,6 +111,9 @@ def get_mysql_connection():
             else:
                 print(f"❌ Database connection error: {e}")
                 raise
+
+    if last_error:
+        raise last_error
 
 
 def execute_with_retry(query_func, max_retries=3):
