@@ -312,6 +312,41 @@ def init_tracking_status_cache():
         print(f"❌ Error initializing tracking status cache: {e}")
 
 
+def normalize_table_collations():
+    """
+    Normalize all tracking_number and order_number columns to utf8mb4_unicode_ci.
+    This fixes 'Illegal mix of collations' errors in JOIN queries.
+    """
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # List of (table, column, definition) to normalize
+        columns_to_fix = [
+            ("scans", "tracking_number", "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"),
+            ("shipments_cache", "tracking_number", "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL"),
+            ("shipments_cache", "order_number", "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"),
+            ("tracking_status_cache", "tracking_number", "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL"),
+            ("cancelled_orders", "order_number", "VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL"),
+        ]
+
+        for table, column, definition in columns_to_fix:
+            try:
+                cursor.execute(f"ALTER TABLE {table} MODIFY COLUMN {column} {definition}")
+                print(f"  ✓ Normalized {table}.{column}")
+            except Exception as e:
+                # Table or column might not exist yet - that's OK
+                if "doesn't exist" not in str(e).lower() and "unknown column" not in str(e).lower():
+                    print(f"  ⚠️ Could not normalize {table}.{column}: {e}")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✓ Table collations normalized")
+    except Exception as e:
+        print(f"⚠️ Error normalizing collations (may be OK on first run): {e}")
+
+
 def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
     """
     Update UPS tracking cache for given tracking numbers.
@@ -428,6 +463,7 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
 # Initialize cache tables on startup
 init_shipments_cache()
 init_tracking_status_cache()
+normalize_table_collations()
 
 def sync_shipments_from_shipstation():
     """
