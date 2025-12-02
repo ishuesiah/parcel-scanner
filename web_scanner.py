@@ -32,10 +32,31 @@ from flask import (
 )
 import pymysql
 import pymysql.cursors
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import threading
 import csv
 import io
+
+# Timezone support for Vancouver/PST
+try:
+    from zoneinfo import ZoneInfo
+    PST = ZoneInfo("America/Vancouver")
+except ImportError:
+    # Fallback for Python < 3.9
+    PST = timezone(timedelta(hours=-8))  # PST is UTC-8
+
+def now_pst():
+    """Get current time in Vancouver/PST timezone."""
+    return datetime.now(PST)
+
+def format_pst(dt):
+    """Format a datetime to PST timezone string."""
+    if dt is None:
+        return "—"
+    if dt.tzinfo is None:
+        # Assume UTC if no timezone
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(PST).strftime("%Y-%m-%d %H:%M")
 
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 from klaviyo_events import KlaviyoEvents  # Klaviyo integration for event tracking
@@ -3551,7 +3572,7 @@ def new_batch():
         flash("Please select a valid carrier.", "error")
         return redirect(url_for("index"))
 
-    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    created_at = now_pst().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_mysql_connection()
     try:
         cursor = conn.cursor()
@@ -4129,7 +4150,7 @@ def _process_single_scan(code, is_ajax):
             elif code.startswith("LA") or len(code) == 30:
                 scan_carrier = "USPS"
         
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now_str = now_pst().strftime("%Y-%m-%d %H:%M:%S")
 
         # ── INSERT IMMEDIATELY (no waiting for APIs) ──
         cursor = conn.cursor()
@@ -4490,7 +4511,7 @@ def notify_customers():
         success_count = 0
         skip_count = 0
         error_count = 0
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = now_pst().strftime("%Y-%m-%d %H:%M:%S")
 
         # Initialize Shopify API to fetch line items
         try:
