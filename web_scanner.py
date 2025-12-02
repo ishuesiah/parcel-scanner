@@ -347,8 +347,12 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
         updated_count = 0
         error_count = 0
 
-        for tracking_number in to_update[:20]:  # Limit to 20 per request to avoid rate limits
+        for i, tracking_number in enumerate(to_update[:50]):  # Increased to 50 with rate limiting
             try:
+                # Add delay between requests to avoid UPS rate limiting
+                if i > 0:
+                    time.sleep(0.3)  # 300ms delay between requests
+
                 result = ups_api.get_tracking_status(tracking_number)
 
                 if result.get("status") == "error":
@@ -5734,12 +5738,12 @@ def check_shipments():
                 if all_tracking:
                     print(f"🔄 User requested refresh: force-refreshing {len(all_tracking)} tracking statuses...")
                     import threading
-                    threading.Thread(target=update_ups_tracking_cache, args=(all_tracking[:20], True)).start()
-            elif tracking_to_refresh and len(tracking_to_refresh) <= 10:
+                    threading.Thread(target=update_ups_tracking_cache, args=(all_tracking[:50], True)).start()
+            elif tracking_to_refresh and len(tracking_to_refresh) <= 20:
                 # Auto-refresh stale/missing tracking data (small batches only)
                 print(f"🔄 Auto-refreshing {len(tracking_to_refresh)} stale tracking statuses...")
                 import threading
-                threading.Thread(target=update_ups_tracking_cache, args=(tracking_to_refresh[:20], False)).start()
+                threading.Thread(target=update_ups_tracking_cache, args=(tracking_to_refresh[:50], False)).start()
 
         # Pagination URLs
         has_prev = page > 1
