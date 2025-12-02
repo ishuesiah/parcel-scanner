@@ -231,7 +231,21 @@ class UPSAPI:
                 start_time = delivery_time.get("startTime", "")
                 end_time = delivery_time.get("endTime", "")
                 if start_time and end_time and estimated_delivery:
-                    estimated_delivery += f" ({start_time}-{end_time})"
+                    # Format times nicely (130000 -> 1:00 PM)
+                    try:
+                        start_hour = int(start_time[:2])
+                        end_hour = int(end_time[:2])
+                        start_min = start_time[2:4]
+                        end_min = end_time[2:4]
+                        start_ampm = "AM" if start_hour < 12 else "PM"
+                        end_ampm = "AM" if end_hour < 12 else "PM"
+                        if start_hour > 12: start_hour -= 12
+                        if end_hour > 12: end_hour -= 12
+                        if start_hour == 0: start_hour = 12
+                        if end_hour == 0: end_hour = 12
+                        estimated_delivery += f" ({start_hour}:{start_min} {start_ampm} - {end_hour}:{end_min} {end_ampm})"
+                    except:
+                        estimated_delivery += f" ({start_time}-{end_time})"
 
             # Determine simplified status with more comprehensive mapping
             status = "unknown"
