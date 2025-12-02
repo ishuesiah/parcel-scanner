@@ -1,5 +1,5 @@
 Flask
-mysql-connector-python
+PyMySQL
 gunicorn
 requests
 bcrypt

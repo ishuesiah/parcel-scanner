@@ -30,8 +30,8 @@ from flask import (
     session,
     jsonify
 )
-import mysql.connector
-from mysql.connector import pooling
+import pymysql
+import pymysql.cursors
 from datetime import datetime, timedelta
 import threading
 import csv
@@ -59,45 +59,37 @@ app.secret_key = os.environ["FLASK_SECRET_KEY"]
 INACTIVITY_TIMEOUT = 30 * 60
 
 
-# ── MySQL connection settings (NO POOLING - more reliable for Kinsta) ──
+# ── MySQL connection settings (PyMySQL - more reliable for Kinsta) ──
 MYSQL_CONFIG = {
     "host": os.environ["MYSQL_HOST"],
     "port": int(os.environ.get("MYSQL_PORT", 30603)),
     "user": os.environ["MYSQL_USER"],
     "password": os.environ["MYSQL_PASSWORD"],
     "database": os.environ["MYSQL_DATABASE"],
-    "connection_timeout": 30,
-    "autocommit": False,
+    "connect_timeout": 10,
+    "read_timeout": 30,
+    "write_timeout": 30,
+    "autocommit": True,  # Important for Kinsta
+    "cursorclass": pymysql.cursors.DictCursor
 }
 
 def get_mysql_connection():
     """
     Create a fresh MySQL connection with retry logic.
-    No pooling - avoids stale connection issues with Kinsta's managed MySQL.
+    Uses PyMySQL which handles reconnection better than mysql-connector.
     """
-    max_retries = 5
+    max_retries = 3
     last_error = None
 
     for retry in range(max_retries):
         try:
-            conn = mysql.connector.connect(**MYSQL_CONFIG)
-            # Quick validation
-            conn.ping(reconnect=False)
+            conn = pymysql.connect(**MYSQL_CONFIG)
             return conn
-        except mysql.connector.errors.InterfaceError as e:
+        except pymysql.err.OperationalError as e:
             last_error = e
             if retry < max_retries - 1:
-                wait = min(2 ** retry, 8)
+                wait = min(2 ** retry, 4)
                 print(f"⚠️ MySQL connection error, retry {retry + 1}/{max_retries} after {wait}s: {e}")
-                time.sleep(wait)
-            else:
-                print(f"❌ Failed to connect to MySQL after {max_retries} retries: {e}")
-                raise
-        except mysql.connector.errors.DatabaseError as e:
-            last_error = e
-            if retry < max_retries - 1:
-                wait = min(2 ** retry, 8)
-                print(f"⚠️ MySQL database error, retry {retry + 1}/{max_retries} after {wait}s: {e}")
                 time.sleep(wait)
             else:
                 print(f"❌ Failed to connect to MySQL after {max_retries} retries: {e}")
@@ -105,7 +97,7 @@ def get_mysql_connection():
         except Exception as e:
             last_error = e
             if retry < max_retries - 1:
-                wait = min(2 ** retry, 8)
+                wait = min(2 ** retry, 4)
                 print(f"⚠️ Database error, retry {retry + 1}/{max_retries} after {wait}s: {e}")
                 time.sleep(wait)
             else:
@@ -139,23 +131,21 @@ def execute_with_retry(query_func, max_retries=3):
         cursor = None
         try:
             conn = get_mysql_connection()
-            cursor = conn.cursor(dictionary=True)
+            cursor = conn.cursor()
             result = query_func(conn, cursor)
             return result
-        except mysql.connector.errors.OperationalError as e:
+        except pymysql.err.OperationalError as e:
             last_error = e
-            error_code = e.errno if hasattr(e, 'errno') else 0
-            # 2013 = Lost connection during query, 2006 = MySQL server has gone away
-            if error_code in [2006, 2013] and attempt < max_retries - 1:
-                wait = min(2 ** attempt, 8)
+            if attempt < max_retries - 1:
+                wait = min(2 ** attempt, 4)
                 print(f"⚠️ Lost connection during query, retry {attempt + 1}/{max_retries} after {wait}s")
                 time.sleep(wait)
                 continue
             raise
-        except mysql.connector.errors.InterfaceError as e:
+        except pymysql.err.InterfaceError as e:
             last_error = e
             if attempt < max_retries - 1:
-                wait = min(2 ** attempt, 8)
+                wait = min(2 ** attempt, 4)
                 print(f"⚠️ Interface error, retry {attempt + 1}/{max_retries} after {wait}s: {e}")
                 time.sleep(wait)
                 continue
@@ -296,7 +286,7 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
 
     try:
         conn = get_mysql_connection()
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
     except Exception as e:
         print(f"❌ Failed to get MySQL connection in update_ups_tracking_cache: {e}")
         return
@@ -484,7 +474,7 @@ def backfill_split_tracking_numbers():
     print("🔄 Checking for concatenated tracking numbers to split...")
     try:
         conn = get_mysql_connection()
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
 
         # Find scans that might have concatenated tracking numbers
         cursor.execute("""
@@ -583,7 +573,7 @@ def backfill_missing_emails():
     print("🔄 Starting email backfill for scans with missing emails...")
     try:
         conn = get_mysql_connection()
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
 
         # Find scans without customer email
         cursor.execute("""
@@ -722,7 +712,7 @@ def get_item_location(sku: str, item_name: str) -> str:
     """
     try:
         conn = get_mysql_connection()
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
 
         # First, try exact SKU match
         cursor.execute("""
@@ -3495,7 +3485,7 @@ def index():
 
     conn = get_mysql_connection()
     try:
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
 
         # Fetch batch metadata
         cursor.execute("""
@@ -4038,7 +4028,7 @@ def _process_single_scan(code, is_ajax):
         # ─────────────────────────────────────────────────────────────────
         # ✨ CHECK FOR CANCELLED ORDERS (BEFORE duplicate check)
         # ─────────────────────────────────────────────────────────────────
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
 
         # First, get the order number for this tracking number (if known)
         cursor.execute(
@@ -4332,7 +4322,7 @@ def record_batch():
 
     conn = get_mysql_connection()
     try:
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
         cursor.execute("""
           SELECT tracking_number
             FROM scans
@@ -4433,7 +4423,7 @@ def notify_customers():
         return redirect(url_for("index"))
 
     try:
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
 
         # Get batch info
         cursor.execute("SELECT carrier, status FROM batches WHERE id = %s", (batch_id,))
@@ -4623,7 +4613,7 @@ def notify_customers():
 def all_batches():
     conn = get_mysql_connection()
     try:
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
         # Calculate pkg_count dynamically from scans table (so it updates immediately)
         cursor.execute("""
           SELECT b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes,
@@ -4652,7 +4642,7 @@ def all_batches():
 def view_batch(batch_id):
     conn = get_mysql_connection()
     try:
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
         cursor.execute("""
           SELECT id, carrier, created_at, pkg_count, tracking_numbers, status, notified_at, notes
             FROM batches
@@ -4702,7 +4692,7 @@ def get_batch_updates(batch_id):
     """
     conn = get_mysql_connection()
     try:
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
         
         # Get scans from this batch that were recently updated
         # (we check scans updated in last 60 seconds to catch background API updates)
@@ -4758,7 +4748,7 @@ def retry_fetch_scan():
         return redirect(url_for("all_scans"))
 
     try:
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
 
         # Get scan details
         cursor.execute("""
@@ -4825,7 +4815,7 @@ def all_scans():
     cursor = None
     try:
         conn = get_mysql_connection()
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
 
         # Get total count for pagination
         if order_search:
@@ -4965,7 +4955,7 @@ def pick_and_pack():
                         # Check if already verified
                         conn = get_mysql_connection()
                         try:
-                            cursor = conn.cursor(dictionary=True)
+                            cursor = conn.cursor()
                             cursor.execute("""
                                 SELECT verified_at, items_checked, total_items
                                 FROM order_verifications
@@ -5046,7 +5036,7 @@ def item_locations():
     """
     conn = get_mysql_connection()
     try:
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
         cursor.execute("""
             SELECT id, aisle, shelf, rule_type, rule_value, created_at
             FROM item_location_rules
@@ -5081,7 +5071,7 @@ def stuck_orders():
     """
     conn = get_mysql_connection()
     try:
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
         cursor.execute("""
           SELECT
             id,
@@ -5139,7 +5129,7 @@ def fix_order(scan_id):
         # Get the scan from database to verify it exists
         conn = get_mysql_connection()
         try:
-            cursor = conn.cursor(dictionary=True)
+            cursor = conn.cursor()
             cursor.execute("SELECT * FROM scans WHERE id = %s", (scan_id,))
             scan = cursor.fetchone()
 
@@ -5400,7 +5390,7 @@ def check_shipments():
         print(f"📦 Loading shipments (page {page}, filter={current_filter})...")
 
         conn = get_mysql_connection()
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
 
         # Build search condition
         search_condition = ""
@@ -5621,7 +5611,6 @@ def check_shipments():
                     elif estimated_delivery:
                         # Check if delivery is today or tomorrow
                         try:
-                            from datetime import datetime
                             est_lower = estimated_delivery.lower()
                             today = datetime.now()
                             if "today" in est_lower or today.strftime("%B %d").lower() in est_lower:
