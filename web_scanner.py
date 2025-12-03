@@ -1666,6 +1666,9 @@ MAIN_TEMPLATE = r'''
 
     // Initialize success sound
     const successSound = new Audio('{{ url_for("static", filename="scan-success.mp3") }}');
+    // Initialize error sounds
+    const dupeSound = new Audio('{{ url_for("static", filename="error-dupe.mp3") }}');
+    const wrongScanSound = new Audio('{{ url_for("static", filename="error-wrong-scan.mp3") }}');
     successSound.volume = 0.5; // Set volume to 50%
 
     // ── Periodic focus restoration ──
@@ -1736,17 +1739,30 @@ MAIN_TEMPLATE = r'''
         const data = await response.json();
 
         if (data.success) {
-          // Play success sound
+          // Check if this is a duplicate scan
+          const isDuplicate = data.scan && data.scan.status && data.scan.status.startsWith('Duplicate');
+
+          // Play appropriate sound
           try {
-            successSound.currentTime = 0; // Reset to start
-            successSound.play().catch(e => console.log('Could not play sound:', e));
+            if (isDuplicate) {
+              dupeSound.currentTime = 0;
+              dupeSound.play().catch(e => console.log('Could not play dupe sound:', e));
+            } else {
+              successSound.currentTime = 0;
+              successSound.play().catch(e => console.log('Could not play sound:', e));
+            }
           } catch (e) {
             console.log('Sound play error:', e);
           }
 
-          // Show success message
-          scanStatus.textContent = data.message + ' (Details loading in background...)';
-          scanStatus.className = 'scan-status success show';
+          // Show message with appropriate styling
+          if (isDuplicate) {
+            scanStatus.textContent = data.message;
+            scanStatus.className = 'scan-status warning show';
+          } else {
+            scanStatus.textContent = data.message + ' (Details loading in background...)';
+            scanStatus.className = 'scan-status success show';
+          }
 
           // Add new row to table
           addScanToTable(data.scan);
@@ -1763,7 +1779,15 @@ MAIN_TEMPLATE = r'''
             scanStatus.classList.remove('show');
           }, 1500);
         } else {
-          // Don't play sound on errors (including carrier mismatch)
+          // Play wrong-scan sound for carrier mismatch errors
+          if (data.carrier_mismatch) {
+            try {
+              wrongScanSound.currentTime = 0;
+              wrongScanSound.play().catch(e => console.log('Could not play wrong-scan sound:', e));
+            } catch (e) {
+              console.log('Sound play error:', e);
+            }
+          }
           scanStatus.textContent = 'Error: ' + data.error;
           scanStatus.className = 'scan-status error show';
         }
