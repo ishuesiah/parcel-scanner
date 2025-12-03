@@ -235,8 +235,15 @@ def migrate_table(mysql_conn, pg_conn, table, batch_size=1000):
     col_info = mysql_cursor.fetchall()
     columns = [col['Field'] for col in col_info]
 
+    # Hardcoded timestamp columns (PostgreSQL target schema has these as TIMESTAMP)
+    # This catches cases where MySQL has them as VARCHAR but PG expects TIMESTAMP
+    KNOWN_TIMESTAMP_COLS = {
+        'scan_date', 'created_at', 'updated_at', 'notified_at', 'verified_at',
+        'cancelled_at', 'ship_date', 'last_activity_date'
+    }
+
     # Identify timestamp/datetime columns (need NULL instead of empty string)
-    timestamp_cols = set()
+    timestamp_cols = set(KNOWN_TIMESTAMP_COLS)  # Start with known ones
     for col in col_info:
         col_type = col['Type'].lower()
         if 'datetime' in col_type or 'timestamp' in col_type or 'date' in col_type:
