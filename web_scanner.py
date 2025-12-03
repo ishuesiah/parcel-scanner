@@ -251,21 +251,20 @@ def init_shipments_cache():
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS shipments_cache (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                tracking_number VARCHAR(255) NOT NULL,
+                id SERIAL PRIMARY KEY,
+                tracking_number VARCHAR(255) NOT NULL UNIQUE,
                 order_number VARCHAR(255),
                 customer_name VARCHAR(255),
                 carrier_code VARCHAR(50),
                 ship_date DATE,
                 shipstation_batch_number VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                INDEX idx_tracking (tracking_number),
-                INDEX idx_ship_date (ship_date),
-                INDEX idx_order_number (order_number),
-                UNIQUE KEY unique_tracking (tracking_number)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_tracking ON shipments_cache(tracking_number)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_ship_date ON shipments_cache(ship_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_order ON shipments_cache(order_number)")
         conn.commit()
         cursor.close()
         conn.close()
@@ -284,8 +283,8 @@ def init_tracking_status_cache():
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tracking_status_cache (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                tracking_number VARCHAR(255) NOT NULL,
+                id SERIAL PRIMARY KEY,
+                tracking_number VARCHAR(255) NOT NULL UNIQUE,
                 carrier VARCHAR(50) DEFAULT 'UPS',
                 status VARCHAR(50),
                 status_description VARCHAR(500),
@@ -294,13 +293,12 @@ def init_tracking_status_cache():
                 last_activity_date VARCHAR(50),
                 is_delivered BOOLEAN DEFAULT FALSE,
                 raw_status_code VARCHAR(50),
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                UNIQUE KEY unique_tracking (tracking_number),
-                INDEX idx_status (status),
-                INDEX idx_delivered (is_delivered),
-                INDEX idx_updated (updated_at)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_status ON tracking_status_cache(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_delivered ON tracking_status_cache(is_delivered)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_updated ON tracking_status_cache(updated_at)")
         conn.commit()
         cursor.close()
         conn.close()
@@ -3743,7 +3741,7 @@ def delete_batch():
         cursor.execute("DELETE FROM batches WHERE id = %s", (batch_id,))
         conn.commit()
         flash(f"Batch #{batch_id} and its scans have been deleted.", "success")
-    except mysql.connector.Error as e:
+    except psycopg2.Error as e:
         flash(f"MySQL Error: {e}", "error")
     finally:
         try:
@@ -4310,14 +4308,14 @@ def _process_single_scan(code, is_ajax):
                 flash(f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})", "success")
             return redirect(url_for("index"))
 
-    except mysql.connector.errors.PoolError as e:
+    except psycopg2.OperationalError as e:
         error_msg = "Database connection pool exhausted - please wait a moment and try again"
         print(f"Pool exhaustion during scan: {e}")
         if is_ajax:
             return jsonify({"success": False, "error": error_msg}), 503
         flash(error_msg, "error")
         return redirect(url_for("index"))
-    except mysql.connector.Error as e:
+    except psycopg2.Error as e:
         error_msg = f"Database error: {e}"
         print(f"MySQL error during scan: {e}")
         if is_ajax:
@@ -4354,7 +4352,7 @@ def delete_scans():
 
     try:
         conn = get_mysql_connection()
-    except mysql.connector.errors.PoolError:
+    except psycopg2.OperationalError:
         flash("Database connection pool busy - please wait a moment and try again", "error")
         return redirect(url_for("index"))
     except Exception as e:
@@ -4370,7 +4368,7 @@ def delete_scans():
         conn.commit()
         flash(f"Deleted {len(scan_ids)} scan(s).", "success")
         return redirect(url_for("index"))
-    except mysql.connector.Error as e:
+    except psycopg2.Error as e:
         print(f"MySQL error during delete: {e}")
         flash("Database temporarily unavailable - delete failed, please try again", "error")
         return redirect(url_for("index"))
@@ -4398,7 +4396,7 @@ def delete_scan():
 
     try:
         conn = get_mysql_connection()
-    except mysql.connector.errors.PoolError:
+    except psycopg2.OperationalError:
         flash("Database connection pool busy - please wait a moment and try again", "error")
         return redirect(url_for("all_scans"))
     except Exception as e:
@@ -4410,7 +4408,7 @@ def delete_scan():
         cursor.execute("DELETE FROM scans WHERE id = %s", (scan_id,))
         conn.commit()
         flash(f"Deleted scan #{scan_id}.", "success")
-    except mysql.connector.Error as e:
+    except psycopg2.Error as e:
         print(f"MySQL error during delete: {e}")
         flash("Database temporarily unavailable - delete failed, please try again", "error")
     except Exception as e:
@@ -4461,7 +4459,7 @@ def record_batch():
         # Keep session for immediate notification, but allow viewing from batches page
         flash(f"✓ Batch #{batch_id} marked as picked up ({pkg_count} parcels). Ready to notify customers.", "success")
         return redirect(url_for("index"))
-    except mysql.connector.Error as e:
+    except psycopg2.Error as e:
         flash(f"MySQL Error: {e}", "error")
         return redirect(url_for("index"))
     finally:
@@ -4506,7 +4504,7 @@ def save_batch_notes():
         cursor.execute("UPDATE batches SET notes = %s WHERE id = %s", (notes, batch_id))
         conn.commit()
         flash("Notes saved successfully.", "success")
-    except mysql.connector.Error as e:
+    except psycopg2.Error as e:
         flash(f"Error saving notes: {e}", "error")
     finally:
         try:
@@ -4675,7 +4673,7 @@ def notify_customers():
                 else:
                     error_count += 1
                     print(f"   ❌ Failed to send email")
-            except mysql.connector.IntegrityError:
+            except psycopg2.IntegrityError:
                 # Duplicate entry - order already notified
                 skip_count += 1
                 print(f"   ⏭️  Already in notifications table")
@@ -5004,13 +5002,13 @@ def all_scans():
             total_scans=total_scans,
             order_search=order_search
         )
-    except mysql.connector.errors.OperationalError as e:
+    except psycopg2.OperationalError as e:
         print(f"MySQL connection error in all_scans: {e}")
         import traceback
         traceback.print_exc()
         flash("Database connection error. Please try again in a moment.", "error")
         return redirect(url_for("index"))
-    except mysql.connector.Error as e:
+    except psycopg2.Error as e:
         print(f"MySQL error in all_scans: {e}")
         import traceback
         traceback.print_exc()
