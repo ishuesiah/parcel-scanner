@@ -281,8 +281,12 @@ class UPSAPI:
             # Fall back to text matching if still unknown
             if status == "unknown":
                 combined_desc = f"{status_desc} {last_activity_desc}".lower()
-                if "delivered" in combined_desc:
-                    status = "delivered"
+                # Be strict about "delivered" - must be a clear delivery confirmation
+                # Avoid false positives like "scheduled delivery", "delivery attempt", etc.
+                if any(phrase in combined_desc for phrase in ["delivered", "left at", "signed by", "received by"]):
+                    # But exclude phrases that indicate pending/attempted delivery
+                    if not any(exclude in combined_desc for exclude in ["scheduled", "attempt", "will be", "expected", "estimated"]):
+                        status = "delivered"
                 elif any(x in combined_desc for x in ["transit", "on the way", "in progress", "departed", "arrived", "processing", "cleared", "customs", "out for delivery", "facility"]):
                     status = "in_transit"
                 elif any(x in combined_desc for x in ["label", "created", "billing", "shipper created", "ready for ups"]):

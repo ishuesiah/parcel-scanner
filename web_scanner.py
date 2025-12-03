@@ -743,7 +743,7 @@ def refresh_ups_tracking_background():
 
         # Find UPS tracking numbers that need refresh:
         # - Shipped in last 30 days
-        # - Not yet delivered
+        # - Not yet delivered OR marked delivered recently (to verify/catch errors)
         # - Haven't been updated in last 2 hours
         cursor.execute("""
             SELECT sc.tracking_number
@@ -751,7 +751,11 @@ def refresh_ups_tracking_background():
             LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
             WHERE sc.carrier_code = 'UPS'
               AND sc.ship_date >= CURRENT_DATE - INTERVAL '30 days'
-              AND (tc.is_delivered = false OR tc.is_delivered IS NULL)
+              AND (
+                  tc.is_delivered = false
+                  OR tc.is_delivered IS NULL
+                  OR (tc.is_delivered = true AND tc.updated_at > NOW() - INTERVAL '24 hours')
+              )
               AND (tc.updated_at IS NULL OR tc.updated_at < NOW() - INTERVAL '2 hours')
             ORDER BY sc.ship_date DESC
             LIMIT 100
