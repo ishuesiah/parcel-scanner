@@ -230,13 +230,21 @@ def migrate_table(mysql_conn, pg_conn, table, batch_size=1000):
 
     print(f"  📤 {table}: migrating {total} rows...")
 
-    # Get column names
-    mysql_cursor.execute(f"SELECT * FROM `{table}` LIMIT 1")
-    columns = [desc[0] for desc in mysql_cursor.description]
-    mysql_cursor.fetchall()  # Clear results
+    # Get column names and types
+    mysql_cursor.execute(f"DESCRIBE `{table}`")
+    col_info = mysql_cursor.fetchall()
+    columns = [col['Field'] for col in col_info]
+
+    # Identify timestamp/datetime columns (need NULL instead of empty string)
+    timestamp_cols = set()
+    for col in col_info:
+        col_type = col['Type'].lower()
+        if 'datetime' in col_type or 'timestamp' in col_type or 'date' in col_type:
+            timestamp_cols.add(col['Field'])
 
     # Clear existing data in postgres (fresh import)
     pg_cursor.execute(f"TRUNCATE TABLE {table} CASCADE")
+    pg_conn.commit()
 
     # Migrate in batches
     offset = 0
@@ -249,15 +257,17 @@ def migrate_table(mysql_conn, pg_conn, table, batch_size=1000):
         if not rows:
             break
 
-        # Convert rows to tuples
+        # Convert rows to tuples, handling empty strings for timestamps
         values = []
         for row in rows:
             row_values = []
             for col in columns:
                 val = row[col]
-                # Handle special types
-                if isinstance(val, datetime):
-                    row_values.append(val)
+                # Convert empty strings to None for timestamp columns
+                if col in timestamp_cols and val == '':
+                    row_values.append(None)
+                elif isinstance(val, str) and val == '' and col in timestamp_cols:
+                    row_values.append(None)
                 elif val is None:
                     row_values.append(None)
                 else:
@@ -275,9 +285,11 @@ def migrate_table(mysql_conn, pg_conn, table, batch_size=1000):
                 values,
                 template=f"({placeholders})"
             )
+            pg_conn.commit()
             migrated += len(rows)
         except Exception as e:
-            print(f"    ⚠️ Error inserting batch at offset {offset}: {e}")
+            pg_conn.rollback()
+            print(f"    ⚠️ Batch error at offset {offset}: {e}")
             # Try one by one
             for val_tuple in values:
                 try:
@@ -285,14 +297,15 @@ def migrate_table(mysql_conn, pg_conn, table, batch_size=1000):
                         f"INSERT INTO {table} ({cols_str}) VALUES ({placeholders})",
                         val_tuple
                     )
+                    pg_conn.commit()
                     migrated += 1
                 except Exception as e2:
-                    print(f"    ⚠️ Skipping row: {e2}")
+                    pg_conn.rollback()
+                    # Skip with minimal logging
+                    pass
 
         offset += batch_size
         print(f"    ... {min(offset, total)}/{total} rows")
-
-    pg_conn.commit()
 
     # Reset sequence to max id
     try:
@@ -301,6 +314,7 @@ def migrate_table(mysql_conn, pg_conn, table, batch_size=1000):
         pg_cursor.execute(f"SELECT setval('{table}_id_seq', {max_id + 1}, false)")
         pg_conn.commit()
     except Exception as e:
+        pg_conn.rollback()
         print(f"    ⚠️ Could not reset sequence: {e}")
 
     mysql_cursor.close()
