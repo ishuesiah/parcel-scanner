@@ -9,21 +9,21 @@ import re
 class ShopifyAPI:
     def __init__(self):
         """
-        Initialize Shopify API connection by reading these four env vars:
+        Initialize Shopify API connection by reading these env vars:
           • SHOPIFY_API_KEY
           • SHOPIFY_API_SECRET
           • SHOPIFY_ACCESS_TOKEN
-          • SHOPIFY_SHOP_URL
+          • SHOP_URL
         """
-        # Read straight from Kinsta’s environment
+        # Read straight from Kinsta's environment
         api_key      = os.environ.get("SHOPIFY_API_KEY", "")
         api_secret   = os.environ.get("SHOPIFY_API_SECRET", "")
-        access_token = os.environ.get("ACCESS_TOKEN", "")
+        access_token = os.environ.get("SHOPIFY_ACCESS_TOKEN", "")
         shop_url     = os.environ.get("SHOP_URL", "")
         
         if not access_token or not shop_url:
             raise RuntimeError(
-                "Missing SHOPIFY_ACCESS_TOKEN or SHOPIFY_SHOP_URL in environment."
+                "Missing SHOPIFY_ACCESS_TOKEN or SHOP_URL in environment."
             )
 
         self.shop_url    = shop_url
@@ -52,26 +52,74 @@ class ShopifyAPI:
 
     def _make_request(self, endpoint: str, method: str = "GET", params: dict = None) -> tuple[Optional[Dict], Optional[str]]:
         url = f"https://{self.shop_url}/admin/api/{self.api_version}/{endpoint}"
-        max_retries = 3
+        max_retries = 5  # Increased from 3 to 5
         retry = 0
-        
+
         while retry < max_retries:
             try:
-                resp = self.session.request(method, url, params=params)
+                resp = self.session.request(method, url, params=params, timeout=15)
+
+                # Handle rate limiting (429)
                 if resp.status_code == 429:
                     wait = int(resp.headers.get("Retry-After", 2))
+                    print(f"Shopify rate limit hit, waiting {wait}s before retry {retry + 1}/{max_retries}")
                     time.sleep(wait)
                     retry += 1
                     continue
+
+                # Handle 503 Service Unavailable with exponential backoff
+                if resp.status_code == 503:
+                    wait = min(2 ** retry, 16)  # Exponential backoff: 1s, 2s, 4s, 8s, 16s max
+                    print(f"Shopify 503 error, waiting {wait}s before retry {retry + 1}/{max_retries}")
+                    time.sleep(wait)
+                    retry += 1
+                    continue
+
+                # Handle other 5xx errors with exponential backoff
+                if 500 <= resp.status_code < 600:
+                    wait = min(2 ** retry, 16)
+                    print(f"Shopify {resp.status_code} error, waiting {wait}s before retry {retry + 1}/{max_retries}")
+                    time.sleep(wait)
+                    retry += 1
+                    continue
+
                 resp.raise_for_status()
-                next_token = self._extract_next_page_token(resp.headers)
-                return resp.json(), next_token
-            except requests.exceptions.RequestException as e:
+
+                # Validate response is JSON before parsing
+                content_type = resp.headers.get('Content-Type', '')
+                if 'application/json' not in content_type:
+                    print(f"Shopify API returned non-JSON response. Content-Type: {content_type}")
+                    print(f"Response preview: {resp.text[:200]}")
+                    return None, None
+
+                try:
+                    json_data = resp.json()
+                    next_token = self._extract_next_page_token(resp.headers)
+                    return json_data, next_token
+                except ValueError as e:
+                    print(f"Shopify API JSON parse error: {e}")
+                    print(f"Response preview: {resp.text[:200]}")
+                    return None, None
+
+            except requests.exceptions.Timeout as e:
+                wait = min(2 ** retry, 8)
+                print(f"Shopify timeout error: {e}, waiting {wait}s before retry {retry + 1}/{max_retries}")
                 if retry < max_retries - 1:
-                    time.sleep(1)
+                    time.sleep(wait)
                     retry += 1
                     continue
                 return None, None
+
+            except requests.exceptions.RequestException as e:
+                wait = min(2 ** retry, 8)
+                print(f"Shopify request error: {e}, waiting {wait}s before retry {retry + 1}/{max_retries}")
+                if retry < max_retries - 1:
+                    time.sleep(wait)
+                    retry += 1
+                    continue
+                return None, None
+
+        print(f"Shopify API request failed after {max_retries} retries")
         return None, None
 
     def _get_paginated_orders(self, initial_params: dict) -> Generator[dict, None, None]:
@@ -98,41 +146,275 @@ class ShopifyAPI:
             return self._order_cache[tracking_number]
 
         try:
+            # Expanded search: look for any order with fulfillments in last 365 days
             params = {
-                "fulfillment_status": "shipped",
+                "fulfillment_status": "any",  # Changed from "shipped" to "any" to catch all fulfillment statuses
                 "status": "any",
                 "limit": 250,
-                "fields": "id,order_number,customer,fulfillments"
+                "fields": "id,order_number,customer,fulfillments,line_items"  # Added line_items
             }
-            created_at_min = (datetime.now() - timedelta(days=60)).isoformat()
+            created_at_min = (datetime.now() - timedelta(days=365)).isoformat()  # Increased to 365 days
             params["created_at_min"] = created_at_min
 
+            print(f"🔍 Shopify: Searching for tracking '{tracking_number}' in orders from last 365 days...")
+
+            orders_checked = 0
             for order in self._get_paginated_orders(params):
+                orders_checked += 1
                 fulfillments = order.get("fulfillments", [])
                 for f in fulfillments:
-                    if f.get("tracking_number") == tracking_number:
+                    shopify_tracking = f.get("tracking_number", "")
+
+                    # Try exact match first
+                    if shopify_tracking == tracking_number:
+                        print(f"✅ Shopify: Found exact match in order #{order.get('order_number')}")
                         cust = order.get("customer", {}) or {}
+
+                        # Format line items for Klaviyo
+                        line_items = order.get("line_items", [])
+                        formatted_items = []
+                        for item in line_items:
+                            formatted_items.append({
+                                "name": item.get("name", ""),
+                                "quantity": item.get("quantity", 1),
+                                "price": str(item.get("price", "0.00")),
+                                "sku": item.get("sku", "")
+                            })
+
                         order_data = {
                             "order_number": str(order.get("order_number", "N/A")),
                             "customer_name": (
                                 f"{cust.get('first_name','')} {cust.get('last_name','')}".strip()
                                 or "N/A"
                             ),
-                            "order_id": str(order.get("id", ""))
+                            "customer_email": cust.get("email", ""),
+                            "order_id": str(order.get("id", "")),
+                            "line_items": formatted_items
                         }
                         self._order_cache[tracking_number] = order_data
                         return order_data
+
+                    # Try case-insensitive match with spaces removed
+                    if shopify_tracking.replace(" ", "").upper() == tracking_number.replace(" ", "").upper():
+                        print(f"✅ Shopify: Found fuzzy match in order #{order.get('order_number')} ('{shopify_tracking}' vs '{tracking_number}')")
+                        cust = order.get("customer", {}) or {}
+
+                        # Format line items for Klaviyo
+                        line_items = order.get("line_items", [])
+                        formatted_items = []
+                        for item in line_items:
+                            formatted_items.append({
+                                "name": item.get("name", ""),
+                                "quantity": item.get("quantity", 1),
+                                "price": str(item.get("price", "0.00")),
+                                "sku": item.get("sku", "")
+                            })
+
+                        order_data = {
+                            "order_number": str(order.get("order_number", "N/A")),
+                            "customer_name": (
+                                f"{cust.get('first_name','')} {cust.get('last_name','')}".strip()
+                                or "N/A"
+                            ),
+                            "customer_email": cust.get("email", ""),
+                            "order_id": str(order.get("id", "")),
+                            "line_items": formatted_items
+                        }
+                        self._order_cache[tracking_number] = order_data
+                        return order_data
+
+            print(f"❌ Shopify: No match found by tracking after checking {orders_checked} orders")
+
+            # Fallback: Try searching by order number if tracking looks like an order number
+            # Order numbers are typically numeric (e.g., "1234" or "#1234")
+            if tracking_number.replace("#", "").isdigit():
+                print(f"🔍 Shopify: Attempting fallback search by order number '{tracking_number}'...")
+                order_search_result = self._search_by_order_number(tracking_number)
+                if order_search_result and order_search_result.get("order_id"):
+                    print(f"✅ Shopify: Found order by order number search!")
+                    self._order_cache[tracking_number] = order_search_result
+                    return order_search_result
+
+            print(f"❌ Shopify: No match found by any method")
             return {
                 "order_number": "N/A",
                 "customer_name": "No Order Found",
-                "order_id": None
+                "customer_email": "",
+                "order_id": None,
+                "line_items": []
             }
         except Exception as e:
             return {
                 "order_number": "N/A",
                 "customer_name": f"Error: {e}",
-                "order_id": None
+                "customer_email": "",
+                "order_id": None,
+                "line_items": []
             }
+
+    def _search_by_order_number(self, order_number: str) -> Optional[Dict[str, Any]]:
+        """
+        Search for an order by order number.
+
+        Args:
+            order_number: Order number to search for (with or without # prefix)
+
+        Returns:
+            Dict with order info if found, None otherwise
+        """
+        try:
+            clean_order_number = order_number.lstrip('#')
+
+            params = {
+                "name": clean_order_number,  # Shopify uses 'name' field for order number
+                "status": "any",
+                "limit": 1,
+                "fields": "id,order_number,customer,fulfillments,line_items"  # Added line_items
+            }
+
+            response, _ = self._make_request("orders.json", params=params)
+            if response and "orders" in response and response["orders"]:
+                order = response["orders"][0]
+                cust = order.get("customer", {}) or {}
+
+                # Get tracking number from first fulfillment if available
+                tracking = None
+                fulfillments = order.get("fulfillments", [])
+                if fulfillments and fulfillments[0]:
+                    tracking = fulfillments[0].get("tracking_number")
+
+                # Format line items
+                line_items = order.get("line_items", [])
+                formatted_items = []
+                for item in line_items:
+                    formatted_items.append({
+                        "name": item.get("name", ""),
+                        "quantity": item.get("quantity", 1),
+                        "price": str(item.get("price", "0.00")),
+                        "sku": item.get("sku", "")
+                    })
+
+                return {
+                    "order_number": str(order.get("order_number", "N/A")),
+                    "customer_name": (
+                        f"{cust.get('first_name','')} {cust.get('last_name','')}".strip()
+                        or "N/A"
+                    ),
+                    "customer_email": cust.get("email", ""),
+                    "order_id": str(order.get("id", "")),
+                    "tracking_number": tracking,
+                    "line_items": formatted_items
+                }
+
+            return None
+
+        except Exception as e:
+            print(f"Error searching by order number: {e}")
+            return None
 
     def clear_cache(self):
         self._order_cache.clear()
+
+    def get_order_details_for_verification(self, identifier: str) -> Optional[Dict[str, Any]]:
+        """
+        Get full order details including line items for verification.
+        First tries to find by tracking number, then by order number.
+
+        Args:
+            identifier: Either a tracking number or order number
+
+        Returns:
+            Dict with order details and line items, or None if not found
+        """
+        try:
+            # First, try to find by tracking number
+            params = {
+                "fulfillment_status": "any",
+                "status": "any",
+                "limit": 250,
+                "fields": "id,order_number,name,customer,line_items,fulfillments"
+            }
+            created_at_min = (datetime.now() - timedelta(days=90)).isoformat()
+            params["created_at_min"] = created_at_min
+
+            # Search through orders with fulfillments for tracking number
+            for order in self._get_paginated_orders(params):
+                fulfillments = order.get("fulfillments", [])
+                for f in fulfillments:
+                    if f.get("tracking_number") == identifier:
+                        return self._format_order_for_verification(order, f.get("tracking_number"))
+
+            # If not found by tracking, try by order number
+            # Order number could be numeric (#1234) or string (1234)
+            clean_identifier = identifier.lstrip('#')
+
+            params = {
+                "name": clean_identifier,  # Shopify uses 'name' field for order number
+                "status": "any",
+                "limit": 1,
+                "fields": "id,order_number,name,customer,line_items,fulfillments"
+            }
+
+            response, _ = self._make_request("orders.json", params=params)
+            if response and "orders" in response and response["orders"]:
+                order = response["orders"][0]
+                # Get tracking number from first fulfillment if available
+                tracking = None
+                fulfillments = order.get("fulfillments", [])
+                if fulfillments:
+                    tracking = fulfillments[0].get("tracking_number")
+                return self._format_order_for_verification(order, tracking)
+
+            return None
+
+        except Exception as e:
+            print(f"Error fetching order details: {e}")
+            return None
+
+    def _format_order_for_verification(self, order: Dict, tracking_number: Optional[str] = None) -> Dict[str, Any]:
+        """Format order data for verification page display."""
+        cust = order.get("customer", {}) or {}
+        line_items = order.get("line_items", [])
+
+        # Format line items with cleaned up properties
+        formatted_items = []
+        for item in line_items:
+            # Clean up variant title (remove "Default Title" if it's the only variant)
+            variant_title = item.get("variant_title", "")
+            if variant_title == "Default Title":
+                variant_title = ""
+
+            # Parse properties and format nicely
+            properties = item.get("properties", [])
+            formatted_properties = []
+            if properties:
+                for prop in properties:
+                    name = prop.get("name", "")
+                    value = prop.get("value", "")
+                    if name and value and not name.startswith("_"):  # Skip hidden properties
+                        formatted_properties.append(f"{name}: {value}")
+
+            formatted_items.append({
+                "id": item.get("id"),
+                "name": item.get("name", ""),
+                "sku": item.get("sku", "N/A"),
+                "quantity": item.get("quantity", 1),
+                "variant_title": variant_title,
+                "properties": formatted_properties,
+                "product_id": item.get("product_id"),
+                "variant_id": item.get("variant_id")
+            })
+
+        return {
+            "order_number": str(order.get("order_number", "N/A")),
+            "order_name": order.get("name", ""),  # e.g., "#1234"
+            "shopify_order_id": str(order.get("id", "")),
+            "customer_name": (
+                f"{cust.get('first_name','')} {cust.get('last_name','')}".strip()
+                or "N/A"
+            ),
+            "customer_email": cust.get("email", ""),
+            "tracking_number": tracking_number,
+            "line_items": formatted_items,
+            "total_items": sum(item.get("quantity", 1) for item in line_items)
+        }
