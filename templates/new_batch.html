@@ -1,0 +1,514 @@
+{% extends "base.html" %}
+
+{% block title %}H&O Parcel Scans{% endblock %}
+
+{% block content %}
+    {% if not current_batch %}
+      <h2>Create New Batch</h2>
+      <div class="scan-section">
+        <form action="{{ url_for('new_batch') }}" method="post">
+          <label for="carrier"><strong>Carrier:</strong></label><br>
+          <select name="carrier" id="carrier" required>
+            <option value="">-- Select Carrier --</option>
+            <option value="UPS">UPS</option>
+            <option value="Canada Post">Canada Post</option>
+            <option value="DHL">DHL</option>
+            <option value="Purolator">Purolator</option>
+          </select>
+          <br><br>
+          <button type="submit" class="btn btn-new">Start Batch</button>
+        </form>
+      </div>
+
+    {% else %}
+      <div class="batch-header">
+        <div class="batch-info">
+          <h2>Batch #{{ current_batch.id }} ({{ current_batch.carrier }})</h2>
+          <p><em>Created: {{ current_batch.created_at }}</em></p>
+          <p>Scans in batch: <strong id="scan-count">{{ scans|length }}</strong></p>
+          {% set batch_status = current_batch.get('status', 'in_progress') %}
+          <p style="margin-top: 8px;">
+            <strong>Status:</strong>
+            {% if batch_status == 'notified' %}
+              <span style="color: #199b76;">✉ Notified</span>
+            {% elif batch_status == 'recorded' %}
+              <span style="color: #f39c12;">✓ Picked Up (Ready to notify)</span>
+            {% else %}
+              <span style="color: #666;">⏳ In Progress</span>
+            {% endif %}
+          </p>
+          <p style="font-size: 0.85rem; color: #666; margin-top: 4px;">
+            💡 Tip: Order details load in background. Refresh page to see updated info.
+          </p>
+        </div>
+        <div class="batch-actions">
+          <form action="{{ url_for('finish_batch') }}" method="post" style="margin: 0; display: inline;">
+            <button type="submit" class="btn btn-new" style="padding: 6px 12px; font-size: 0.85rem;">Finish & Start New</button>
+          </form>
+          <a href="#" onclick="return confirmCancelBatch();" style="margin-left: 12px;">Cancel This Batch</a>
+        </div>
+      </div>
+
+      <!-- Batch Notes -->
+      <div class="scan-section" style="margin-bottom: 12px;">
+        <form action="{{ url_for('save_batch_notes') }}" method="post">
+          <label for="batch_notes"><strong>Batch Notes:</strong></label><br>
+          <textarea name="notes" id="batch_notes" rows="2" style="width: 100%; max-width: 600px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; font-size: 0.95rem; margin-top: 4px;">{{ current_batch.get('notes', '') }}</textarea>
+          <br>
+          <button type="submit" class="btn btn-new" style="margin-top: 8px;">Save Notes</button>
+        </form>
+      </div>
+
+      <!-- Scan form with async capability -->
+      <div class="scan-section">
+        <form id="scan-form" class="scan-form" autocomplete="off">
+          <div class="form-group">
+            <label for="code"><strong>Scan Tracking Number:</strong></label><br>
+            <input type="text" name="code" id="code" autofocus required>
+          </div>
+          <button type="submit" class="btn" id="scan-btn">
+            Submit<span id="scan-spinner" class="spinner" style="display:none;"></span>
+          </button>
+        </form>
+        <div id="scan-status" class="scan-status"></div>
+      </div>
+
+      <!-- Actions bar at top -->
+      <div class="actions-bar">
+        <h3>Scans in This Batch</h3>
+        <div style="display: flex; gap: 12px;">
+          <form action="{{ url_for('delete_scans') }}" method="post" id="delete-form" style="margin: 0;">
+            <button type="submit" class="btn btn-delete" id="delete-btn">Delete Selected</button>
+          </form>
+          <button type="button" class="btn btn-new" onclick="window.location.reload()">Refresh</button>
+          <button type="button" class="btn btn-new" onclick="saveBatch()">Save</button>
+          {% if batch_status == 'notified' %}
+            <form action="{{ url_for('notify_customers') }}" method="post" style="margin: 0;">
+              <button type="submit" class="btn btn-new">Resend Notifications</button>
+            </form>
+          {% elif batch_status == 'recorded' %}
+            <form action="{{ url_for('notify_customers') }}" method="post" style="margin: 0;">
+              <button type="submit" class="btn btn-batch">✉ Notify Customers</button>
+            </form>
+          {% else %}
+            <form action="{{ url_for('record_batch') }}" method="post" style="margin: 0;">
+              <button type="submit" class="btn btn-batch">✓ Mark as Picked Up</button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Scans table -->
+      <form id="scans-table-form">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40px;"><input type="checkbox" id="select-all"></th>
+              <th>Tracking</th>
+              <th>Carrier</th>
+              <th>Order #</th>
+              <th>Customer</th>
+              <th>Email</th>
+              <th>Scan Time</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="scans-tbody">
+            {% for row in scans %}
+              <tr class="{{ 'duplicate-row' if row.status.startswith('Duplicate') else '' }}" data-scan-id="{{ row.id }}">
+                <td>
+                  <input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="{{ row.id }}">
+                </td>
+                <td style="font-weight: 500;">{{ row.tracking_number }}</td>
+                <td>{{ row.carrier }}</td>
+                <td>
+                  {% if row.order_id %}
+                    <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                      {{ row.order_number }}
+                    </a>
+                  {% else %}
+                    {{ row.order_number }}
+                  {% endif %}
+                </td>
+                <td>
+                  {% if row.order_id %}
+                    <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                      {{ row.customer_name }}
+                    </a>
+                  {% else %}
+                    {{ row.customer_name }}
+                  {% endif %}
+                </td>
+                <td style="font-size: 0.85rem; color: #666;">{{ row.customer_email or '—' }}</td>
+                <td>{{ row.scan_date }}</td>
+                <td>
+                  {% if row.status.startswith('Duplicate (Batch #') %}
+                    {% set batch_num = row.status.split('#')[1].rstrip(')') %}
+                    {% if batch_num and batch_num.isdigit() %}
+                      Duplicate (<a href="{{ url_for('view_batch', batch_id=batch_num|int) }}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #{{ batch_num }}</a>)
+                    {% else %}
+                      {{ row.status }}
+                    {% endif %}
+                  {% else %}
+                    {{ row.status }}
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </form>
+
+    {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    // ── Auto-refresh order details every 5 seconds ──
+    let autoRefreshInterval;
+
+    function startAutoRefresh() {
+      {% if current_batch %}
+      // Poll every 5 seconds for updated order details
+      autoRefreshInterval = setInterval(async function() {
+        try {
+          const response = await fetch('{{ url_for("get_batch_updates", batch_id=current_batch.id) }}');
+
+          // Check if response is OK and is JSON
+          if (!response.ok) {
+            console.error('Auto-refresh HTTP error:', response.status);
+            return;
+          }
+
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            console.error('Auto-refresh returned non-JSON response:', contentType);
+            return;
+          }
+
+          const data = await response.json();
+
+          if (data.success && data.scans) {
+            // Update each row with new data
+            data.scans.forEach(scan => {
+              updateScanRow(scan);
+            });
+          }
+        } catch (error) {
+          console.error('Auto-refresh error:', error);
+        }
+      }, 5000); // Every 5 seconds
+      {% endif %}
+    }
+
+    function stopAutoRefresh() {
+      if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+      }
+    }
+
+    function updateScanRow(scan) {
+      // Find the row for this scan
+      const row = document.querySelector(`tr[data-scan-id="${scan.id}"]`);
+      if (!row) return;
+
+      // Only update if the data has actually changed (not still "Processing...")
+      if (scan.order_number === 'Processing...' || scan.customer_name === 'Looking up...') {
+        return; // Still processing, skip
+      }
+
+      // Update the cells
+      const cells = row.querySelectorAll('td');
+
+      // Update carrier (cell 2)
+      if (cells[2]) cells[2].textContent = scan.carrier;
+
+      // Update order number (cell 3)
+      if (cells[3]) {
+        if (scan.order_id) {
+          cells[3].innerHTML = `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.order_number}</a>`;
+        } else {
+          cells[3].textContent = scan.order_number;
+        }
+      }
+
+      // Update customer name (cell 4)
+      if (cells[4]) {
+        if (scan.order_id) {
+          cells[4].innerHTML = `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.customer_name}</a>`;
+        } else {
+          cells[4].textContent = scan.customer_name;
+        }
+      }
+
+      // Update status (cell 6) - change from "Processing" to "Complete"
+      if (cells[6] && scan.status === 'Complete') {
+        cells[6].textContent = scan.status;
+      }
+    }
+
+    // Start auto-refresh when page loads (only if there's an active batch)
+    {% if current_batch %}
+    startAutoRefresh();
+    {% endif %}
+
+    // Stop auto-refresh when page is hidden (save bandwidth)
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        stopAutoRefresh();
+      } else {
+        {% if current_batch %}
+        startAutoRefresh();
+        {% endif %}
+      }
+    });
+
+    // ── Async scanning functionality ──
+    {% if current_batch %}
+    // Declare all DOM element references first
+    const scanForm = document.getElementById('scan-form');
+    const codeInput = document.getElementById('code');
+    const scanBtn = document.getElementById('scan-btn');
+    const scanSpinner = document.getElementById('scan-spinner');
+    const scanStatus = document.getElementById('scan-status');
+    const scansTable = document.getElementById('scans-tbody');
+    const scanCount = document.getElementById('scan-count');
+    const shopUrl = '{{ shop_url }}';
+
+    // Initialize success sound
+    const successSound = new Audio('{{ url_for("static", filename="scan-success.mp3") }}');
+    // Initialize error sounds
+    const dupeSound = new Audio('{{ url_for("static", filename="error-dupe.mp3") }}');
+    const wrongScanSound = new Audio('{{ url_for("static", filename="error-wrong-scan.mp3") }}');
+    successSound.volume = 0.5; // Set volume to 50%
+
+    // ── Periodic focus restoration ──
+    // Ensure focus is set on page load (with small delay to ensure DOM is ready)
+    setTimeout(function() {
+      if (codeInput) codeInput.focus();
+    }, 100);
+
+    // Restore focus to tracking input every 3 seconds if user hasn't focused elsewhere
+    setInterval(function() {
+      if (!codeInput || document.hidden) return;
+
+      const activeElement = document.activeElement;
+
+      // Only restore focus if active element is body or non-interactive element
+      // This allows users to interact with buttons, links, checkboxes, etc.
+      const isInteractiveElement = activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.tagName === 'SELECT' ||
+        activeElement.tagName === 'BUTTON' ||
+        activeElement.tagName === 'A' ||
+        activeElement.isContentEditable
+      );
+
+      // Restore focus only if not interacting with anything else
+      if (!isInteractiveElement || activeElement === document.body) {
+        codeInput.focus();
+      }
+    }, 3000); // Every 3 seconds
+
+    // ── Form submission handler ──
+
+    scanForm.addEventListener('submit', async function(e) {
+      e.preventDefault();
+
+      const code = codeInput.value.trim();
+      if (!code) return;
+
+      // Show processing but DON'T disable button
+      scanSpinner.style.display = 'inline-block';
+
+      // Show immediate feedback
+      scanStatus.textContent = `Scanning: ${code}...`;
+      scanStatus.className = 'scan-status processing show';
+
+      try {
+        const formData = new FormData();
+        formData.append('code', code);
+
+        const response = await fetch('{{ url_for("scan") }}', {
+          method: 'POST',
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          body: formData
+        });
+
+        // Check if response is JSON before parsing
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          scanStatus.textContent = 'Server error - received non-JSON response';
+          scanStatus.className = 'scan-status error show';
+          console.error('Scan returned non-JSON response:', contentType);
+          return;
+        }
+
+        const data = await response.json();
+
+        if (data.success) {
+          // Check if this is a duplicate scan
+          const isDuplicate = data.scan && data.scan.status && data.scan.status.startsWith('Duplicate');
+
+          // Play appropriate sound
+          try {
+            if (isDuplicate) {
+              dupeSound.currentTime = 0;
+              dupeSound.play().catch(e => console.log('Could not play dupe sound:', e));
+            } else {
+              successSound.currentTime = 0;
+              successSound.play().catch(e => console.log('Could not play sound:', e));
+            }
+          } catch (e) {
+            console.log('Sound play error:', e);
+          }
+
+          // Show message with appropriate styling
+          if (isDuplicate) {
+            scanStatus.textContent = data.message;
+            scanStatus.className = 'scan-status warning show';
+          } else {
+            scanStatus.textContent = data.message + ' (Details loading in background...)';
+            scanStatus.className = 'scan-status success show';
+          }
+
+          // Add new row to table
+          addScanToTable(data.scan);
+
+          // Update scan count
+          const currentCount = parseInt(scanCount.textContent);
+          scanCount.textContent = currentCount + 1;
+
+          // Clear input IMMEDIATELY
+          codeInput.value = '';
+
+          // Hide status after 1.5 seconds
+          setTimeout(() => {
+            scanStatus.classList.remove('show');
+          }, 1500);
+        } else {
+          // Play wrong-scan sound for carrier mismatch errors
+          if (data.carrier_mismatch) {
+            try {
+              wrongScanSound.currentTime = 0;
+              wrongScanSound.play().catch(e => console.log('Could not play wrong-scan sound:', e));
+            } catch (e) {
+              console.log('Sound play error:', e);
+            }
+          }
+          scanStatus.textContent = 'Error: ' + data.error;
+          scanStatus.className = 'scan-status error show';
+        }
+      } catch (error) {
+        let errorMsg = error.message;
+        if (error instanceof SyntaxError) {
+          // JSON parse error
+          errorMsg = 'Server returned invalid response (not JSON)';
+        }
+        scanStatus.textContent = 'Error: ' + errorMsg;
+        scanStatus.className = 'scan-status error show';
+        console.error('Scan error:', error);
+      } finally {
+        // Hide spinner and keep button enabled
+        scanSpinner.style.display = 'none';
+        codeInput.focus();
+      }
+    });
+
+    function addScanToTable(scan) {
+      const row = document.createElement('tr');
+      row.className = scan.status.startsWith('Duplicate') ? 'duplicate-row' : '';
+      row.dataset.scanId = scan.id;
+
+      // Note: order_number and customer_name will be "Processing..." and "Looking up..."
+      // They'll update in the database in background, refresh page to see updates
+      const orderLink = scan.order_id
+        ? `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.order_number}</a>`
+        : scan.order_number;
+
+      const customerLink = scan.order_id
+        ? `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.customer_name}</a>`
+        : scan.customer_name;
+
+      // Format status with batch link if it's a duplicate
+      let statusDisplay = scan.status;
+      if (scan.status.startsWith('Duplicate (Batch #')) {
+        const batchMatch = scan.status.match(/Batch #(\d+)/);
+        if (batchMatch) {
+          const batchNum = batchMatch[1];
+          statusDisplay = `Duplicate (<a href="/view_batch/${batchNum}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #${batchNum}</a>)`;
+        }
+      }
+
+      row.innerHTML = `
+        <td><input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="${scan.id}"></td>
+        <td style="font-weight: 500;">${scan.tracking_number}</td>
+        <td>${scan.carrier}</td>
+        <td>${orderLink}</td>
+        <td>${customerLink}</td>
+        <td style="font-size: 0.85rem; color: #666;">${scan.customer_email || '—'}</td>
+        <td>${scan.scan_date}</td>
+        <td>${statusDisplay}</td>
+      `;
+
+      // Insert at the top of the table
+      scansTable.insertBefore(row, scansTable.firstChild);
+    }
+
+    // ── Select all checkboxes functionality ──
+    const selectAllCheckbox = document.getElementById('select-all');
+    selectAllCheckbox.addEventListener('change', function() {
+      const checkboxes = document.querySelectorAll('.scan-checkbox');
+      checkboxes.forEach(cb => cb.checked = this.checked);
+    });
+
+    // ── Delete form handling ──
+    const deleteForm = document.getElementById('delete-form');
+    deleteForm.addEventListener('submit', function(e) {
+      const checkboxes = document.querySelectorAll('.scan-checkbox:checked');
+
+      if (checkboxes.length === 0) {
+        e.preventDefault();
+        alert('Please select at least one scan to delete.');
+        return false;
+      }
+
+      // Add the selected IDs to the delete form
+      checkboxes.forEach(cb => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'delete_scan_ids';
+        input.value = cb.value;
+        deleteForm.appendChild(input);
+      });
+    });
+    {% endif %}
+
+    // ── Cancel batch confirmation ──
+    function confirmCancelBatch() {
+      if (confirm('Are you sure you want to cancel this batch? This will delete all scans in the batch.')) {
+        window.location.href = '{{ url_for("cancel_batch") }}';
+      }
+      return false;
+    }
+
+    // ── Save batch ──
+    function saveBatch() {
+      // Just reload the page to save current state
+      window.location.reload();
+    }
+
+    // ── Auto-dismiss flash messages ──
+    setTimeout(function() {
+      const flashes = document.querySelectorAll('.flash');
+      flashes.forEach(flash => {
+        flash.style.transition = 'opacity 0.5s';
+        flash.style.opacity = '0';
+        setTimeout(() => flash.remove(), 500);
+      });
+    }, 5000);
+  </script>
+{% endblock %}

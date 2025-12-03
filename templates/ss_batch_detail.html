@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block title %}Batch {{ batch_id }} - H&O Parcel Scans{% endblock %}
+
+{% block extra_styles %}
+    .back-link { color: #534bc4; text-decoration: none; margin-bottom: 16px; display: inline-block; }
+    .back-link:hover { text-decoration: underline; }
+
+    .batch-info-box {
+      background: white; padding: 16px; border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;
+    }
+    .batch-info-box p { margin: 4px 0; color: #666; }
+    .batch-info-box strong { color: #333; }
+
+    .tracking-link { color: #534bc4; text-decoration: none; }
+    .tracking-link:hover { text-decoration: underline; }
+
+    .status-badge {
+      display: inline-block; padding: 4px 8px; border-radius: 4px;
+      font-size: 0.85rem; font-weight: 500;
+    }
+    .status-label_created { background-color: #e3f2fd; color: #1976d2; }
+    .status-in_transit { background-color: #fff4e5; color: #8a6100; }
+    .status-delivered { background-color: #e0f7e9; color: #199b76; }
+    .status-almost_there { background-color: #d4edda; color: #155724; font-weight: 600; }
+    .status-exception { background-color: #fdecea; color: #952746; }
+    .status-unknown { background-color: #f5f5f5; color: #666; }
+
+    /* Progress bar */
+    .progress-bar {
+      width: 60px; height: 6px; background: #e0e0e0; border-radius: 3px;
+      overflow: hidden; display: inline-block; vertical-align: middle;
+      margin-left: 8px;
+    }
+    .progress-bar-fill { height: 100%; border-radius: 3px; }
+    .progress-0 { width: 0%; background: #ccc; }
+    .progress-10 { width: 10%; background: #1976d2; }
+    .progress-25 { width: 25%; background: #f57c00; }
+    .progress-50 { width: 50%; background: #ffa726; }
+    .progress-90 { width: 90%; background: #43a047; }
+    .progress-100 { width: 100%; background: #199b76; }
+    .progress-exception { width: 100%; background: #952746; }
+
+    /* Customer link */
+    .customer-link { color: #534bc4; text-decoration: none; }
+    .customer-link:hover { text-decoration: underline; }
+
+    .summary-stats {
+      display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;
+    }
+    .stat-box {
+      background: white; padding: 12px 20px; border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .stat-box .label { font-size: 0.85rem; color: #666; }
+    .stat-box .value { font-size: 1.5rem; font-weight: 600; color: #2c3e50; }
+{% endblock %}
+
+{% block content %}
+    <a href="{{ url_for('check_shipments', tab='batches') }}" class="back-link">&larr; Back to Live Tracking</a>
+    <h2>Batch {{ batch.batch_number if batch and batch.batch_number else (batch_id.replace('se-', '') if batch_id else '-') }}</h2>
+
+    {% if batch %}
+      <div class="batch-info-box">
+        <p><strong>Notes:</strong> {{ batch.batch_notes or 'None' }}</p>
+        <p><strong>Created:</strong> {{ batch.created_at }}</p>
+        <p><strong>Ship Date:</strong> {{ batch_ship_date or '-' }}</p>
+        <p><strong>Status:</strong> {{ batch.status }}</p>
+        <p><strong>Total Shipments:</strong> {{ batch.count }}</p>
+        {% if batch.errors %}
+          <p><strong>Errors:</strong> {{ batch.errors }}</p>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <div class="summary-stats">
+      <div class="stat-box">
+        <div class="label">Total</div>
+        <div class="value">{{ shipments|length }}</div>
+      </div>
+      <div class="stat-box">
+        <div class="label">Scanned</div>
+        <div class="value" style="color: #534bc4;">{{ stats.scanned }}</div>
+      </div>
+      <div class="stat-box">
+        <div class="label">Delivered</div>
+        <div class="value" style="color: #199b76;">{{ stats.delivered }}</div>
+      </div>
+      <div class="stat-box">
+        <div class="label">In Transit</div>
+        <div class="value" style="color: #8a6100;">{{ stats.in_transit }}</div>
+      </div>
+      <div class="stat-box">
+        <div class="label">Not Moving</div>
+        <div class="value" style="color: #952746;">{{ stats.not_moving }}</div>
+      </div>
+    </div>
+
+    {% if shipments %}
+      <table>
+        <thead>
+          <tr>
+            <th>Tracking #</th>
+            <th>Order</th>
+            <th>Customer</th>
+            <th>Carrier</th>
+            <th>Scanned</th>
+            <th>Status</th>
+            <th>Location</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in shipments %}
+            <tr>
+              <td>
+                {% if s.carrier_code == 'UPS' or s.tracking_number.startswith('1Z') %}
+                  <a class="tracking-link" href="https://www.ups.com/track?loc=en_US&tracknum={{ s.tracking_number }}" target="_blank">{{ s.tracking_number or '-' }}</a>
+                {% elif 'canada' in (s.carrier_code or '')|lower %}
+                  <a class="tracking-link" href="https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor={{ s.tracking_number }}" target="_blank">{{ s.tracking_number or '-' }}</a>
+                {% else %}
+                  {{ s.tracking_number or '-' }}
+                {% endif %}
+              </td>
+              <td>{{ s.order_number or '-' }}</td>
+              <td>
+                {% if shop_url and s.order_number %}
+                  <a href="https://{{ shop_url }}/admin/orders?query={{ s.order_number }}" target="_blank" class="customer-link" title="View in Shopify">{{ s.customer_name or '-' }}</a>
+                {% else %}
+                  {{ s.customer_name or '-' }}
+                {% endif %}
+              </td>
+              <td>{{ s.carrier_code or '-' }}</td>
+              <td>
+                {% if s.scanned %}
+                  <span style="color: #199b76;">✓</span>
+                {% else %}
+                  <span style="color: #999;">-</span>
+                {% endif %}
+              </td>
+              <td>
+                <span class="status-badge status-{{ s.tracking_status or 'unknown' }}">
+                  {{ s.tracking_status_text or 'Unknown' }}
+                </span>
+                {# Progress bar #}
+                {% set progress_class = {
+                  'delivered': 'progress-100',
+                  'almost_there': 'progress-90',
+                  'in_transit': 'progress-50',
+                  'hasnt_moved': 'progress-25',
+                  'label_created': 'progress-10',
+                  'exception': 'progress-exception',
+                  'unknown': 'progress-0'
+                }.get(s.tracking_status, 'progress-0') %}
+                <div class="progress-bar"><div class="progress-bar-fill {{ progress_class }}"></div></div>
+              </td>
+              <td>{{ s.last_location or '-' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p style="color: #666; margin-top: 20px;">No shipments found in this batch.</p>
+    {% endif %}
+{% endblock %}

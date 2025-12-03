@@ -266,12 +266,13 @@ class UPSAPI:
 
             # Fall back to status code if type didn't match
             if status == "unknown":
-                if status_code in ["011", "012", "KB", "KM"]:  # Delivered codes
+                if status_code in ["011", "KB", "KM"]:  # Delivered codes (011=Delivered)
                     status = "delivered"
-                elif status_code in ["M", "MP", "P", "J", "W", "A", "AR", "AF", "OR", "DP", "OT", "IT"]:
+                elif status_code in ["M", "MP", "P", "J", "W", "A", "AR", "AF", "OR", "DP", "OT", "IT", "005", "012", "021", "022"]:
                     # In transit codes: M=Manifest, MP=Manifest Pickup, P=Pickup,
                     # J=Package in transit, W=Wait, A=Arrived, AR=Arrival, AF=At Facility,
                     # OR=Out for delivery, DP=Departure, OT=On the way, IT=In transit
+                    # 005=On the Way, 012=Clearance in Progress, 021/022=In transit variants
                     status = "in_transit"
                 elif status_code in ["I", "MV", "NA"]:  # Label created / Pre-shipment
                     status = "label_created"
@@ -281,8 +282,12 @@ class UPSAPI:
             # Fall back to text matching if still unknown
             if status == "unknown":
                 combined_desc = f"{status_desc} {last_activity_desc}".lower()
-                if "delivered" in combined_desc:
-                    status = "delivered"
+                # Be strict about "delivered" - must be a clear delivery confirmation
+                # Avoid false positives like "scheduled delivery", "delivery attempt", etc.
+                if any(phrase in combined_desc for phrase in ["delivered", "left at", "signed by", "received by"]):
+                    # But exclude phrases that indicate pending/attempted delivery
+                    if not any(exclude in combined_desc for exclude in ["scheduled", "attempt", "will be", "expected", "estimated"]):
+                        status = "delivered"
                 elif any(x in combined_desc for x in ["transit", "on the way", "in progress", "departed", "arrived", "processing", "cleared", "customs", "out for delivery", "facility"]):
                     status = "in_transit"
                 elif any(x in combined_desc for x in ["label", "created", "billing", "shipper created", "ready for ups"]):

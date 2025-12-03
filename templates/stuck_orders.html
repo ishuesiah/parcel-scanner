@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+
+{% block title %}Fix Stuck Orders - H&O Parcel Scans{% endblock %}
+
+{% block extra_styles %}
+    .info-box { background: #e3f2fd; padding: 12px 16px; border-radius: 6px; margin-bottom: 20px; border-left: 4px solid #2196f3; }
+    .info-box p { margin: 4px 0; font-size: 0.95rem; color: #1565c0; }
+
+    .stuck-row { background-color: #fff3cd !important; }
+
+    .btn-fix {
+      padding: 6px 14px; font-size: 0.85rem; background-color: #28a745; color: #fff;
+      border: none; border-radius: 4px; cursor: pointer; font-weight: 500;
+    }
+    .btn-fix:hover { opacity: 0.92; }
+    .btn-fix:disabled { background-color: #ccc; cursor: not-allowed; }
+
+    .fixing { opacity: 0.6; }
+    .status-processing { color: #ff6b6b; font-weight: 600; }
+    .status-error { color: #dc3545; font-weight: 600; }
+
+    .empty-state {
+      text-align: center; padding: 60px 20px; background: white; border-radius: 8px; margin-top: 20px;
+    }
+    .empty-state h3 { color: #28a745; font-size: 1.3rem; margin-bottom: 10px; }
+    .empty-state p { color: #666; font-size: 1rem; }
+{% endblock %}
+
+{% block content %}
+    <h2>Fix Stuck Orders</h2>
+
+    <div class="info-box">
+      <p><strong>What are stuck orders?</strong></p>
+      <p>These are scans where customer information couldn't be retrieved from Shopify/ShipStation.</p>
+      <p>Click the "Fix" button to retry fetching the order details.</p>
+    </div>
+
+    {% if stuck_scans|length == 0 %}
+      <div class="empty-state">
+        <h3>✓ All Clear!</h3>
+        <p>No stuck orders found. All scans have customer information.</p>
+      </div>
+    {% else %}
+      <div style="margin-bottom: 16px;">
+        <button class="btn-fix" onclick="fixAllOrders()" id="fix-all-btn" style="font-size: 1rem; padding: 10px 20px;">
+          🔧 Fix All ({{ stuck_scans|length }} orders)
+        </button>
+        <span id="fix-all-status" style="margin-left: 12px; font-weight: 500;"></span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Tracking #</th>
+            <th>Carrier</th>
+            <th>SS Batch</th>
+            <th>Order #</th>
+            <th>Customer</th>
+            <th>Scan Date</th>
+            <th>Status</th>
+            <th>Batch ID</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in stuck_scans %}
+            <tr class="stuck-row" id="row-{{ s.id }}">
+              <td id="tracking-{{ s.id }}">{{ s.tracking_number }}</td>
+              <td id="carrier-{{ s.id }}">{{ s.carrier }}</td>
+              <td id="ss-batch-{{ s.id }}">{{ s.shipstation_batch_number or '' }}</td>
+              <td id="order-{{ s.id }}">
+                <span class="{{ 'status-processing' if s.order_number == 'Processing...' else '' }}">
+                  {{ s.order_number }}
+                </span>
+              </td>
+              <td id="customer-{{ s.id }}">
+                <span class="{{ 'status-processing' if s.customer_name in ['Looking up...', 'No Order Found'] else 'status-error' if s.customer_name.startswith('Error:') else '' }}">
+                  {{ s.customer_name }}
+                </span>
+              </td>
+              <td>{{ s.scan_date }}</td>
+              <td id="status-{{ s.id }}">{{ s.status }}</td>
+              <td>
+                {% if s.batch_id %}
+                  <a href="{{ url_for('view_batch', batch_id=s.batch_id) }}">{{ s.batch_id }}</a>
+                {% endif %}
+              </td>
+              <td>
+                <button class="btn-fix" onclick="fixOrder({{ s.id }}, '{{ s.tracking_number }}', '{{ s.carrier }}')" id="btn-{{ s.id }}">
+                  Fix
+                </button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    async function fixOrder(scanId, trackingNumber, carrier) {
+      const btn = document.getElementById('btn-' + scanId);
+      const row = document.getElementById('row-' + scanId);
+      const orderCell = document.getElementById('order-' + scanId);
+      const customerCell = document.getElementById('customer-' + scanId);
+      const statusCell = document.getElementById('status-' + scanId);
+
+      // Disable button and show loading state
+      btn.disabled = true;
+      btn.textContent = 'Fixing...';
+      row.classList.add('fixing');
+
+      try {
+        const response = await fetch(`/api/fix_order/${scanId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tracking_number: trackingNumber,
+            carrier: carrier
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          // Update the table row with new data
+          orderCell.innerHTML = data.scan.order_number || 'N/A';
+          customerCell.innerHTML = data.scan.customer_name || 'Not Found';
+          statusCell.innerHTML = data.scan.status || 'Complete';
+
+          // Remove stuck styling if order was found
+          if (data.scan.order_number !== 'N/A' && data.scan.customer_name !== 'Not Found') {
+            row.classList.remove('stuck-row');
+            row.style.backgroundColor = '#d4edda';
+            btn.textContent = 'Fixed ✓';
+            btn.style.backgroundColor = '#155724';
+
+            // Remove row after 2 seconds
+            setTimeout(() => {
+              row.style.transition = 'opacity 0.5s';
+              row.style.opacity = '0';
+              setTimeout(() => row.remove(), 500);
+            }, 2000);
+          } else {
+            // Still not found
+            btn.disabled = false;
+            btn.textContent = 'Retry';
+            row.classList.remove('fixing');
+            alert('Order information still not found. The order may not exist in Shopify/ShipStation.');
+          }
+        } else {
+          throw new Error(data.message || 'Failed to fix order');
+        }
+      } catch (error) {
+        console.error('Error fixing order:', error);
+        alert('Error: ' + error.message);
+        btn.disabled = false;
+        btn.textContent = 'Fix';
+        row.classList.remove('fixing');
+      }
+    }
+
+    async function fixAllOrders() {
+      const fixAllBtn = document.getElementById('fix-all-btn');
+      const statusSpan = document.getElementById('fix-all-status');
+      const rows = document.querySelectorAll('.stuck-row');
+
+      if (!confirm('Fix all stuck orders? This will attempt to fetch data for all ' + rows.length + ' orders.')) {
+        return;
+      }
+
+      fixAllBtn.disabled = true;
+      let fixed = 0;
+      let errors = 0;
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const scanId = row.id.replace('row-', '');
+        const tracking = document.getElementById('tracking-' + scanId).textContent;
+        const carrier = document.getElementById('carrier-' + scanId).textContent;
+
+        statusSpan.textContent = `Processing ${i + 1}/${rows.length}...`;
+
+        try {
+          const response = await fetch('/api/fix_order/' + scanId, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tracking_number: tracking, carrier: carrier })
+          });
+
+          const result = await response.json();
+
+          if (result.success) {
+            row.style.backgroundColor = '#e0f7e9';
+            fixed++;
+          } else {
+            errors++;
+          }
+        } catch (error) {
+          errors++;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 200)); // Small delay between requests
+      }
+
+      statusSpan.textContent = `✅ Done! Fixed ${fixed}, Errors ${errors}`;
+
+      if (fixed > 0) {
+        setTimeout(() => {
+          window.location.reload();
+        }, 2000);
+      }
+
+      fixAllBtn.disabled = false;
+    }
+  </script>
+{% endblock %}

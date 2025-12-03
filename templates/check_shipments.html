@@ -1,0 +1,485 @@
+{% extends "base.html" %}
+
+{% block title %}Live Tracking - H&O Parcel Scans{% endblock %}
+
+{% block extra_styles %}
+    /* Tabs */
+    .tabs {
+      display: flex; gap: 0; margin-bottom: 20px;
+      border-bottom: 2px solid #e0e0e0;
+    }
+    .tab-btn {
+      padding: 12px 24px; font-size: 1rem; font-weight: 600;
+      border: none; background: transparent; color: #666;
+      cursor: pointer; transition: all 0.2s;
+      border-bottom: 3px solid transparent; margin-bottom: -2px;
+    }
+    .tab-btn:hover { color: #534bc4; }
+    .tab-btn.active {
+      color: #534bc4; border-bottom-color: #534bc4;
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Status badges */
+    .status-badge {
+      display: inline-block; padding: 4px 8px; border-radius: 4px;
+      font-size: 0.85rem; font-weight: 500;
+    }
+    .status-label_created { background-color: #e3f2fd; color: #1976d2; }
+    .status-in_transit { background-color: #fff4e5; color: #8a6100; }
+    .status-delivered { background-color: #e0f7e9; color: #199b76; }
+    .status-almost_there { background-color: #d4edda; color: #155724; font-weight: 600; }
+    .status-hasnt_moved { background-color: #fff3cd; color: #856404; }
+    .status-exception { background-color: #fdecea; color: #952746; }
+    .status-unknown { background-color: #f5f5f5; color: #666; }
+    .status-non_ups { background-color: #f5f5f5; color: #999; }
+    .status-not_printed { background-color: #e3f2fd; color: #1976d2; }
+    .status-error { background-color: #fdecea; color: #952746; }
+    .status-completed { background-color: #e0f7e9; color: #199b76; }
+    .status-processing { background-color: #fff4e5; color: #8a6100; }
+    .status-open { background-color: #e3f2fd; color: #1976d2; }
+    .status-queued { background-color: #f3e5f5; color: #7b1fa2; }
+    .status-invalid { background-color: #fdecea; color: #952746; }
+    .status-completed_with_errors { background-color: #fff3cd; color: #856404; }
+    .status-archived { background-color: #f5f5f5; color: #666; }
+
+    .search-box {
+      background: white; padding: 20px; border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;
+    }
+    .search-box input[type="text"] {
+      width: 400px; padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px;
+      margin-right: 8px; font-size: 0.95rem;
+    }
+    .btn-search { background-color: #534bc4; color: white; }
+    .btn-search:hover { opacity: 0.92; }
+
+    .cancelled-row {
+      background-color: #fdecea !important;
+      opacity: 0.7;
+    }
+    .btn-cancel {
+      padding: 4px 8px; font-size: 0.8rem; border-radius: 4px;
+      border: 1px solid #952746; background: white; color: #952746;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .btn-cancel:hover {
+      background-color: #952746; color: white;
+    }
+    .btn-uncancel {
+      padding: 4px 8px; font-size: 0.8rem; border-radius: 4px;
+      border: 1px solid #199b76; background: white; color: #199b76;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .btn-uncancel:hover {
+      background-color: #199b76; color: white;
+    }
+
+    .flag-critical {
+      color: #952746; font-weight: 700; font-size: 1.3rem;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    .flag-warning {
+      color: #e67e00; font-weight: 600; font-size: 1.2rem;
+    }
+    .flag-ok {
+      color: #199b76; font-weight: 600; font-size: 1.2rem;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    .pagination {
+      margin-top: 20px; display: flex; gap: 8px; align-items: center;
+      justify-content: center; flex-wrap: wrap;
+    }
+    .pagination button, .pagination a {
+      padding: 6px 12px; border: 1px solid #534bc4; background: white;
+      color: #534bc4; border-radius: 4px; cursor: pointer; text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .pagination button:hover, .pagination a:hover { background-color: #534bc4; color: white; }
+    .pagination button:disabled, .pagination a.disabled {
+      opacity: 0.5; cursor: not-allowed; pointer-events: none;
+    }
+    .pagination .current-page {
+      background-color: #534bc4; color: white;
+    }
+    .pagination .ellipsis {
+      border: none; background: none; color: #666; cursor: default;
+    }
+    .pagination .ellipsis:hover { background: none; color: #666; }
+    .per-page-select {
+      margin-left: 16px; display: flex; align-items: center; gap: 8px;
+    }
+    .per-page-select select {
+      padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;
+      font-size: 0.9rem;
+    }
+
+    /* Progress bar for shipment status */
+    .progress-bar {
+      width: 60px; height: 6px; background: #e0e0e0; border-radius: 3px;
+      overflow: hidden; display: inline-block; vertical-align: middle;
+      margin-left: 8px;
+    }
+    .progress-bar-fill {
+      height: 100%; border-radius: 3px; transition: width 0.3s ease;
+    }
+    .progress-0 { width: 0%; background: #ccc; }
+    .progress-10 { width: 10%; background: #1976d2; }
+    .progress-25 { width: 25%; background: #f57c00; }
+    .progress-50 { width: 50%; background: #ffa726; }
+    .progress-75 { width: 75%; background: #66bb6a; }
+    .progress-90 { width: 90%; background: #43a047; }
+    .progress-100 { width: 100%; background: #199b76; }
+    .progress-exception { width: 100%; background: #952746; }
+
+    /* Customer link */
+    .customer-link { color: #534bc4; text-decoration: none; }
+    .customer-link:hover { text-decoration: underline; }
+
+    .loading {
+      text-align: center; padding: 40px; color: #666;
+    }
+
+    .batch-link { color: #534bc4; text-decoration: none; font-weight: 600; }
+    .batch-link:hover { text-decoration: underline; }
+
+    .status-filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+    .filter-btn {
+      padding: 8px 16px; border-radius: 4px; text-decoration: none;
+      font-size: 0.9rem; font-weight: 500; border: 1px solid #ddd;
+      background: white; color: #333;
+    }
+    .filter-btn:hover { background: #f0f0f0; }
+    .filter-btn.active { background: #534bc4; color: white; border-color: #534bc4; }
+
+    /* Shipments filter dropdown */
+    .filter-row {
+      display: flex; gap: 12px; align-items: center; margin-bottom: 16px;
+    }
+    .filter-row select {
+      padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px;
+      font-size: 0.95rem; min-width: 200px;
+    }
+{% endblock %}
+
+{% block content %}
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <h2>📦 Live Tracking</h2>
+      <a href="{{ url_for('check_shipments', page=page, tab=current_tab, status=batch_status, search=search_query, refresh='1') }}"
+         class="btn btn-search" style="text-decoration: none;">🔄 Refresh Tracking</a>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab-btn {{ 'active' if current_tab == 'batches' else '' }}" onclick="switchTab('batches')">Recent Batches</button>
+      <button class="tab-btn {{ 'active' if current_tab == 'shipments' else '' }}" onclick="switchTab('shipments')">All Shipments</button>
+    </div>
+
+    <!-- Tab: Recent Batches -->
+    <div id="tab-batches" class="tab-content {{ 'active' if current_tab == 'batches' else '' }}">
+      <p style="margin-bottom: 16px; color: #666;">
+        Recently processed ShipStation batches. Click a batch to see shipment details.
+      </p>
+
+      <div class="status-filters">
+        <a href="{{ url_for('check_shipments', tab='batches', status='completed') }}" class="filter-btn {{ 'active' if batch_status == 'completed' else '' }}">Completed</a>
+        <a href="{{ url_for('check_shipments', tab='batches', status='processing') }}" class="filter-btn {{ 'active' if batch_status == 'processing' else '' }}">Processing</a>
+        <a href="{{ url_for('check_shipments', tab='batches', status='open') }}" class="filter-btn {{ 'active' if batch_status == 'open' else '' }}">Open</a>
+        <a href="{{ url_for('check_shipments', tab='batches', status='queued') }}" class="filter-btn {{ 'active' if batch_status == 'queued' else '' }}">Queued</a>
+      </div>
+
+      {% if batch_error %}
+        <div class="flash error">{{ batch_error }}</div>
+      {% endif %}
+
+      {% if batches %}
+        <table>
+          <thead>
+            <tr>
+              <th>Batch ID</th>
+              <th>Notes</th>
+              <th>Created</th>
+              <th>Count</th>
+              <th>Status</th>
+              <th>Errors</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for b in batches %}
+              <tr>
+                <td><a class="batch-link" href="{{ url_for('ss_batch_detail', batch_id=b.batch_id) }}">{{ b.batch_number or b.batch_id.replace('se-', '') if b.batch_id else '-' }}</a></td>
+                <td>{{ b.batch_notes or '-' }}</td>
+                <td>{{ b.created_at[:16] if b.created_at else '-' }}</td>
+                <td>{{ b.count }}</td>
+                <td><span class="status-badge status-{{ b.status }}">{{ b.status }}</span></td>
+                <td>{{ b.errors or 0 }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <div class="pagination">
+          {# Previous button #}
+          <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=batch_page-1) }}" class="{% if batch_page <= 1 %}disabled{% endif %}">← Prev</a>
+
+          {# Page numbers for batches #}
+          {% set b_show = 5 %}
+          {% set b_start = [1, batch_page - b_show // 2] | max %}
+          {% set b_end = [batch_pages, b_start + b_show - 1] | min %}
+          {% set b_start = [1, b_end - b_show + 1] | max %}
+
+          {% if b_start > 1 %}
+            <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=1) }}">1</a>
+            {% if b_start > 2 %}<span class="ellipsis">...</span>{% endif %}
+          {% endif %}
+
+          {% for p in range(b_start, b_end + 1) %}
+            {% if p == batch_page %}
+              <a href="#" class="current-page">{{ p }}</a>
+            {% else %}
+              <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=p) }}">{{ p }}</a>
+            {% endif %}
+          {% endfor %}
+
+          {% if b_end < batch_pages %}
+            {% if b_end < batch_pages - 1 %}<span class="ellipsis">...</span>{% endif %}
+            <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=batch_pages) }}">{{ batch_pages }}</a>
+          {% endif %}
+
+          {# Next button #}
+          <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=batch_page+1) }}" class="{% if batch_page >= batch_pages %}disabled{% endif %}">Next →</a>
+        </div>
+      {% else %}
+        <p style="color: #666; margin-top: 20px;">No batches found with status "{{ batch_status }}".</p>
+      {% endif %}
+    </div>
+
+    <!-- Tab: All Shipments -->
+    <div id="tab-shipments" class="tab-content {{ 'active' if current_tab == 'shipments' else '' }}">
+      <p style="margin-bottom: 16px; color: #666;">
+        Track shipments from ShipStation (last 90 days). Click tracking # or status for live details.
+      </p>
+
+      <div class="search-box">
+        <form method="get" action="{{ url_for('check_shipments') }}">
+          <input type="hidden" name="tab" value="shipments">
+          <input type="text" name="search" placeholder="Search by customer name, order #, or tracking #..." value="{{ search_query }}" autofocus>
+          <button type="submit" class="btn btn-search">🔍 Search</button>
+          {% if search_query %}
+            <a href="{{ url_for('check_shipments', tab='shipments') }}" style="margin-left: 8px; color: #534bc4;">Clear</a>
+          {% endif %}
+        </form>
+      </div>
+
+      {% if loading %}
+        <div class="loading">
+          <p>⏳ Loading shipments from ShipStation...</p>
+        </div>
+      {% elif shipments %}
+        <table>
+          <thead>
+            <tr>
+              <th>Flag</th>
+              <th>Order #</th>
+              <th>Batch</th>
+              <th>Customer</th>
+              <th>Tracking #</th>
+              <th>Carrier</th>
+              <th>Ship Date</th>
+              <th>Scanned?</th>
+              <th>Status</th>
+              <th>Last Activity</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for ship in shipments %}
+              <tr {% if ship.is_cancelled %}class="cancelled-row"{% endif %}>
+                <td>
+                  {% if ship.is_cancelled %}
+                    <span style="color: #952746; font-size: 1.3rem;" title="ORDER CANCELLED">🚫</span>
+                  {% elif ship.flag %}
+                    {% if ship.flag_severity == 'critical' %}
+                      <span class="flag-critical" title="{{ ship.flag_reason }}">🚨</span>
+                    {% else %}
+                      <span class="flag-warning" title="{{ ship.flag_reason }}">⚠️</span>
+                    {% endif %}
+                  {% else %}
+                    <span class="flag-ok">✓</span>
+                  {% endif %}
+                </td>
+                <td>{{ ship.order_number }}</td>
+                <td>{{ ship.batch_number or '-' }}</td>
+                <td>
+                  {% if shop_url and ship.order_number %}
+                    <a href="https://{{ shop_url }}/admin/orders?query={{ ship.order_number }}" target="_blank" class="customer-link" title="View in Shopify">{{ ship.customer_name }}</a>
+                  {% else %}
+                    {{ ship.customer_name }}
+                  {% endif %}
+                </td>
+                <td style="font-family: monospace; font-size: 0.85rem;">
+                  {% if ship.tracking_url %}
+                    <a href="{{ ship.tracking_url }}" target="_blank" title="View tracking">{{ ship.tracking_number }}</a>
+                  {% else %}
+                    {{ ship.tracking_number }}
+                  {% endif %}
+                </td>
+                <td>{{ ship.carrier }}</td>
+                <td>{{ ship.ship_date }}</td>
+                <td>
+                  {% if ship.scanned %}
+                    <span style="color: #199b76;">✓ {{ ship.scan_date }}</span>
+                  {% else %}
+                    <span style="color: #666;">—</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if ship.tracking_url %}
+                    <a href="{{ ship.tracking_url }}" target="_blank" style="text-decoration: none;">
+                      <span class="status-badge status-{{ ship.ups_status }}">
+                        {{ ship.ups_status_text }}
+                      </span>
+                    </a>
+                  {% else %}
+                    <span class="status-badge status-{{ ship.ups_status }}">
+                      {{ ship.ups_status_text }}
+                    </span>
+                  {% endif %}
+                  {# Progress bar based on status #}
+                  {% set progress_class = {
+                    'delivered': 'progress-100',
+                    'almost_there': 'progress-90',
+                    'in_transit': 'progress-50',
+                    'hasnt_moved': 'progress-25',
+                    'label_created': 'progress-10',
+                    'exception': 'progress-exception',
+                    'unknown': 'progress-0'
+                  }.get(ship.ups_status, 'progress-0') %}
+                  <div class="progress-bar"><div class="progress-bar-fill {{ progress_class }}"></div></div>
+                </td>
+                <td style="font-size: 0.85rem;">{{ ship.ups_last_activity }}</td>
+                <td>
+                  {% if ship.is_cancelled %}
+                    <form method="post" action="{{ url_for('uncancel_order') }}" style="display:inline;">
+                      <input type="hidden" name="order_number" value="{{ ship.order_number }}">
+                      <button type="submit" class="btn-uncancel">✓ Restore</button>
+                    </form>
+                  {% else %}
+                    <button type="button" class="btn-cancel" onclick="cancelOrder('{{ ship.order_number }}', '{{ ship.tracking_number }}')">🚫 Cancel</button>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <div class="pagination">
+          {# Previous button #}
+          <a href="{{ prev_url }}" class="{% if not has_prev %}disabled{% endif %}">← Prev</a>
+
+          {# Page numbers #}
+          {% set show_pages = 5 %}
+          {% set start_page = [1, page - show_pages // 2] | max %}
+          {% set end_page = [total_pages, start_page + show_pages - 1] | min %}
+          {% set start_page = [1, end_page - show_pages + 1] | max %}
+
+          {% if start_page > 1 %}
+            <a href="{{ url_for('check_shipments', tab='shipments', page=1, search=search_query, per_page=per_page) }}">1</a>
+            {% if start_page > 2 %}<span class="ellipsis">...</span>{% endif %}
+          {% endif %}
+
+          {% for p in range(start_page, end_page + 1) %}
+            {% if p == page %}
+              <a href="#" class="current-page">{{ p }}</a>
+            {% else %}
+              <a href="{{ url_for('check_shipments', tab='shipments', page=p, search=search_query, per_page=per_page) }}">{{ p }}</a>
+            {% endif %}
+          {% endfor %}
+
+          {% if end_page < total_pages %}
+            {% if end_page < total_pages - 1 %}<span class="ellipsis">...</span>{% endif %}
+            <a href="{{ url_for('check_shipments', tab='shipments', page=total_pages, search=search_query, per_page=per_page) }}">{{ total_pages }}</a>
+          {% endif %}
+
+          {# Next button #}
+          <a href="{{ next_url }}" class="{% if not has_next %}disabled{% endif %}">Next →</a>
+
+          {# Per page selector #}
+          <div class="per-page-select">
+            <label>Show:</label>
+            <select onchange="changePerPage(this.value)">
+              <option value="50" {% if per_page == 50 %}selected{% endif %}>50</option>
+              <option value="100" {% if per_page == 100 %}selected{% endif %}>100</option>
+              <option value="200" {% if per_page == 200 %}selected{% endif %}>200</option>
+              <option value="500" {% if per_page == 500 %}selected{% endif %}>500</option>
+            </select>
+          </div>
+
+          <span style="margin-left: 12px; color: #666;">({{ total_shipments }} total)</span>
+        </div>
+      {% else %}
+        <p style="padding: 40px; text-align: center; color: #666;">
+          {% if search_query %}
+            No shipments found for "{{ search_query }}".
+          {% else %}
+            No shipped orders found in the last 90 days.
+          {% endif %}
+        </p>
+      {% endif %}
+    </div>
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    function switchTab(tab) {
+      // Update URL with tab parameter
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', tab);
+      // Reset page when switching tabs
+      url.searchParams.delete('page');
+      window.location.href = url.toString();
+    }
+
+    function changePerPage(value) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('per_page', value);
+      url.searchParams.set('page', '1');  // Reset to page 1
+      window.location.href = url.toString();
+    }
+
+    function cancelOrder(orderNumber, trackingNumber) {
+      const reason = prompt("Reason for cancellation:", "Customer requested cancellation");
+      if (reason !== null) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = "{{ url_for('cancel_order') }}";
+
+        const orderInput = document.createElement('input');
+        orderInput.type = 'hidden';
+        orderInput.name = 'order_number';
+        orderInput.value = orderNumber;
+        form.appendChild(orderInput);
+
+        const trackingInput = document.createElement('input');
+        trackingInput.type = 'hidden';
+        trackingInput.name = 'tracking_number';
+        trackingInput.value = trackingNumber;
+        form.appendChild(trackingInput);
+
+        const reasonInput = document.createElement('input');
+        reasonInput.type = 'hidden';
+        reasonInput.name = 'reason';
+        reasonInput.value = reason;
+        form.appendChild(reasonInput);
+
+        document.body.appendChild(form);
+        form.submit();
+      }
+    }
+  </script>
+{% endblock %}

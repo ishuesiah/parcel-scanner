@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}All Batches - H&O Parcel Scans{% endblock %}
+
+{% block extra_styles %}
+    .batch-link { color: #2d85f8; text-decoration: none; font-weight: 500; }
+    .batch-link:hover { text-decoration: underline; }
+    .btn-delete-small {
+      padding: 4px 8px; font-size: 0.8rem; background-color: #952746; color: #fff;
+      border: none; border-radius: 4px; cursor: pointer;
+    }
+    .btn-delete-small:hover { opacity: 0.92; }
+{% endblock %}
+
+{% block content %}
+    <h2>Active Batches</h2>
+ <table>
+      <thead>
+        <tr>
+          <th>Batch ID</th>
+          <th>Carrier</th>
+          <th>Created At</th>
+          <th>Pkg Count</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      </tbody>
+ </table>
+    <h2>All Batches</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Batch ID</th>
+          <th>Carrier</th>
+          <th>Created At</th>
+          <th>Pkg Count</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in batches %}
+          <tr>
+            <td>
+              <a class="batch-link" href="{{ url_for('view_batch', batch_id=b.id) }}">
+                Batch {{ b.id }}
+              </a>
+            </td>
+            <td>{{ b.carrier }}</td>
+            <td>{{ b.created_at }}</td>
+            <td>{{ b.pkg_count }}</td>
+            <td>
+              {% set batch_status = b.get('status', 'in_progress') %}
+              {% if batch_status == 'notified' %}
+                <span style="color: #199b76; font-weight: 500;">✉ Notified</span>
+              {% elif batch_status == 'recorded' %}
+                <span style="color: #f39c12; font-weight: 500;">✓ Picked Up</span>
+              {% else %}
+                <span style="color: #666;">⏳ In Progress</span>
+              {% endif %}
+            </td>
+            <td>
+              <form action="{{ url_for('delete_batch') }}" method="post" style="display: inline;"
+                    onsubmit="return confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.');">
+                <input type="hidden" name="batch_id" value="{{ b.id }}">
+                <button type="submit" class="btn-delete-small">Delete</button>
+              </form>
+              <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="batch-link" style="margin-left:8px;">
+                Resume
+              </a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+{% endblock %}
