@@ -40,7 +40,7 @@
 
 {% block content %}
     <a href="{{ url_for('check_shipments', tab='batches') }}" class="back-link">&larr; Back to Live Tracking</a>
-    <h2>Batch {{ batch_id.replace('se-', '') if batch_id else batch_id }}</h2>
+    <h2>Batch {{ batch.batch_number if batch and batch.batch_number else (batch_id.replace('se-', '') if batch_id else '-') }}</h2>
 
     {% if batch %}
       <div class="batch-info-box">

@@ -173,7 +173,7 @@
           <tbody>
             {% for b in batches %}
               <tr>
-                <td><a class="batch-link" href="{{ url_for('ss_batch_detail', batch_id=b.batch_id) }}">{{ b.batch_id.replace('se-', '') if b.batch_id else '-' }}</a></td>
+                <td><a class="batch-link" href="{{ url_for('ss_batch_detail', batch_id=b.batch_id) }}">{{ b.batch_number or b.batch_id.replace('se-', '') if b.batch_id else '-' }}</a></td>
                 <td>{{ b.batch_notes or '-' }}</td>
                 <td>{{ b.created_at[:16] if b.created_at else '-' }}</td>
                 <td>{{ b.count }}</td>
@@ -253,13 +253,7 @@
                   {% endif %}
                 </td>
                 <td>{{ ship.order_number }}</td>
-                <td>
-                  {% if ship.batch_number %}
-                    <a href="{{ url_for('ss_batch_detail', batch_id='se-' ~ ship.batch_number) }}" style="color: #534bc4;">{{ ship.batch_number }}</a>
-                  {% else %}
-                    -
-                  {% endif %}
-                </td>
+                <td>{{ ship.batch_number or '-' }}</td>
                 <td>{{ ship.customer_name }}</td>
                 <td style="font-family: monospace; font-size: 0.85rem;">
                   {% if ship.tracking_url %}
