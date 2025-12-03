@@ -3616,7 +3616,7 @@ def index():
             customer_name,
             customer_email,
             scan_date,
-            status,
+            COALESCE(status, '') as status,
             order_id
           FROM scans
          WHERE batch_id = %s
@@ -4735,7 +4735,7 @@ def all_batches():
             FROM batches b
             LEFT JOIN scans s ON s.batch_id = b.id
            GROUP BY b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes
-           ORDER BY b.created_at DESC
+           ORDER BY b.created_at DESC, b.id DESC
         """)
         batches = cursor.fetchall()
         return render_template_string(
@@ -4775,7 +4775,7 @@ def view_batch(batch_id):
                  order_number,
                  customer_name,
                  scan_date,
-                 status,
+                 COALESCE(status, '') as status,
                  order_id
             FROM scans
            WHERE batch_id = %s
@@ -4963,7 +4963,7 @@ def all_scans():
                 order_number,
                 customer_name,
                 scan_date,
-                status,
+                COALESCE(status, '') as status,
                 order_id,
                 batch_id
               FROM scans
@@ -4982,7 +4982,7 @@ def all_scans():
                 order_number,
                 customer_name,
                 scan_date,
-                status,
+                COALESCE(status, '') as status,
                 order_id,
                 batch_id
               FROM scans
