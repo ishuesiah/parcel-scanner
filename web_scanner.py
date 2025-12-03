@@ -59,6 +59,26 @@ def format_pst(dt):
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(PST).strftime("%Y-%m-%d %H:%M")
 
+def normalize_carrier(carrier_code):
+    """Normalize carrier codes to display-friendly names."""
+    if not carrier_code:
+        return ""
+    carrier_upper = carrier_code.upper()
+    carrier_map = {
+        "CANADA_POST_WALLETED": "Canada Post",
+        "CANADA_POST": "Canada Post",
+        "CANADAPOST": "Canada Post",
+        "UPS": "UPS",
+        "UPS_GROUND": "UPS",
+        "UPS_EXPRESS": "UPS",
+        "DHL": "DHL",
+        "DHL_EXPRESS": "DHL",
+        "PUROLATOR": "Purolator",
+        "FEDEX": "FedEx",
+        "USPS": "USPS",
+    }
+    return carrier_map.get(carrier_upper, carrier_code)
+
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 from klaviyo_events import KlaviyoEvents  # Klaviyo integration for event tracking
 from ups_api import UPSAPI  # UPS tracking integration
@@ -3150,32 +3170,40 @@ def delete_location_rule():
 @app.route("/check_shipments", methods=["GET"])
 def check_shipments():
     """
-    Check shipment status page - OPTIMIZED VERSION.
-    Uses cached tracking data for fast page loads.
-    Stats are calculated via SQL across all 90-day data.
-
-    Filters:
-    - all: Show all shipments from last 90 days
-    - scanned_not_delivered: Scanned but not delivered yet
-    - not_scanned_not_delivered: Not scanned AND not delivered AND shipped 7+ days ago
-    - not_printed: Orders awaiting shipment from ShipStation
+    Live Tracking page with tabs for Recent Batches and All Shipments.
     """
+    # Tab handling
+    current_tab = request.args.get("tab", "batches")  # Default to batches tab
     search_query = request.args.get("search", "").strip()
-    current_filter = request.args.get("filter", "all")
     page = int(request.args.get("page", 1))
-    per_page = 100  # Increased from 50
+    per_page = 100
     refresh_tracking = request.args.get("refresh", "") == "1"
 
-    # Initialize stats
-    stats = {
-        "total": 0,
-        "scanned_not_delivered": 0,
-        "not_scanned_not_delivered": 0,
-        "not_printed": 0
-    }
+    # Batch tab parameters
+    batch_status = request.args.get("status", "completed")
+    batch_page = int(request.args.get("page", 1)) if current_tab == "batches" else 1
+
+    # Initialize data
+    batches = []
+    batch_pages = 1
+    batch_error = None
+    shipments = []
+    total_shipments = 0
+    total_pages = 1
 
     try:
-        print(f"📦 Loading shipments (page {page}, filter={current_filter})...")
+        # ══════════════════════════════════════════════════════════════════════
+        # FETCH BATCHES DATA (for batches tab)
+        # ══════════════════════════════════════════════════════════════════════
+        batch_result = get_shipstation_batches(status=batch_status, page=batch_page, page_size=25)
+        batches = batch_result.get("batches", [])
+        batch_pages = batch_result.get("pages", 1)
+        batch_error = batch_result.get("error")
+
+        # ══════════════════════════════════════════════════════════════════════
+        # FETCH SHIPMENTS DATA (for shipments tab)
+        # ══════════════════════════════════════════════════════════════════════
+        print(f"📦 Loading shipments (page {page})...")
 
         conn = get_mysql_connection()
         cursor = conn.cursor()
@@ -3194,382 +3222,266 @@ def check_shipments():
             search_like = f"%{search_query}%"
             search_params = [search_like, search_like, search_like]
 
-        # ══════════════════════════════════════════════════════════════════════
-        # STEP 1: Calculate stats (use cache if available, else query DB)
-        # ══════════════════════════════════════════════════════════════════════
-        cached_stats = get_cached_stats()
-        if cached_stats and not refresh_tracking:
-            stats = cached_stats.copy()
-            print(f"📊 Using cached stats (TTL: {STATS_CACHE_TTL}s)")
-        else:
-            stats_query = """
-                SELECT
-                    COUNT(*) as total,
-                    SUM(CASE WHEN s.tracking_number IS NOT NULL AND (tc.is_delivered = false OR tc.is_delivered IS NULL) THEN 1 ELSE 0 END) as scanned_not_delivered,
-                    SUM(CASE WHEN s.tracking_number IS NULL AND (tc.is_delivered = false OR tc.is_delivered IS NULL)
-                             AND sc.ship_date <= CURRENT_DATE - INTERVAL '7 days' THEN 1 ELSE 0 END) as not_scanned_not_delivered
-                FROM shipments_cache sc
-                LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
-                LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
-                WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '90 days'
-            """
-            cursor.execute(stats_query)
-            stats_row = cursor.fetchone()
-            stats["total"] = stats_row["total"] or 0
-            stats["scanned_not_delivered"] = stats_row["scanned_not_delivered"] or 0
-            stats["not_scanned_not_delivered"] = stats_row["not_scanned_not_delivered"] or 0
+        # Count for pagination
+        count_query = f"""
+            SELECT COUNT(DISTINCT sc.tracking_number) as total
+            FROM shipments_cache sc
+            LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
+            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+            WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '90 days'
+            {search_condition}
+        """
+        cursor.execute(count_query, search_params)
+        total_shipments = cursor.fetchone()['total']
+        total_pages = max(1, (total_shipments + per_page - 1) // per_page)
 
-            # Get not_printed count from ShipStation
-            try:
-                if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
-                    resp = requests.get(
-                        "https://ssapi.shipstation.com/orders",
-                        auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-                        params={"orderStatus": "awaiting_shipment", "pageSize": 1},
-                        timeout=10
-                    )
-                    if resp.status_code == 200:
-                        stats["not_printed"] = resp.json().get("total", 0)
-            except Exception as e:
-                print(f"⚠️ Error getting awaiting orders count: {e}")
+        # Get paginated shipments with cached tracking data (FAST!)
+        offset = (page - 1) * per_page
+        query = f"""
+            SELECT
+                sc.tracking_number,
+                sc.order_number,
+                sc.customer_name,
+                sc.carrier_code,
+                sc.ship_date,
+                MAX(s.scan_date) as scan_date,
+                tc.status as ups_status,
+                tc.status_description as ups_status_text,
+                tc.estimated_delivery,
+                tc.last_location,
+                tc.last_activity_date,
+                tc.is_delivered,
+                tc.updated_at as tracking_updated_at,
+                co.id as cancelled_id,
+                co.reason as cancel_reason
+            FROM shipments_cache sc
+            LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
+            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+            LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
+            WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '90 days'
+            {search_condition}
+            GROUP BY sc.tracking_number, sc.order_number, sc.customer_name,
+                     sc.carrier_code, sc.ship_date,
+                     tc.status, tc.status_description, tc.estimated_delivery,
+                     tc.last_location, tc.last_activity_date, tc.is_delivered, tc.updated_at,
+                     co.id, co.reason
+            ORDER BY sc.ship_date DESC
+            LIMIT %s OFFSET %s
+        """
+        cursor.execute(query, search_params + [per_page, offset])
+        cached_shipments = cursor.fetchall()
 
-            # Cache the stats
-            set_cached_stats(stats)
-            print(f"📊 Stats calculated and cached")
+        print(f"✓ Found {len(cached_shipments)} shipments on page {page} of {total_pages} ({total_shipments} total)")
 
-        # Legacy: Get not_printed count if not in cached stats (backwards compat)
-        if "not_printed" not in stats:
-            try:
-                if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
-                    resp = requests.get(
-                        "https://ssapi.shipstation.com/orders",
-                        auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-                        params={"orderStatus": "awaiting_shipment", "pageSize": 1},
-                        timeout=10
-                    )
-                    if resp.status_code == 200:
-                        stats["not_printed"] = resp.json().get("total", 0)
-            except Exception as e:
-                print(f"⚠️ Error getting awaiting orders count: {e}")
+        # Collect tracking numbers that need UPS refresh
+        tracking_to_refresh = []
 
-        print(f"📊 Stats: total={stats['total']}, scanned_not_delivered={stats['scanned_not_delivered']}, not_scanned_7days={stats['not_scanned_not_delivered']}, not_printed={stats['not_printed']}")
+        # Process each shipment
+        for cached_ship in cached_shipments:
+            tracking_number = cached_ship.get("tracking_number", "")
+            order_number = cached_ship.get("order_number", "")
+            carrier_code = cached_ship.get("carrier_code", "").upper()
+            ship_date = str(cached_ship.get("ship_date", ""))
+            customer_name = cached_ship.get("customer_name", "Unknown")
 
-        # ══════════════════════════════════════════════════════════════════════
-        # STEP 2: Handle "not_printed" filter separately (from ShipStation API)
-        # ══════════════════════════════════════════════════════════════════════
-        if current_filter == "not_printed":
-            shipments = []
-            try:
-                if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
-                    print("📋 Fetching awaiting_shipment orders from ShipStation...")
-                    resp = requests.get(
-                        "https://ssapi.shipstation.com/orders",
-                        auth=(SHIPSTATION_API_KEY, SHIPSTATION_API_SECRET),
-                        params={
-                            "orderStatus": "awaiting_shipment",
-                            "pageSize": 500,
-                            "sortBy": "OrderDate",
-                            "sortDir": "DESC"
-                        },
-                        timeout=30
-                    )
-                    if resp.status_code == 200:
-                        awaiting_orders = resp.json().get("orders", [])
-                        for order in awaiting_orders:
-                            ship_to = order.get("shipTo", {}) or {}
-                            shipments.append({
-                                "order_number": order.get("orderNumber", "N/A"),
-                                "customer_name": ship_to.get("name", "N/A"),
-                                "tracking_number": "Not Shipped Yet",
-                                "carrier": "N/A",
-                                "ship_date": order.get("orderDate", "")[:10] if order.get("orderDate") else "N/A",
-                                "scanned": False,
-                                "scan_date": "",
-                                "ups_status": "not_printed",
-                                "ups_status_text": "Awaiting Shipment",
-                                "ups_last_activity": "—",
-                                "estimated_delivery": "",
-                                "tracking_url": "",
-                                "flag": True,
-                                "flag_reason": "📋 Order not yet printed/shipped",
-                                "flag_severity": "warning",
-                                "is_cancelled": False,
-                                "cancel_reason": ""
-                            })
-            except Exception as e:
-                print(f"⚠️ Error fetching awaiting orders: {e}")
+            # Check if cancelled
+            is_cancelled = cached_ship.get("cancelled_id") is not None
+            cancel_reason = cached_ship.get("cancel_reason", "")
 
-            total_shipments = len(shipments)
-            total_pages = 1
-            cursor.close()
-            conn.close()
+            # Check if scanned
+            scan_date_obj = cached_ship.get("scan_date")
+            scanned = scan_date_obj is not None
+            scan_date = ""
+            if scan_date_obj:
+                scan_date = scan_date_obj.strftime("%Y-%m-%d") if hasattr(scan_date_obj, 'strftime') else str(scan_date_obj)[:10]
 
-        else:
-            # ══════════════════════════════════════════════════════════════════════
-            # STEP 3: Build filter-specific query for shipments
-            # ══════════════════════════════════════════════════════════════════════
-            filter_condition = ""
-            if current_filter == "scanned_not_delivered":
-                filter_condition = "AND s.tracking_number IS NOT NULL AND (tc.is_delivered = false OR tc.is_delivered IS NULL)"
-            elif current_filter == "not_scanned_not_delivered":
-                filter_condition = "AND s.tracking_number IS NULL AND (tc.is_delivered = false OR tc.is_delivered IS NULL) AND sc.ship_date <= CURRENT_DATE - INTERVAL '7 days'"
+            # Get UPS tracking status from CACHE (not live API!)
+            ups_status = cached_ship.get("ups_status") or "unknown"
+            ups_status_text = cached_ship.get("ups_status_text") or ""
+            estimated_delivery = cached_ship.get("estimated_delivery") or ""
+            last_location = cached_ship.get("last_location") or ""
+            is_delivered = cached_ship.get("is_delivered") or False
+            tracking_updated = cached_ship.get("tracking_updated_at")
 
-            # Count for pagination with filter
-            count_query = f"""
-                SELECT COUNT(DISTINCT sc.tracking_number) as total
-                FROM shipments_cache sc
-                LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
-                LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
-                WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '90 days'
-                {filter_condition}
-                {search_condition}
-            """
-            cursor.execute(count_query, search_params)
-            total_shipments = cursor.fetchone()['total']
-            total_pages = max(1, (total_shipments + per_page - 1) // per_page)
+            # Build tracking URL and check if refresh needed
+            tracking_url = ""
+            is_canada_post = "canada" in carrier_code.lower() if carrier_code else False
+            is_ups = carrier_code == "UPS" or tracking_number.startswith("1Z")
 
-            # Get paginated shipments with cached tracking data (FAST!)
-            offset = (page - 1) * per_page
-            query = f"""
-                SELECT
-                    sc.tracking_number,
-                    sc.order_number,
-                    sc.customer_name,
-                    sc.carrier_code,
-                    sc.ship_date,
-                    MAX(s.scan_date) as scan_date,
-                    tc.status as ups_status,
-                    tc.status_description as ups_status_text,
-                    tc.estimated_delivery,
-                    tc.last_location,
-                    tc.last_activity_date,
-                    tc.is_delivered,
-                    tc.updated_at as tracking_updated_at,
-                    co.id as cancelled_id,
-                    co.reason as cancel_reason
-                FROM shipments_cache sc
-                LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
-                LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
-                LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
-                WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '90 days'
-                {filter_condition}
-                {search_condition}
-                GROUP BY sc.tracking_number, sc.order_number, sc.customer_name,
-                         sc.carrier_code, sc.ship_date,
-                         tc.status, tc.status_description, tc.estimated_delivery,
-                         tc.last_location, tc.last_activity_date, tc.is_delivered, tc.updated_at,
-                         co.id, co.reason
-                ORDER BY sc.ship_date DESC
-                LIMIT %s OFFSET %s
-            """
-            cursor.execute(query, search_params + [per_page, offset])
-            cached_shipments = cursor.fetchall()
+            if is_ups:
+                tracking_url = f"https://www.ups.com/track?loc=en_US&tracknum={tracking_number}"
+            elif is_canada_post:
+                tracking_url = f"https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor={tracking_number}"
 
-            print(f"✓ Found {len(cached_shipments)} shipments on page {page} of {total_pages} ({total_shipments} total)")
-
-            # Collect tracking numbers that need UPS refresh
-            tracking_to_refresh = []
-
-            # Process each shipment
-            shipments = []
-            for cached_ship in cached_shipments:
-                tracking_number = cached_ship.get("tracking_number", "")
-                order_number = cached_ship.get("order_number", "")
-                carrier_code = cached_ship.get("carrier_code", "").upper()
-                ship_date = str(cached_ship.get("ship_date", ""))
-                customer_name = cached_ship.get("customer_name", "Unknown")
-
-                # Check if cancelled
-                is_cancelled = cached_ship.get("cancelled_id") is not None
-                cancel_reason = cached_ship.get("cancel_reason", "")
-
-                # Check if scanned
-                scan_date_obj = cached_ship.get("scan_date")
-                scanned = scan_date_obj is not None
-                scan_date = ""
-                if scan_date_obj:
-                    scan_date = scan_date_obj.strftime("%Y-%m-%d") if hasattr(scan_date_obj, 'strftime') else str(scan_date_obj)[:10]
-
-                # Get UPS tracking status from CACHE (not live API!)
-                ups_status = cached_ship.get("ups_status") or "unknown"
-                ups_status_text = cached_ship.get("ups_status_text") or ""
-                estimated_delivery = cached_ship.get("estimated_delivery") or ""
-                last_location = cached_ship.get("last_location") or ""
-                is_delivered = cached_ship.get("is_delivered") or False
-                tracking_updated = cached_ship.get("tracking_updated_at")
-
-                # Build tracking URL and check if refresh needed
-                tracking_url = ""
-                is_canada_post = "canada" in carrier_code.lower() if carrier_code else False
-                is_ups = carrier_code == "UPS" or tracking_number.startswith("1Z")
-
-                if is_ups:
-                    tracking_url = f"https://www.ups.com/track?loc=en_US&tracknum={tracking_number}"
-                elif is_canada_post:
-                    tracking_url = f"https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor={tracking_number}"
-
-                # Check if tracking needs refresh (older than 2 hours or missing)
-                if is_ups or is_canada_post:
-                    if not tracking_updated:
+            # Check if tracking needs refresh (older than 2 hours or missing)
+            if is_ups or is_canada_post:
+                if not tracking_updated:
+                    tracking_to_refresh.append(tracking_number)
+                else:
+                    # Handle timezone-aware timestamps from PostgreSQL
+                    now = datetime.now()
+                    if hasattr(tracking_updated, 'tzinfo') and tracking_updated.tzinfo is not None:
+                        tracking_updated = tracking_updated.replace(tzinfo=None)
+                    if (now - tracking_updated).total_seconds() > 7200:
                         tracking_to_refresh.append(tracking_number)
-                    else:
-                        # Handle timezone-aware timestamps from PostgreSQL
-                        now = datetime.now()
-                        if hasattr(tracking_updated, 'tzinfo') and tracking_updated.tzinfo is not None:
-                            tracking_updated = tracking_updated.replace(tzinfo=None)
-                        if (now - tracking_updated).total_seconds() > 7200:
-                            tracking_to_refresh.append(tracking_number)
 
-                # Save original status for flag logic (before we modify it for display)
-                original_ups_status = ups_status
+            # Save original status for flag logic (before we modify it for display)
+            original_ups_status = ups_status
 
-                # Format status display with user-friendly messages
-                if ups_status == "delivered":
-                    ups_status_text = "✅ Delivered"
-                    ups_status = "delivered"
-                elif ups_status == "in_transit":
-                    # Check if it's "almost there" (out for delivery or has estimated delivery today/tomorrow)
-                    status_lower = (cached_ship.get("ups_status_text") or "").lower()
-                    if "out for delivery" in status_lower:
-                        ups_status_text = "🏃 Almost There!"
-                        ups_status = "almost_there"
-                    elif estimated_delivery:
-                        # Check if delivery is today or tomorrow
-                        try:
-                            est_lower = estimated_delivery.lower()
-                            today = datetime.now()
-                            if "today" in est_lower or today.strftime("%B %d").lower() in est_lower:
-                                ups_status_text = f"🏃 Almost There! (Today)"
-                                ups_status = "almost_there"
-                            elif "tomorrow" in est_lower:
-                                ups_status_text = f"🚚 On the Way (Tomorrow)"
-                                ups_status = "in_transit"
-                            else:
-                                ups_status_text = f"🚚 On the Way"
-                                if estimated_delivery:
-                                    ups_status_text += f" - Est: {estimated_delivery}"
-                        except:
+            # Format status display with user-friendly messages
+            if ups_status == "delivered":
+                ups_status_text = "✅ Delivered"
+                ups_status = "delivered"
+            elif ups_status == "in_transit":
+                # Check if it's "almost there" (out for delivery or has estimated delivery today/tomorrow)
+                status_lower = (cached_ship.get("ups_status_text") or "").lower()
+                if "out for delivery" in status_lower:
+                    ups_status_text = "🏃 Almost There!"
+                    ups_status = "almost_there"
+                elif estimated_delivery:
+                    # Check if delivery is today or tomorrow
+                    try:
+                        est_lower = estimated_delivery.lower()
+                        today = datetime.now()
+                        if "today" in est_lower or today.strftime("%B %d").lower() in est_lower:
+                            ups_status_text = f"🏃 Almost There! (Today)"
+                            ups_status = "almost_there"
+                        elif "tomorrow" in est_lower:
+                            ups_status_text = f"🚚 On the Way (Tomorrow)"
+                            ups_status = "in_transit"
+                        else:
                             ups_status_text = f"🚚 On the Way"
                             if estimated_delivery:
                                 ups_status_text += f" - Est: {estimated_delivery}"
+                    except:
+                        ups_status_text = f"🚚 On the Way"
+                        if estimated_delivery:
+                            ups_status_text += f" - Est: {estimated_delivery}"
+                else:
+                    ups_status_text = "🚚 On the Way"
+            elif ups_status == "label_created":
+                # Check how long since label was created
+                try:
+                    ship_datetime = datetime.strptime(ship_date, "%Y-%m-%d")
+                    days_since = (datetime.now() - ship_datetime).days
+                    if days_since >= 3:
+                        ups_status_text = "😴 Hasn't Moved"
+                        ups_status = "hasnt_moved"
                     else:
-                        ups_status_text = "🚚 On the Way"
-                elif ups_status == "label_created":
-                    # Check how long since label was created
-                    try:
-                        ship_datetime = datetime.strptime(ship_date, "%Y-%m-%d")
-                        days_since = (datetime.now() - ship_datetime).days
-                        if days_since >= 3:
-                            ups_status_text = "😴 Hasn't Moved"
-                            ups_status = "hasnt_moved"
-                        else:
-                            ups_status_text = "📦 Label Created"
-                    except:
                         ups_status_text = "📦 Label Created"
-                elif ups_status == "exception":
-                    ups_status_text = "⚠️ Exception/Delay"
-                elif not is_ups and not is_canada_post:
-                    # Other carriers we don't track
-                    ups_status_text = "N/A (Other Carrier)"
-                    ups_status = "non_ups"
-                elif not ups_status_text or ups_status_text == "-" or ups_status == "unknown":
-                    # No cached data - needs refresh
-                    ups_status_text = "🔄 Loading..."
-                    ups_status = "unknown"
-                    if is_ups or is_canada_post:
-                        tracking_to_refresh.append(tracking_number)
-
-                # Determine if shipment should be flagged
-                flag = False
-                flag_reason = ""
-                flag_severity = "normal"
-
+                except:
+                    ups_status_text = "📦 Label Created"
+            elif ups_status == "exception":
+                ups_status_text = "⚠️ Exception/Delay"
+            elif not is_ups and not is_canada_post:
+                # Other carriers we don't track
+                ups_status_text = "N/A (Other Carrier)"
+                ups_status = "non_ups"
+            elif not ups_status_text or ups_status_text == "-" or ups_status == "unknown":
+                # No cached data - needs refresh
+                ups_status_text = "🔄 Loading..."
+                ups_status = "unknown"
                 if is_ups or is_canada_post:
-                    try:
-                        ship_datetime = datetime.strptime(ship_date, "%Y-%m-%d")
-                        days_since_ship = (datetime.now() - ship_datetime).days
+                    tracking_to_refresh.append(tracking_number)
 
-                        if not scanned and days_since_ship >= 7:
-                            flag = True
-                            flag_severity = "critical"
-                            flag_reason = f"🚨 CRITICAL: Label created {days_since_ship} days ago but NEVER SCANNED!"
-                        elif scanned and original_ups_status == "label_created" and days_since_ship >= 3:
-                            flag = True
-                            flag_severity = "critical"
-                            flag_reason = f"🚨 Scanned {days_since_ship} days ago but UPS shows no pickup."
-                        elif not scanned and days_since_ship >= 3:
-                            flag = True
-                            flag_severity = "warning"
-                            flag_reason = f"⚠️ Not scanned after {days_since_ship} days."
-                        elif original_ups_status == "exception":
-                            flag = True
-                            flag_severity = "warning"
-                            flag_reason = "⚠️ Shipment exception or delay."
-                    except:
-                        pass
+            # Determine if shipment should be flagged
+            flag = False
+            flag_reason = ""
+            flag_severity = "normal"
 
-                shipments.append({
-                    "order_number": order_number,
-                    "customer_name": customer_name,
-                    "tracking_number": tracking_number,
-                    "carrier": carrier_code,
-                    "ship_date": ship_date,
-                    "scanned": scanned,
-                    "scan_date": scan_date,
-                    "ups_status": ups_status,
-                    "ups_status_text": ups_status_text,
-                    "ups_last_activity": last_location or "—",
-                    "estimated_delivery": estimated_delivery,
-                    "tracking_url": tracking_url,
-                    "flag": flag,
-                    "flag_reason": flag_reason,
-                    "flag_severity": flag_severity,
-                    "is_cancelled": is_cancelled,
-                    "cancel_reason": cancel_reason
-                })
+            if is_ups or is_canada_post:
+                try:
+                    ship_datetime = datetime.strptime(ship_date, "%Y-%m-%d")
+                    days_since_ship = (datetime.now() - ship_datetime).days
 
-            cursor.close()
-            conn.close()
+                    if not scanned and days_since_ship >= 7:
+                        flag = True
+                        flag_severity = "critical"
+                        flag_reason = f"🚨 CRITICAL: Label created {days_since_ship} days ago but NEVER SCANNED!"
+                    elif scanned and original_ups_status == "label_created" and days_since_ship >= 3:
+                        flag = True
+                        flag_severity = "critical"
+                        flag_reason = f"🚨 Scanned {days_since_ship} days ago but UPS shows no pickup."
+                    elif not scanned and days_since_ship >= 3:
+                        flag = True
+                        flag_severity = "warning"
+                        flag_reason = f"⚠️ Not scanned after {days_since_ship} days."
+                    elif original_ups_status == "exception":
+                        flag = True
+                        flag_severity = "warning"
+                        flag_reason = "⚠️ Shipment exception or delay."
+                except:
+                    pass
 
-            # Refresh tracking cache in background (don't block page load)
-            # If user clicked "Refresh Tracking" button, force refresh all visible shipments
-            if refresh_tracking:
-                # Get all tracking numbers from current page for force refresh
-                all_tracking = [s["tracking_number"] for s in shipments if s.get("tracking_number")]
-                if all_tracking:
-                    print(f"🔄 User requested refresh: force-refreshing {len(all_tracking)} tracking statuses...")
-                    import threading
-                    # Split into UPS and Canada Post
-                    ups_tracking = [t for t in all_tracking if t.startswith("1Z")]
-                    cp_tracking = [t for t in all_tracking if not t.startswith("1Z")]
-                    if ups_tracking:
-                        threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:50], True)).start()
-                    if cp_tracking:
-                        threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:30], True)).start()
-            elif tracking_to_refresh and len(tracking_to_refresh) <= 20:
-                # Auto-refresh stale/missing tracking data (small batches only)
-                print(f"🔄 Auto-refreshing {len(tracking_to_refresh)} stale tracking statuses...")
+            shipments.append({
+                "order_number": order_number,
+                "customer_name": customer_name,
+                "tracking_number": tracking_number,
+                "carrier": normalize_carrier(carrier_code),
+                "ship_date": ship_date,
+                "scanned": scanned,
+                "scan_date": scan_date,
+                "ups_status": ups_status,
+                "ups_status_text": ups_status_text,
+                "ups_last_activity": last_location or "—",
+                "estimated_delivery": estimated_delivery,
+                "tracking_url": tracking_url,
+                "flag": flag,
+                "flag_reason": flag_reason,
+                "flag_severity": flag_severity,
+                "is_cancelled": is_cancelled,
+                "cancel_reason": cancel_reason
+            })
+
+        cursor.close()
+        conn.close()
+
+        # Refresh tracking cache in background (don't block page load)
+        # If user clicked "Refresh Tracking" button, force refresh all visible shipments
+        if refresh_tracking:
+            # Get all tracking numbers from current page for force refresh
+            all_tracking = [s["tracking_number"] for s in shipments if s.get("tracking_number")]
+            if all_tracking:
+                print(f"🔄 User requested refresh: force-refreshing {len(all_tracking)} tracking statuses...")
                 import threading
                 # Split into UPS and Canada Post
-                ups_tracking = [t for t in tracking_to_refresh if t.startswith("1Z")]
-                cp_tracking = [t for t in tracking_to_refresh if not t.startswith("1Z")]
+                ups_tracking = [t for t in all_tracking if t.startswith("1Z")]
+                cp_tracking = [t for t in all_tracking if not t.startswith("1Z")]
                 if ups_tracking:
-                    threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:50], False)).start()
+                    threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:50], True)).start()
                 if cp_tracking:
-                    threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:30], False)).start()
+                    threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:30], True)).start()
+        elif tracking_to_refresh and len(tracking_to_refresh) <= 20:
+            # Auto-refresh stale/missing tracking data (small batches only)
+            print(f"🔄 Auto-refreshing {len(tracking_to_refresh)} stale tracking statuses...")
+            import threading
+            # Split into UPS and Canada Post
+            ups_tracking = [t for t in tracking_to_refresh if t.startswith("1Z")]
+            cp_tracking = [t for t in tracking_to_refresh if not t.startswith("1Z")]
+            if ups_tracking:
+                threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:50], False)).start()
+            if cp_tracking:
+                threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:30], False)).start()
 
-        # Pagination URLs
+        # Pagination URLs for shipments tab
         has_prev = page > 1
         has_next = page < total_pages
-        prev_url = url_for("check_shipments", page=page-1, search=search_query, filter=current_filter) if has_prev else "#"
-        next_url = url_for("check_shipments", page=page+1, search=search_query, filter=current_filter) if has_next else "#"
+        prev_url = url_for("check_shipments", tab="shipments", page=page-1, search=search_query) if has_prev else "#"
+        next_url = url_for("check_shipments", tab="shipments", page=page+1, search=search_query) if has_next else "#"
 
         return render_template(
             "check_shipments.html",
+            # Tab state
+            current_tab=current_tab,
+            # Batches tab data
+            batches=batches,
+            batch_status=batch_status,
+            batch_page=batch_page,
+            batch_pages=batch_pages,
+            batch_error=batch_error,
+            # Shipments tab data
             shipments=shipments,
             search_query=search_query,
-            current_filter=current_filter,
-            stats=stats,
             loading=False,
             page=page,
             total_pages=total_pages,
@@ -3589,10 +3501,14 @@ def check_shipments():
         flash(f"Error loading shipments: {str(e)}", "error")
         return render_template(
             "check_shipments.html",
+            current_tab=current_tab,
+            batches=[],
+            batch_status="completed",
+            batch_page=1,
+            batch_pages=1,
+            batch_error=str(e),
             shipments=[],
             search_query=search_query,
-            current_filter=current_filter,
-            stats={"total": 0, "scanned_not_delivered": 0, "not_scanned_not_delivered": 0, "not_printed": 0},
             loading=False,
             page=1,
             total_pages=1,
@@ -3693,29 +3609,8 @@ def uncancel_order():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ── SHIPSTATION BATCHES ROUTES ────────────────────────────────────────────────
+# ── SHIPSTATION BATCH DETAIL ROUTE ────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
-
-@app.route("/ss_batches", methods=["GET"])
-def ss_batches():
-    """View ShipStation batches with status filter."""
-    status = request.args.get("status", "completed")
-    page = int(request.args.get("page", 1))
-
-    result = get_shipstation_batches(status=status, page=page, page_size=25)
-
-    return render_template(
-        "ss_batches.html",
-        batches=result.get("batches", []),
-        current_status=status,
-        page=page,
-        pages=result.get("pages", 1),
-        total=result.get("total", 0),
-        error=result.get("error"),
-        version=__version__,
-        active_page="ss_batches"
-    )
-
 
 @app.route("/ss_batches/<batch_id>", methods=["GET"])
 def ss_batch_detail(batch_id):
@@ -3808,7 +3703,7 @@ def ss_batch_detail(batch_id):
                 "tracking_number": tracking_number,
                 "order_number": order_number,
                 "customer_name": customer_name,
-                "carrier_code": carrier_code.upper() if carrier_code else "",
+                "carrier_code": normalize_carrier(carrier_code),
                 "ship_date": ship_date,
                 "tracking_status": tracking_status,
                 "tracking_status_text": tracking_status_text,

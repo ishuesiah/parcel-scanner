@@ -184,16 +184,15 @@
 
     <!-- ── SIDEBAR ── -->
     <div class="sidebar">
-      <h1><img src="{{ url_for('static', filename='parcel-scan.jpg') }}" width="200"></h1>
+      <h1><img src="{{ url_for('static', filename='waypost-logo.jpg') }}" width="200"></h1>
       <ul>
         <li><a href="{{ url_for('new_batch') }}" {% if active_page == 'new_batch' %}class="active"{% endif %}>New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}" {% if active_page == 'all_batches' %}class="active"{% endif %}>Recorded Pick-ups</a></li>
-        <li><a href="{{ url_for('ss_batches') }}" {% if active_page == 'ss_batches' %}class="active"{% endif %}>ShipStation Batches</a></li>
         <li><a href="{{ url_for('all_scans') }}" {% if active_page == 'all_scans' %}class="active"{% endif %}>All Scans</a></li>
         <li><a href="{{ url_for('stuck_orders') }}" {% if active_page == 'stuck_orders' %}class="active"{% endif %}>Fix Stuck Orders</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}" {% if active_page == 'pick_and_pack' %}class="active"{% endif %}>Pick and Pack</a></li>
         <li><a href="{{ url_for('item_locations') }}" {% if active_page == 'item_locations' %}class="active"{% endif %}>Item Locations</a></li>
-        <li><a href="{{ url_for('check_shipments') }}" {% if active_page == 'check_shipments' %}class="active"{% endif %}>Check Shipments</a></li>
+        <li><a href="{{ url_for('check_shipments') }}" {% if active_page == 'check_shipments' %}class="active"{% endif %}>Live Tracking</a></li>
       </ul>
       <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
