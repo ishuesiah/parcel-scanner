@@ -1,7 +1,7 @@
 Flask
-PyMySQL
-cryptography
+psycopg2-binary
 gunicorn
 requests
 bcrypt
 klaviyo-api
+cryptography
