@@ -3933,6 +3933,34 @@ def debug_tracking(tracking_number):
     except Exception as e:
         result["live_api_result"] = {"error": str(e)}
 
+    # Add status code mapping reference
+    ups_code_mappings = {
+        "delivered": ["011", "KB", "KM"],
+        "in_transit": ["M", "MP", "P", "J", "W", "A", "AR", "AF", "OR", "DP", "OT", "IT", "005", "012", "021", "022"],
+        "label_created": ["I", "MV", "NA"],
+        "exception": ["X", "RS", "DJ", "D", "RD"]
+    }
+
+    def lookup_code(code):
+        if not code:
+            return "no_code"
+        for status, codes in ups_code_mappings.items():
+            if code in codes:
+                return status
+        return "unknown (not in mapping)"
+
+    cached_code = result.get("cached_status", {}).get("raw_status_code") if result.get("cached_status") else None
+    live_code = result.get("live_api_result", {}).get("raw_status_code") if result.get("live_api_result") else None
+
+    result["status_code_mapping"] = {
+        "reference": ups_code_mappings,
+        "cached_code": cached_code,
+        "cached_code_maps_to": lookup_code(cached_code),
+        "live_code": live_code,
+        "live_code_maps_to": lookup_code(live_code),
+        "note": "If cached_code_maps_to != cached status, the mapping was updated after this was cached"
+    }
+
     return f"<pre>{json.dumps(result, indent=2, default=str)}</pre>"
 
 
