@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}Item Locations - H&O Parcel Scans{% endblock %}
+
+{% block extra_styles %}
+    .add-form {
+      background: white; padding: 24px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 24px;
+    }
+    .add-form h3 { font-size: 1.2rem; color: #34495e; margin-bottom: 16px; }
+    .form-row { display: flex; gap: 12px; margin-bottom: 16px; align-items: end; }
+    .form-group { flex: 1; }
+    .form-group label { display: block; font-weight: 600; margin-bottom: 6px; color: #2c3e50; font-size: 0.9rem; }
+    .form-group input, .form-group select {
+      width: 100%; padding: 10px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px;
+    }
+    .form-group.narrow { flex: 0 0 150px; }
+    .add-btn {
+      padding: 10px 24px; font-size: 14px; border: none; border-radius: 4px;
+      background-color: #199b76; color: #fff; cursor: pointer; font-weight: 600;
+    }
+    .add-btn:hover { opacity: 0.92; }
+
+    .rules-table { width: 100%; border-collapse: collapse; background: white; }
+    .rules-table th, .rules-table td { border: 1px solid #ddd; padding: 12px 10px; font-size: 0.93rem; }
+    .rules-table th { background-color: #f8f9fa; text-align: left; font-weight: 600; color: #495057; }
+    .rules-table tr:nth-child(even) { background-color: #fafafa; }
+    .rules-table tr:hover { background-color: #f1f1f1; }
+    .rule-type-badge {
+      display: inline-block; padding: 4px 8px; border-radius: 3px; font-size: 0.8rem;
+      font-weight: 600; text-transform: uppercase;
+    }
+    .rule-type-sku { background-color: #d4edda; color: #155724; }
+    .rule-type-keyword { background-color: #cce5ff; color: #004085; }
+    .delete-btn {
+      padding: 6px 12px; font-size: 0.85rem; background-color: #952746; color: #fff;
+      border: none; border-radius: 4px; cursor: pointer;
+    }
+    .delete-btn:hover { opacity: 0.92; }
+{% endblock %}
+
+{% block content %}
+    <h2>Item Location Rules</h2>
+    <p style="margin-bottom: 20px; color: #666;">
+      Set warehouse locations for items by matching SKUs or keywords. These locations will appear in the Pick and Pack page.
+    </p>
+
+    <div class="add-form">
+      <h3>Add New Location Rule</h3>
+      <form method="post" action="{{ url_for('add_location_rule') }}">
+        <div class="form-row">
+          <div class="form-group narrow">
+            <label for="aisle">Aisle</label>
+            <input type="text" name="aisle" id="aisle" required placeholder="A1">
+          </div>
+          <div class="form-group narrow">
+            <label for="shelf">Shelf</label>
+            <input type="text" name="shelf" id="shelf" required placeholder="B3">
+          </div>
+          <div class="form-group narrow">
+            <label for="rule_type">Match By</label>
+            <select name="rule_type" id="rule_type" required>
+              <option value="sku">SKU</option>
+              <option value="keyword">Keyword</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="rule_value">Value</label>
+            <input type="text" name="rule_value" id="rule_value" required placeholder="SKU-12345 or 'Bracelet'">
+          </div>
+          <div class="form-group" style="flex: 0;">
+            <button type="submit" class="add-btn">+ Add Rule</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <table class="rules-table">
+      <thead>
+        <tr>
+          <th>Aisle</th>
+          <th>Shelf</th>
+          <th>Rule Type</th>
+          <th>Match Value</th>
+          <th>Created</th>
+          <th style="width: 100px;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if rules %}
+          {% for rule in rules %}
+            <tr>
+              <td><strong>{{ rule.aisle }}</strong></td>
+              <td><strong>{{ rule.shelf }}</strong></td>
+              <td>
+                <span class="rule-type-badge rule-type-{{ rule.rule_type }}">
+                  {{ rule.rule_type }}
+                </span>
+              </td>
+              <td style="font-family: monospace;">{{ rule.rule_value }}</td>
+              <td>{{ rule.created_at.strftime('%Y-%m-%d %H:%M') if rule.created_at else '—' }}</td>
+              <td>
+                <form method="post" action="{{ url_for('delete_location_rule') }}" style="display: inline;">
+                  <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                  <button type="submit" class="delete-btn" onclick="return confirm('Delete this rule?')">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="6" style="text-align: center; padding: 32px; color: #999;">
+              No location rules configured yet. Add your first rule above!
+            </td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+{% endblock %}

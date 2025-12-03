@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}All Scans - H&O Parcel Scans{% endblock %}
+
+{% block extra_styles %}
+    .search-form { margin-top: 10px; margin-bottom: 20px; background: white; padding: 16px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .search-form input[type="text"] {
+      padding: 8px 12px; font-size: 14px; width: 300px; border: 1px solid #ccc; border-radius: 4px;
+    }
+    .search-form button {
+      padding: 8px 16px; font-size: 14px; border: none; border-radius: 4px; background-color: #2d85f8; color: #fff; cursor: pointer; margin-left: 8px;
+    }
+    .search-form button:hover { opacity: 0.92; }
+    .search-form a { margin-left: 12px; font-size: 14px; text-decoration: none; color: #2d85f8; font-weight: 500; }
+
+    .btn-delete-small {
+      padding: 4px 8px; font-size: 0.8rem; background-color: #952746; color: #fff; border: none; border-radius: 4px; cursor: pointer;
+    }
+    .btn-delete-small:hover { opacity: 0.92; }
+{% endblock %}
+
+{% block content %}
+    <h2>All Scans</h2>
+
+    <form class="search-form" method="get" action="{{ url_for('all_scans') }}">
+      <label for="order_search"><strong>Search by Order # or Customer Name:</strong></label><br><br>
+      <input type="text" name="order_number" id="order_search" value="{{ request.args.get('order_number','') }}" placeholder="Enter order number or name...">
+      <button type="submit">Search</button>
+      {% if request.args.get('order_number') %}
+        <a href="{{ url_for('all_scans') }}">Clear</a>
+      {% endif %}
+    </form>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Tracking</th>
+          <th>Carrier</th>
+          <th>SS Batch</th>
+          <th>Order #</th>
+          <th>Customer</th>
+          <th>Scan Time</th>
+          <th>Status</th>
+          <th>Batch ID</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in scans %}
+          <tr class="{{ 'duplicate-row' if s.status.startswith('Duplicate') else '' }}">
+            <td>{{ s.tracking_number }}</td>
+            <td>{{ s.carrier }}</td>
+            <td>{{ s.shipstation_batch_number or '' }}</td>
+            <td>
+              {% if s.order_id %}
+                <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+                  {{ s.order_number }}
+                </a>
+              {% else %}
+                {{ s.order_number }}
+              {% endif %}
+            </td>
+            <td>
+              {% if s.order_id %}
+                <a href="https://{{ shop_url }}/admin/orders/{{ s.order_id }}" target="_blank">
+                  {{ s.customer_name }}
+                </a>
+              {% else %}
+                {{ s.customer_name }}
+              {% endif %}
+            </td>
+            <td>{{ s.scan_date }}</td>
+            <td>
+              {% if s.status.startswith('Duplicate (Batch #') %}
+                {% set batch_num = s.status.split('#')[1].rstrip(')') %}
+                {% if batch_num and batch_num.isdigit() %}
+                  Duplicate (<a href="{{ url_for('view_batch', batch_id=batch_num|int) }}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #{{ batch_num }}</a>)
+                {% else %}
+                  {{ s.status }}
+                {% endif %}
+              {% else %}
+                {{ s.status }}
+              {% endif %}
+            </td>
+            <td>{{ s.batch_id or '' }}</td>
+            <td>
+              {% if s.order_number in ['Processing...', 'N/A'] or s.customer_name in ['Looking up...', 'Not Found', 'No Order Found'] %}
+                <form action="{{ url_for('retry_fetch_scan') }}" method="post" style="display: inline; margin-right: 4px;">
+                  <input type="hidden" name="scan_id" value="{{ s.id }}">
+                  <button type="submit" class="btn-delete-small" style="background-color: #3498db;">Retry</button>
+                </form>
+              {% endif %}
+              <form action="{{ url_for('delete_scan') }}" method="post" style="display: inline;"
+                    onsubmit="return confirm('Are you sure you want to delete this scan?');">
+                <input type="hidden" name="scan_id"  value="{{ s.id }}">
+                <button type="submit" class="btn-delete-small">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <!-- Pagination Controls -->
+    {% if total_pages > 1 %}
+      <div style="margin-top: 24px; text-align: center;">
+        <p style="margin-bottom: 12px; color: #666;">
+          Showing page {{ page }} of {{ total_pages }} ({{ total_scans }} total scans)
+        </p>
+        <div style="display: inline-flex; gap: 8px; align-items: center;">
+          {% if page > 1 %}
+            <a href="{{ url_for('all_scans', page=page-1, order_number=order_search) }}"
+               style="padding: 8px 16px; background: #2d85f8; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">
+              ← Previous
+            </a>
+          {% else %}
+            <span style="padding: 8px 16px; background: #ccc; color: #666; border-radius: 4px; font-size: 14px;">
+              ← Previous
+            </span>
+          {% endif %}
+
+          <span style="color: #666; font-size: 14px;">Page {{ page }} of {{ total_pages }}</span>
+
+          {% if page < total_pages %}
+            <a href="{{ url_for('all_scans', page=page+1, order_number=order_search) }}"
+               style="padding: 8px 16px; background: #2d85f8; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">
+              Next →
+            </a>
+          {% else %}
+            <span style="padding: 8px 16px; background: #ccc; color: #666; border-radius: 4px; font-size: 14px;">
+              Next →
+            </span>
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+{% endblock %}

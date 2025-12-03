@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+
+{% block title %}Check Shipments - H&O Parcel Scans{% endblock %}
+
+{% block extra_styles %}
+    .status-badge {
+      display: inline-block; padding: 4px 8px; border-radius: 4px;
+      font-size: 0.85rem; font-weight: 500;
+    }
+    .status-label_created { background-color: #e3f2fd; color: #1976d2; }
+    .status-in_transit { background-color: #fff4e5; color: #8a6100; }
+    .status-delivered { background-color: #e0f7e9; color: #199b76; }
+    .status-almost_there { background-color: #d4edda; color: #155724; font-weight: 600; }
+    .status-hasnt_moved { background-color: #fff3cd; color: #856404; }
+    .status-exception { background-color: #fdecea; color: #952746; }
+    .status-unknown { background-color: #f5f5f5; color: #666; }
+    .status-non_ups { background-color: #f5f5f5; color: #999; }
+    .status-not_printed { background-color: #e3f2fd; color: #1976d2; }
+    .status-error { background-color: #fdecea; color: #952746; }
+
+    .search-box {
+      background: white; padding: 20px; border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;
+    }
+    .search-box input[type="text"] {
+      width: 400px; padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px;
+      margin-right: 8px; font-size: 0.95rem;
+    }
+    .btn-search { background-color: #534bc4; color: white; }
+    .btn-search:hover { opacity: 0.92; }
+
+    .cancelled-row {
+      background-color: #fdecea !important;
+      opacity: 0.7;
+    }
+    .btn-cancel {
+      padding: 4px 8px; font-size: 0.8rem; border-radius: 4px;
+      border: 1px solid #952746; background: white; color: #952746;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .btn-cancel:hover {
+      background-color: #952746; color: white;
+    }
+    .btn-uncancel {
+      padding: 4px 8px; font-size: 0.8rem; border-radius: 4px;
+      border: 1px solid #199b76; background: white; color: #199b76;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .btn-uncancel:hover {
+      background-color: #199b76; color: white;
+    }
+
+    .flag-critical {
+      color: #952746; font-weight: 700; font-size: 1.3rem;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    .flag-warning {
+      color: #e67e00; font-weight: 600; font-size: 1.2rem;
+    }
+    .flag-ok {
+      color: #199b76; font-weight: 600; font-size: 1.2rem;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    .pagination {
+      margin-top: 20px; display: flex; gap: 8px; align-items: center;
+      justify-content: center;
+    }
+    .pagination button {
+      padding: 6px 12px; border: 1px solid #534bc4; background: white;
+      color: #534bc4; border-radius: 4px; cursor: pointer;
+    }
+    .pagination button:hover { background-color: #534bc4; color: white; }
+    .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .loading {
+      text-align: center; padding: 40px; color: #666;
+    }
+
+    .filter-buttons {
+      display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;
+      background: white; padding: 16px; border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .filter-btn {
+      padding: 10px 16px; font-size: 0.9rem; border-radius: 6px;
+      cursor: pointer; transition: all 0.2s; text-decoration: none;
+      display: inline-flex; align-items: center; gap: 8px;
+      border: 2px solid transparent;
+    }
+    .filter-btn-all {
+      background: #534bc4; color: white; border-color: #534bc4;
+    }
+    .filter-btn-all:hover { opacity: 0.9; }
+    .filter-btn-all.inactive {
+      background: white; color: #534bc4;
+    }
+    .filter-btn-warning {
+      background: #e67e00; color: white; border-color: #e67e00;
+    }
+    .filter-btn-warning:hover { opacity: 0.9; }
+    .filter-btn-warning.inactive {
+      background: white; color: #e67e00;
+    }
+    .filter-btn-critical {
+      background: #952746; color: white; border-color: #952746;
+    }
+    .filter-btn-critical:hover { opacity: 0.9; }
+    .filter-btn-critical.inactive {
+      background: white; color: #952746;
+    }
+    .filter-btn-info {
+      background: #1976d2; color: white; border-color: #1976d2;
+    }
+    .filter-btn-info:hover { opacity: 0.9; }
+    .filter-btn-info.inactive {
+      background: white; color: #1976d2;
+    }
+    .filter-count {
+      background: rgba(255,255,255,0.3); padding: 2px 8px;
+      border-radius: 10px; font-size: 0.8rem; font-weight: 600;
+    }
+    .filter-btn.inactive .filter-count {
+      background: rgba(0,0,0,0.1);
+    }
+{% endblock %}
+
+{% block content %}
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <h2>📦 Check Shipments</h2>
+      <a href="{{ url_for('check_shipments', page=page, filter=current_filter, search=search_query, refresh='1') }}"
+         class="btn btn-search" style="text-decoration: none;">🔄 Refresh Tracking</a>
+    </div>
+    <p style="margin-bottom: 16px; color: #666;">
+      Track shipments from ShipStation and UPS (last 90 days). Click tracking # or status for live UPS details.
+    </p>
+
+    <div class="search-box">
+      <form method="get" action="{{ url_for('check_shipments') }}">
+        <input type="text" name="search" placeholder="Search by customer name, order #, or tracking #..." value="{{ search_query }}" autofocus>
+        <input type="hidden" name="filter" value="{{ current_filter }}">
+        <button type="submit" class="btn btn-search">🔍 Search</button>
+        {% if search_query %}
+          <a href="{{ url_for('check_shipments', filter=current_filter) }}" style="margin-left: 8px; color: #534bc4;">Clear</a>
+        {% endif %}
+      </form>
+    </div>
+
+    <!-- Filter Buttons -->
+    <div class="filter-buttons">
+      <a href="{{ url_for('check_shipments', search=search_query) }}"
+         class="filter-btn filter-btn-all {{ '' if current_filter == 'all' else 'inactive' }}">
+        📋 All Shipments
+        <span class="filter-count">{{ stats.total }}</span>
+      </a>
+      <a href="{{ url_for('check_shipments', filter='scanned_not_delivered', search=search_query) }}"
+         class="filter-btn filter-btn-warning {{ '' if current_filter == 'scanned_not_delivered' else 'inactive' }}">
+        ⚠️ Scanned, Not Delivered
+        <span class="filter-count">{{ stats.scanned_not_delivered }}</span>
+      </a>
+      <a href="{{ url_for('check_shipments', filter='not_scanned_not_delivered', search=search_query) }}"
+         class="filter-btn filter-btn-critical {{ '' if current_filter == 'not_scanned_not_delivered' else 'inactive' }}">
+        🚨 Not Scanned 7+ Days
+        <span class="filter-count">{{ stats.not_scanned_not_delivered }}</span>
+      </a>
+      <a href="{{ url_for('check_shipments', filter='not_printed', search=search_query) }}"
+         class="filter-btn filter-btn-info {{ '' if current_filter == 'not_printed' else 'inactive' }}">
+        🖨️ Not Printed (Awaiting)
+        <span class="filter-count">{{ stats.not_printed }}</span>
+      </a>
+    </div>
+
+    {% if loading %}
+      <div class="loading">
+        <p>⏳ Loading shipments from ShipStation...</p>
+      </div>
+    {% elif shipments %}
+      <table>
+        <thead>
+          <tr>
+            <th>Flag</th>
+            <th>Order #</th>
+            <th>Customer</th>
+            <th>Tracking #</th>
+            <th>Carrier</th>
+            <th>Ship Date</th>
+            <th>Scanned?</th>
+            <th>UPS Status</th>
+            <th>Last Activity</th>
+            <th>Cancelled?</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for ship in shipments %}
+            <tr {% if ship.is_cancelled %}class="cancelled-row"{% endif %}>
+              <td>
+                {% if ship.is_cancelled %}
+                  <span style="color: #952746; font-size: 1.3rem;" title="ORDER CANCELLED">🚫</span>
+                {% elif ship.flag %}
+                  {% if ship.flag_severity == 'critical' %}
+                    <span class="flag-critical" title="{{ ship.flag_reason }}">🚨</span>
+                  {% else %}
+                    <span class="flag-warning" title="{{ ship.flag_reason }}">⚠️</span>
+                  {% endif %}
+                {% else %}
+                  <span class="flag-ok">✓</span>
+                {% endif %}
+              </td>
+              <td>{{ ship.order_number }}</td>
+              <td>{{ ship.customer_name }}</td>
+              <td style="font-family: monospace; font-size: 0.85rem;">
+                {% if ship.tracking_url %}
+                  <a href="{{ ship.tracking_url }}" target="_blank" title="View on UPS">{{ ship.tracking_number }}</a>
+                {% else %}
+                  {{ ship.tracking_number }}
+                {% endif %}
+              </td>
+              <td>{{ ship.carrier }}</td>
+              <td>{{ ship.ship_date }}</td>
+              <td>
+                {% if ship.scanned %}
+                  <span style="color: #199b76;">✓ {{ ship.scan_date }}</span>
+                {% else %}
+                  <span style="color: #666;">—</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if ship.tracking_url %}
+                  <a href="{{ ship.tracking_url }}" target="_blank" style="text-decoration: none;">
+                    <span class="status-badge status-{{ ship.ups_status }}">
+                      {{ ship.ups_status_text }}
+                    </span>
+                  </a>
+                {% else %}
+                  <span class="status-badge status-{{ ship.ups_status }}">
+                    {{ ship.ups_status_text }}
+                  </span>
+                {% endif %}
+              </td>
+              <td style="font-size: 0.85rem;">{{ ship.ups_last_activity }}</td>
+              <td>
+                {% if ship.is_cancelled %}
+                  <span style="color: #952746; font-weight: 600;">🚫 CANCELLED</span>
+                  <div style="font-size: 0.8rem; color: #666; margin-top: 4px;">{{ ship.cancel_reason }}</div>
+                {% else %}
+                  <span style="color: #666;">—</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if ship.is_cancelled %}
+                  <form method="post" action="{{ url_for('uncancel_order') }}" style="display:inline;">
+                    <input type="hidden" name="order_number" value="{{ ship.order_number }}">
+                    <button type="submit" class="btn-uncancel">✓ Restore</button>
+                  </form>
+                {% else %}
+                  <button type="button" class="btn-cancel" onclick="cancelOrder('{{ ship.order_number }}', '{{ ship.tracking_number }}')">🚫 Cancel</button>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <div class="pagination">
+        <button onclick="window.location.href='{{ prev_url }}'" {% if not has_prev %}disabled{% endif %}>← Previous</button>
+        <span>Page {{ page }} of {{ total_pages }} ({{ total_shipments }} shipments)</span>
+        <button onclick="window.location.href='{{ next_url }}'" {% if not has_next %}disabled{% endif %}>Next →</button>
+      </div>
+    {% else %}
+      <p style="padding: 40px; text-align: center; color: #666;">
+        {% if search_query %}
+          No shipments found for "{{ search_query }}".
+        {% else %}
+          No shipped orders found in the last 120 days.
+        {% endif %}
+      </p>
+    {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  <script>
+    function cancelOrder(orderNumber, trackingNumber) {
+      const reason = prompt("Reason for cancellation:", "Customer requested cancellation");
+      if (reason !== null) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = "{{ url_for('cancel_order') }}";
+
+        const orderInput = document.createElement('input');
+        orderInput.type = 'hidden';
+        orderInput.name = 'order_number';
+        orderInput.value = orderNumber;
+        form.appendChild(orderInput);
+
+        const trackingInput = document.createElement('input');
+        trackingInput.type = 'hidden';
+        trackingInput.name = 'tracking_number';
+        trackingInput.value = trackingNumber;
+        form.appendChild(trackingInput);
+
+        const reasonInput = document.createElement('input');
+        reasonInput.type = 'hidden';
+        reasonInput.name = 'reason';
+        reasonInput.value = reason;
+        form.appendChild(reasonInput);
+
+        document.body.appendChild(form);
+        form.submit();
+      }
+    }
+  </script>
+{% endblock %}

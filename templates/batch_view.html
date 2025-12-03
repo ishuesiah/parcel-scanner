@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Batch #{{ batch.id }} - H&O Parcel Scans{% endblock %}
+
+{% block extra_styles %}
+    .batch-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
+    .batch-header h2 { font-size: 1.5rem; color: #2c3e50; }
+    .batch-header .back-link { color: #2d85f8; text-decoration: none; font-size: 0.95rem; font-weight: 500; }
+    .batch-header .back-link:hover { text-decoration: underline; }
+    p.meta { color: #666; font-size: 0.9rem; margin-bottom: 16px; }
+    h3 { color: #2c3e50; margin-top: 16px; margin-bottom: 8px; font-size: 1.25rem; }
+{% endblock %}
+
+{% block content %}
+    <div class="batch-header">
+      <h2>Batch #{{ batch.id }} (Carrier: {{ batch.carrier }})</h2>
+      <a href="{{ url_for('all_batches') }}" class="back-link">← Back to All Batches</a>
+    </div>
+
+    <p class="meta">
+      <em>Created at: {{ batch.created_at }}</em><br>
+      <em>Parcel Count: {{ batch.pkg_count }}</em><br>
+      <em>Tracking Numbers: {{ batch.tracking_numbers }}</em>
+    </p>
+
+    <h3>All Scans in Batch {{ batch.id }}</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Tracking</th>
+          <th>Carrier</th>
+          <th>SS Batch</th>
+          <th>Order #</th>
+          <th>Customer</th>
+          <th>Scan Time</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in scans %}
+          <tr class="{{ 'duplicate-row' if row.status.startswith('Duplicate') else '' }}">
+            <td>{{ row.tracking_number }}</td>
+            <td>{{ row.carrier }}</td>
+            <td>{{ row.shipstation_batch_number or '' }}</td>
+            <td>
+              {% if row.order_id %}
+                <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                  {{ row.order_number }}
+                </a>
+              {% else %}
+                {{ row.order_number }}
+              {% endif %}
+            </td>
+            <td>
+              {% if row.order_id %}
+                <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+                  {{ row.customer_name }}
+                </a>
+              {% else %}
+                {{ row.customer_name }}
+              {% endif %}
+            </td>
+            <td>{{ row.scan_date }}</td>
+            <td>
+              {% if row.status.startswith('Duplicate (Batch #') %}
+                {% set batch_num = row.status.split('#')[1].rstrip(')') %}
+                {% if batch_num and batch_num.isdigit() %}
+                  Duplicate (<a href="{{ url_for('view_batch', batch_id=batch_num|int) }}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #{{ batch_num }}</a>)
+                {% else %}
+                  {{ row.status }}
+                {% endif %}
+              {% else %}
+                {{ row.status }}
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+{% endblock %}
