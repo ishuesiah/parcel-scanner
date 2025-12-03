@@ -3872,5 +3872,69 @@ def ss_batch_detail(batch_id):
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ── DEBUG: CHECK TRACKING STATUS ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/debug_tracking/<tracking_number>", methods=["GET"])
+def debug_tracking(tracking_number):
+    """Debug endpoint to check what UPS/Canada Post API returns for a tracking number."""
+    import json
+
+    result = {
+        "tracking_number": tracking_number,
+        "cached_status": None,
+        "live_api_result": None,
+        "error": None
+    }
+
+    # Check what's in the cache
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT status, status_description, is_delivered, last_location,
+                   estimated_delivery, raw_status_code, updated_at
+            FROM tracking_status_cache
+            WHERE tracking_number = %s
+        """, (tracking_number,))
+        row = cursor.fetchone()
+        if row:
+            result["cached_status"] = {
+                "status": row["status"],
+                "status_description": row["status_description"],
+                "is_delivered": row["is_delivered"],
+                "last_location": row["last_location"],
+                "estimated_delivery": row["estimated_delivery"],
+                "raw_status_code": row["raw_status_code"],
+                "updated_at": str(row["updated_at"])
+            }
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        result["error"] = f"Cache lookup error: {e}"
+
+    # Get live status from API
+    try:
+        if tracking_number.startswith("1Z"):
+            # UPS tracking
+            ups_api = get_ups_api()
+            if ups_api.enabled:
+                result["live_api_result"] = ups_api.get_tracking_status(tracking_number)
+            else:
+                result["live_api_result"] = {"error": "UPS API not enabled"}
+        else:
+            # Canada Post tracking
+            cp_api = get_canadapost_api()
+            if cp_api.enabled:
+                result["live_api_result"] = cp_api.get_tracking_status(tracking_number)
+            else:
+                result["live_api_result"] = {"error": "Canada Post API not enabled"}
+    except Exception as e:
+        result["live_api_result"] = {"error": str(e)}
+
+    return f"<pre>{json.dumps(result, indent=2, default=str)}</pre>"
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
