@@ -253,31 +253,50 @@ def get_shipstation_batches(status="completed", page=1, page_size=25):
 
 def get_shipstation_batch_shipments(batch_id):
     """
-    Fetch shipments for a specific ShipStation batch.
-    Uses the batch_shipments_url or queries shipments with batch_id filter.
+    Fetch ALL shipments for a specific ShipStation batch (handles pagination).
     """
     if not SHIPSTATION_V2_API_KEY:
         print("⚠️ ShipStation V2 API key not configured")
         return []
 
-    try:
-        response = requests.get(
-            f"https://api.shipstation.com/v2/shipments",
-            headers={"API-Key": SHIPSTATION_V2_API_KEY},
-            params={"batch_id": batch_id},
-            timeout=30
-        )
+    all_shipments = []
+    page = 1
+    page_size = 100  # Max allowed by API
 
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("shipments", [])
-        else:
-            print(f"❌ ShipStation batch shipments error: {response.status_code} - {response.text[:200]}")
-            return []
+    try:
+        while True:
+            print(f"📦 Fetching batch {batch_id} shipments page {page}...")
+            response = requests.get(
+                f"https://api.shipstation.com/v2/shipments",
+                headers={"API-Key": SHIPSTATION_V2_API_KEY},
+                params={
+                    "batch_id": batch_id,
+                    "page": page,
+                    "page_size": page_size
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                shipments = data.get("shipments", [])
+                all_shipments.extend(shipments)
+
+                # Check if there are more pages
+                total_pages = data.get("pages", 1)
+                if page >= total_pages or len(shipments) == 0:
+                    break
+                page += 1
+            else:
+                print(f"❌ ShipStation batch shipments error: {response.status_code} - {response.text[:200]}")
+                break
+
+        print(f"📦 Fetched {len(all_shipments)} total shipments for batch {batch_id}")
+        return all_shipments
 
     except Exception as e:
         print(f"❌ ShipStation batch shipments exception: {e}")
-        return []
+        return all_shipments  # Return what we got so far
 
 # ── Shopify singleton ──
 _shopify_api = None
@@ -3637,9 +3656,33 @@ def ss_batch_detail(batch_id):
     stats = {"delivered": 0, "in_transit": 0, "not_moving": 0}
 
     if shipments_raw:
+        # Debug: Log first shipment structure to understand API response
+        if shipments_raw:
+            print(f"📦 Sample shipment keys: {list(shipments_raw[0].keys())}")
+
+        # Helper to extract tracking number from V2 API response
+        def extract_tracking(s):
+            # Try direct fields first
+            tn = s.get("tracking_number") or s.get("trackingNumber")
+            if tn:
+                return tn
+            # Try label_data object (V2 API structure)
+            label_data = s.get("label_data") or s.get("labelData") or {}
+            tn = label_data.get("tracking_number") or label_data.get("trackingNumber")
+            if tn:
+                return tn
+            # Try packages array
+            packages = s.get("packages") or []
+            if packages and len(packages) > 0:
+                tn = packages[0].get("tracking_number") or packages[0].get("trackingNumber")
+                if tn:
+                    return tn
+            return ""
+
         # Get tracking numbers
-        tracking_numbers = [s.get("tracking_number") or s.get("trackingNumber", "") for s in shipments_raw]
+        tracking_numbers = [extract_tracking(s) for s in shipments_raw]
         tracking_numbers = [t for t in tracking_numbers if t]
+        print(f"📦 Found {len(tracking_numbers)} tracking numbers out of {len(shipments_raw)} shipments")
 
         # Fetch cached tracking data
         tracking_cache = {}
@@ -3657,23 +3700,34 @@ def ss_batch_detail(batch_id):
                     tracking_cache[row["tracking_number"]] = row
                 cursor.close()
                 conn.close()
+                print(f"📦 Found {len(tracking_cache)} cached tracking records")
             except Exception as e:
                 print(f"Error fetching tracking cache: {e}")
 
         # Process shipments
         for s in shipments_raw:
-            tracking_number = s.get("tracking_number") or s.get("trackingNumber", "")
-            carrier_code = s.get("carrier_code") or s.get("carrierCode", "")
+            tracking_number = extract_tracking(s)
+
+            # Try multiple field names for carrier
+            carrier_code = (s.get("carrier_code") or s.get("carrierCode") or
+                          s.get("carrier_id") or s.get("carrierId") or "")
+            # Also check label_data
+            label_data = s.get("label_data") or s.get("labelData") or {}
+            if not carrier_code:
+                carrier_code = label_data.get("carrier_code") or label_data.get("carrierCode") or ""
 
             # Get ship_to info for customer name
             ship_to = s.get("ship_to") or s.get("shipTo") or {}
             customer_name = ship_to.get("name", "")
 
-            # Get order number
-            order_number = s.get("order_number") or s.get("orderNumber", "")
+            # Get order number - try multiple field names
+            order_number = (s.get("order_number") or s.get("orderNumber") or
+                          s.get("order_key") or s.get("orderKey") or "")
 
-            # Get ship date
-            ship_date = s.get("ship_date") or s.get("shipDate") or s.get("created_at") or ""
+            # Get ship date - try multiple field names
+            ship_date = (s.get("ship_date") or s.get("shipDate") or
+                        s.get("created_at") or s.get("createdAt") or
+                        label_data.get("ship_date") or label_data.get("shipDate") or "")
 
             # Get tracking status from cache
             cached = tracking_cache.get(tracking_number, {})
