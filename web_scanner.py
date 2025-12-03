@@ -205,6 +205,49 @@ def execute_with_retry(query_func, max_retries=3):
     if last_error:
         raise last_error
 
+
+def fix_miscached_tracking_statuses():
+    """
+    One-time fix for tracking statuses that were cached with wrong mapping.
+    UPS status code '012' (Clearance in Progress) was incorrectly mapped to 'delivered'.
+    This corrects any cached entries with that mistake.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Find and fix entries where raw_status_code='012' but status='delivered'
+        cursor.execute("""
+            UPDATE tracking_status_cache
+            SET status = 'in_transit',
+                status_description = CASE
+                    WHEN status_description LIKE '%Delivered%' THEN 'Clearance in Progress'
+                    ELSE status_description
+                END,
+                is_delivered = false,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE raw_status_code = '012' AND status = 'delivered'
+            RETURNING tracking_number
+        """)
+        fixed = cursor.fetchall()
+        conn.commit()
+
+        if fixed:
+            print(f"🔧 Fixed {len(fixed)} tracking entries with incorrect '012' status mapping")
+            for row in fixed[:5]:  # Show first 5
+                print(f"   - {row['tracking_number']}")
+            if len(fixed) > 5:
+                print(f"   ... and {len(fixed) - 5} more")
+
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"⚠️ Error fixing cached tracking statuses: {e}")
+
+
+# Run the fix at startup
+fix_miscached_tracking_statuses()
+
 # Read shop URL for building admin links
 SHOP_URL = os.environ.get("SHOP_URL", "").rstrip("/")
 
