@@ -225,6 +225,7 @@
             <tr>
               <th>Flag</th>
               <th>Order #</th>
+              <th>Batch</th>
               <th>Customer</th>
               <th>Tracking #</th>
               <th>Carrier</th>
@@ -252,6 +253,13 @@
                   {% endif %}
                 </td>
                 <td>{{ ship.order_number }}</td>
+                <td>
+                  {% if ship.batch_number %}
+                    <a href="{{ url_for('ss_batch_detail', batch_id='se-' ~ ship.batch_number) }}" style="color: #534bc4;">{{ ship.batch_number }}</a>
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
                 <td>{{ ship.customer_name }}</td>
                 <td style="font-family: monospace; font-size: 0.85rem;">
                   {% if ship.tracking_url %}

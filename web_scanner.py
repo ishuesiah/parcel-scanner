@@ -3263,6 +3263,7 @@ def check_shipments():
                 sc.customer_name,
                 sc.carrier_code,
                 sc.ship_date,
+                sc.shipstation_batch_number,
                 MAX(s.scan_date) as scan_date,
                 tc.status as ups_status,
                 tc.status_description as ups_status_text,
@@ -3280,7 +3281,7 @@ def check_shipments():
             WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '90 days'
             {search_condition}
             GROUP BY sc.tracking_number, sc.order_number, sc.customer_name,
-                     sc.carrier_code, sc.ship_date,
+                     sc.carrier_code, sc.ship_date, sc.shipstation_batch_number,
                      tc.status, tc.status_description, tc.estimated_delivery,
                      tc.last_location, tc.last_activity_date, tc.is_delivered, tc.updated_at,
                      co.id, co.reason
@@ -3302,6 +3303,7 @@ def check_shipments():
             carrier_code = cached_ship.get("carrier_code", "").upper()
             ship_date = str(cached_ship.get("ship_date", ""))
             customer_name = cached_ship.get("customer_name", "Unknown")
+            batch_number = cached_ship.get("shipstation_batch_number", "")
 
             # Check if cancelled
             is_cancelled = cached_ship.get("cancelled_id") is not None
@@ -3449,7 +3451,8 @@ def check_shipments():
                 "flag_reason": flag_reason,
                 "flag_severity": flag_severity,
                 "is_cancelled": is_cancelled,
-                "cancel_reason": cancel_reason
+                "cancel_reason": cancel_reason,
+                "batch_number": batch_number
             })
 
         cursor.close()
@@ -3653,7 +3656,8 @@ def ss_batch_detail(batch_id):
 
     # Enrich shipments with tracking data from our cache
     shipments = []
-    stats = {"delivered": 0, "in_transit": 0, "not_moving": 0}
+    stats = {"delivered": 0, "in_transit": 0, "not_moving": 0, "scanned": 0}
+    batch_ship_date = None  # Will be set from first shipment
 
     if shipments_raw:
         # Debug: Log first shipment structure to understand API response
@@ -3725,11 +3729,14 @@ def ss_batch_detail(batch_id):
 
         # Fetch cached tracking status data
         tracking_cache = {}
+        scans_cache = {}  # Track which shipments have been scanned
         if tracking_numbers:
             try:
                 conn = get_mysql_connection()
                 cursor = conn.cursor()
                 placeholders = ",".join(["%s"] * len(tracking_numbers))
+
+                # Get tracking status
                 cursor.execute(f"""
                     SELECT tracking_number, status, status_description, last_location, is_delivered
                     FROM tracking_status_cache
@@ -3737,9 +3744,20 @@ def ss_batch_detail(batch_id):
                 """, tracking_numbers)
                 for row in cursor.fetchall():
                     tracking_cache[row["tracking_number"]] = row
+
+                # Get scan status
+                cursor.execute(f"""
+                    SELECT tracking_number, MAX(scan_date) as scan_date
+                    FROM scans
+                    WHERE tracking_number IN ({placeholders})
+                    GROUP BY tracking_number
+                """, tracking_numbers)
+                for row in cursor.fetchall():
+                    scans_cache[row["tracking_number"]] = row["scan_date"]
+
                 cursor.close()
                 conn.close()
-                print(f"📦 Found {len(tracking_cache)} cached tracking status records")
+                print(f"📦 Found {len(tracking_cache)} cached tracking status records, {len(scans_cache)} scanned")
             except Exception as e:
                 print(f"Error fetching tracking cache: {e}")
 
@@ -3794,6 +3812,15 @@ def ss_batch_detail(batch_id):
             else:
                 stats["not_moving"] += 1
 
+            # Check if scanned
+            scanned = tracking_number in scans_cache
+            if scanned:
+                stats["scanned"] += 1
+
+            # Capture batch ship date from first shipment
+            if batch_ship_date is None and ship_date:
+                batch_ship_date = ship_date
+
             shipments.append({
                 "tracking_number": tracking_number,
                 "order_number": order_number,
@@ -3802,7 +3829,8 @@ def ss_batch_detail(batch_id):
                 "ship_date": ship_date,
                 "tracking_status": tracking_status,
                 "tracking_status_text": tracking_status_text,
-                "last_location": last_location
+                "last_location": last_location,
+                "scanned": scanned
             })
 
     return render_template(
@@ -3811,6 +3839,7 @@ def ss_batch_detail(batch_id):
         batch=batch,
         shipments=shipments,
         stats=stats,
+        batch_ship_date=batch_ship_date,
         version=__version__,
         active_page="ss_batches"
     )
