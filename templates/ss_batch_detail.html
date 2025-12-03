@@ -39,7 +39,7 @@
 {% endblock %}
 
 {% block content %}
-    <a href="{{ url_for('ss_batches') }}" class="back-link">&larr; Back to Batches</a>
+    <a href="{{ url_for('check_shipments', tab='batches') }}" class="back-link">&larr; Back to Live Tracking</a>
     <h2>Batch {{ batch_id }}</h2>
 
     {% if batch %}
