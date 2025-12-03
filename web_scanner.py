@@ -4088,7 +4088,7 @@ def _process_single_scan(code, is_ajax):
         cursor.execute("SELECT carrier FROM batches WHERE id = %s", (batch_id,))
         row = cursor.fetchone()
         cursor.close()
-        batch_carrier = (row[0] if row else "") or ""
+        batch_carrier = (row['carrier'] if row else "") or ""
 
         # ── STRICT CARRIER VALIDATION (BEFORE normalization) ──
         # Must match the batch carrier's expected format, reject everything else
