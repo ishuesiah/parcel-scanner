@@ -30,8 +30,8 @@ from flask import (
     session,
     jsonify
 )
-import pymysql
-import pymysql.cursors
+import psycopg2
+import psycopg2.extras
 from datetime import datetime, timedelta, timezone
 import threading
 import csv
@@ -80,40 +80,34 @@ app.secret_key = os.environ["FLASK_SECRET_KEY"]
 INACTIVITY_TIMEOUT = 30 * 60
 
 
-# ── MySQL connection settings (PyMySQL - more reliable for Kinsta) ──
-MYSQL_CONFIG = {
-    "host": os.environ["MYSQL_HOST"],
-    "port": int(os.environ.get("MYSQL_PORT", 30603)),
-    "user": os.environ["MYSQL_USER"],
-    "password": os.environ["MYSQL_PASSWORD"],
-    "database": os.environ["MYSQL_DATABASE"],
-    "connect_timeout": 10,
-    "read_timeout": 30,
-    "write_timeout": 30,
-    "autocommit": True,  # Important for Kinsta
-    "cursorclass": pymysql.cursors.DictCursor
-}
+# ── PostgreSQL connection settings (Neon) ──
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
-def get_mysql_connection():
+def get_db_connection():
     """
-    Create a fresh MySQL connection with retry logic.
-    Uses PyMySQL which handles reconnection better than mysql-connector.
+    Create a fresh PostgreSQL connection with retry logic.
+    Uses psycopg2 with RealDictCursor for dict-like row access.
     """
     max_retries = 3
     last_error = None
 
     for retry in range(max_retries):
         try:
-            conn = pymysql.connect(**MYSQL_CONFIG)
+            conn = psycopg2.connect(
+                DATABASE_URL,
+                cursor_factory=psycopg2.extras.RealDictCursor,
+                connect_timeout=10
+            )
+            conn.autocommit = True
             return conn
-        except pymysql.err.OperationalError as e:
+        except psycopg2.OperationalError as e:
             last_error = e
             if retry < max_retries - 1:
                 wait = min(2 ** retry, 4)
-                print(f"⚠️ MySQL connection error, retry {retry + 1}/{max_retries} after {wait}s: {e}")
+                print(f"⚠️ PostgreSQL connection error, retry {retry + 1}/{max_retries} after {wait}s: {e}")
                 time.sleep(wait)
             else:
-                print(f"❌ Failed to connect to MySQL after {max_retries} retries: {e}")
+                print(f"❌ Failed to connect to PostgreSQL after {max_retries} retries: {e}")
                 raise
         except Exception as e:
             last_error = e
@@ -127,6 +121,9 @@ def get_mysql_connection():
 
     if last_error:
         raise last_error
+
+# Alias for backwards compatibility
+get_mysql_connection = get_db_connection
 
 
 def execute_with_retry(query_func, max_retries=3):
@@ -155,7 +152,7 @@ def execute_with_retry(query_func, max_retries=3):
             cursor = conn.cursor()
             result = query_func(conn, cursor)
             return result
-        except pymysql.err.OperationalError as e:
+        except psycopg2.OperationalError as e:
             last_error = e
             if attempt < max_retries - 1:
                 wait = min(2 ** attempt, 4)
@@ -163,7 +160,7 @@ def execute_with_retry(query_func, max_retries=3):
                 time.sleep(wait)
                 continue
             raise
-        except pymysql.err.InterfaceError as e:
+        except psycopg2.InterfaceError as e:
             last_error = e
             if attempt < max_retries - 1:
                 wait = min(2 ** attempt, 4)
@@ -254,21 +251,20 @@ def init_shipments_cache():
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS shipments_cache (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                tracking_number VARCHAR(255) NOT NULL,
+                id SERIAL PRIMARY KEY,
+                tracking_number VARCHAR(255) NOT NULL UNIQUE,
                 order_number VARCHAR(255),
                 customer_name VARCHAR(255),
                 carrier_code VARCHAR(50),
                 ship_date DATE,
                 shipstation_batch_number VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                INDEX idx_tracking (tracking_number),
-                INDEX idx_ship_date (ship_date),
-                INDEX idx_order_number (order_number),
-                UNIQUE KEY unique_tracking (tracking_number)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_tracking ON shipments_cache(tracking_number)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_ship_date ON shipments_cache(ship_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_order ON shipments_cache(order_number)")
         conn.commit()
         cursor.close()
         conn.close()
@@ -287,8 +283,8 @@ def init_tracking_status_cache():
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tracking_status_cache (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                tracking_number VARCHAR(255) NOT NULL,
+                id SERIAL PRIMARY KEY,
+                tracking_number VARCHAR(255) NOT NULL UNIQUE,
                 carrier VARCHAR(50) DEFAULT 'UPS',
                 status VARCHAR(50),
                 status_description VARCHAR(500),
@@ -297,54 +293,18 @@ def init_tracking_status_cache():
                 last_activity_date VARCHAR(50),
                 is_delivered BOOLEAN DEFAULT FALSE,
                 raw_status_code VARCHAR(50),
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                UNIQUE KEY unique_tracking (tracking_number),
-                INDEX idx_status (status),
-                INDEX idx_delivered (is_delivered),
-                INDEX idx_updated (updated_at)
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_status ON tracking_status_cache(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_delivered ON tracking_status_cache(is_delivered)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_updated ON tracking_status_cache(updated_at)")
         conn.commit()
         cursor.close()
         conn.close()
         print("✓ Tracking status cache table initialized")
     except Exception as e:
         print(f"❌ Error initializing tracking status cache: {e}")
-
-
-def normalize_table_collations():
-    """
-    Normalize all tracking_number and order_number columns to utf8mb4_unicode_ci.
-    This fixes 'Illegal mix of collations' errors in JOIN queries.
-    """
-    try:
-        conn = get_mysql_connection()
-        cursor = conn.cursor()
-
-        # List of (table, column, definition) to normalize
-        columns_to_fix = [
-            ("scans", "tracking_number", "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"),
-            ("shipments_cache", "tracking_number", "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL"),
-            ("shipments_cache", "order_number", "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"),
-            ("tracking_status_cache", "tracking_number", "VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL"),
-            ("cancelled_orders", "order_number", "VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL"),
-        ]
-
-        for table, column, definition in columns_to_fix:
-            try:
-                cursor.execute(f"ALTER TABLE {table} MODIFY COLUMN {column} {definition}")
-                print(f"  ✓ Normalized {table}.{column}")
-            except Exception as e:
-                # Table or column might not exist yet - that's OK
-                if "doesn't exist" not in str(e).lower() and "unknown column" not in str(e).lower():
-                    print(f"  ⚠️ Could not normalize {table}.{column}: {e}")
-
-        conn.commit()
-        cursor.close()
-        conn.close()
-        print("✓ Table collations normalized")
-    except Exception as e:
-        print(f"⚠️ Error normalizing collations (may be OK on first run): {e}")
 
 
 def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
@@ -367,7 +327,7 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
         conn = get_mysql_connection()
         cursor = conn.cursor()
     except Exception as e:
-        print(f"❌ Failed to get MySQL connection in update_ups_tracking_cache: {e}")
+        print(f"❌ Failed to get Database connection in update_ups_tracking_cache: {e}")
         return
 
     try:
@@ -425,14 +385,14 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
                     (tracking_number, carrier, status, status_description, estimated_delivery,
                      last_location, last_activity_date, is_delivered, raw_status_code)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE
-                        status = VALUES(status),
-                        status_description = VALUES(status_description),
-                        estimated_delivery = VALUES(estimated_delivery),
-                        last_location = VALUES(last_location),
-                        last_activity_date = VALUES(last_activity_date),
-                        is_delivered = VALUES(is_delivered),
-                        raw_status_code = VALUES(raw_status_code),
+                    ON CONFLICT (tracking_number) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        status_description = EXCLUDED.status_description,
+                        estimated_delivery = EXCLUDED.estimated_delivery,
+                        last_location = EXCLUDED.last_location,
+                        last_activity_date = EXCLUDED.last_activity_date,
+                        is_delivered = EXCLUDED.is_delivered,
+                        raw_status_code = EXCLUDED.raw_status_code,
                         updated_at = CURRENT_TIMESTAMP
                 """, (
                     tracking_number,
@@ -463,7 +423,6 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
 # Initialize cache tables on startup
 init_shipments_cache()
 init_tracking_status_cache()
-normalize_table_collations()
 
 def sync_shipments_from_shipstation():
     """
@@ -527,12 +486,12 @@ def sync_shipments_from_shipstation():
                     INSERT INTO shipments_cache
                     (tracking_number, order_number, customer_name, carrier_code, ship_date, shipstation_batch_number)
                     VALUES (%s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE
-                        order_number = VALUES(order_number),
-                        customer_name = VALUES(customer_name),
-                        carrier_code = VALUES(carrier_code),
-                        ship_date = VALUES(ship_date),
-                        shipstation_batch_number = VALUES(shipstation_batch_number),
+                    ON CONFLICT (tracking_number) DO UPDATE SET
+                        order_number = EXCLUDED.order_number,
+                        customer_name = EXCLUDED.customer_name,
+                        carrier_code = EXCLUDED.carrier_code,
+                        ship_date = EXCLUDED.ship_date,
+                        shipstation_batch_number = EXCLUDED.shipstation_batch_number,
                         updated_at = CURRENT_TIMESTAMP
                 """, (tracking_number, order_number, customer_name, carrier_code, ship_date, shipstation_batch_number))
                 total_synced += 1
@@ -781,9 +740,9 @@ def refresh_ups_tracking_background():
             FROM shipments_cache sc
             LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
             WHERE sc.carrier_code = 'UPS'
-              AND sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+              AND sc.ship_date >= CURRENT_DATE - INTERVAL '30 days'
               AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL)
-              AND (tc.updated_at IS NULL OR tc.updated_at < DATE_SUB(NOW(), INTERVAL 2 HOUR))
+              AND (tc.updated_at IS NULL OR tc.updated_at < NOW() - INTERVAL '2 hours')
             ORDER BY sc.ship_date DESC
             LIMIT 100
         """)
@@ -3770,8 +3729,8 @@ def delete_batch():
         cursor.execute("DELETE FROM batches WHERE id = %s", (batch_id,))
         conn.commit()
         flash(f"Batch #{batch_id} and its scans have been deleted.", "success")
-    except mysql.connector.Error as e:
-        flash(f"MySQL Error: {e}", "error")
+    except psycopg2.Error as e:
+        flash(f"Database Error: {e}", "error")
     finally:
         try:
             cursor.close()
@@ -4335,16 +4294,16 @@ def _process_single_scan(code, is_ajax):
                 flash(f"Recorded scan: {code} (Status: {status}, Carrier: {scan_carrier})", "success")
             return redirect(url_for("index"))
 
-    except mysql.connector.errors.PoolError as e:
+    except psycopg2.OperationalError as e:
         error_msg = "Database connection pool exhausted - please wait a moment and try again"
         print(f"Pool exhaustion during scan: {e}")
         if is_ajax:
             return jsonify({"success": False, "error": error_msg}), 503
         flash(error_msg, "error")
         return redirect(url_for("index"))
-    except mysql.connector.Error as e:
+    except psycopg2.Error as e:
         error_msg = f"Database error: {e}"
-        print(f"MySQL error during scan: {e}")
+        print(f"Database error during scan: {e}")
         if is_ajax:
             return jsonify({"success": False, "error": "Database temporarily unavailable"}), 503
         flash("Database temporarily unavailable, please try again", "error")
@@ -4379,7 +4338,7 @@ def delete_scans():
 
     try:
         conn = get_mysql_connection()
-    except mysql.connector.errors.PoolError:
+    except psycopg2.OperationalError:
         flash("Database connection pool busy - please wait a moment and try again", "error")
         return redirect(url_for("index"))
     except Exception as e:
@@ -4395,8 +4354,8 @@ def delete_scans():
         conn.commit()
         flash(f"Deleted {len(scan_ids)} scan(s).", "success")
         return redirect(url_for("index"))
-    except mysql.connector.Error as e:
-        print(f"MySQL error during delete: {e}")
+    except psycopg2.Error as e:
+        print(f"Database error during delete: {e}")
         flash("Database temporarily unavailable - delete failed, please try again", "error")
         return redirect(url_for("index"))
     except Exception as e:
@@ -4423,7 +4382,7 @@ def delete_scan():
 
     try:
         conn = get_mysql_connection()
-    except mysql.connector.errors.PoolError:
+    except psycopg2.OperationalError:
         flash("Database connection pool busy - please wait a moment and try again", "error")
         return redirect(url_for("all_scans"))
     except Exception as e:
@@ -4435,8 +4394,8 @@ def delete_scan():
         cursor.execute("DELETE FROM scans WHERE id = %s", (scan_id,))
         conn.commit()
         flash(f"Deleted scan #{scan_id}.", "success")
-    except mysql.connector.Error as e:
-        print(f"MySQL error during delete: {e}")
+    except psycopg2.Error as e:
+        print(f"Database error during delete: {e}")
         flash("Database temporarily unavailable - delete failed, please try again", "error")
     except Exception as e:
         print(f"Error deleting scan: {e}")
@@ -4486,8 +4445,8 @@ def record_batch():
         # Keep session for immediate notification, but allow viewing from batches page
         flash(f"✓ Batch #{batch_id} marked as picked up ({pkg_count} parcels). Ready to notify customers.", "success")
         return redirect(url_for("index"))
-    except mysql.connector.Error as e:
-        flash(f"MySQL Error: {e}", "error")
+    except psycopg2.Error as e:
+        flash(f"Database Error: {e}", "error")
         return redirect(url_for("index"))
     finally:
         try:
@@ -4531,7 +4490,7 @@ def save_batch_notes():
         cursor.execute("UPDATE batches SET notes = %s WHERE id = %s", (notes, batch_id))
         conn.commit()
         flash("Notes saved successfully.", "success")
-    except mysql.connector.Error as e:
+    except psycopg2.Error as e:
         flash(f"Error saving notes: {e}", "error")
     finally:
         try:
@@ -4700,7 +4659,7 @@ def notify_customers():
                 else:
                     error_count += 1
                     print(f"   ❌ Failed to send email")
-            except mysql.connector.IntegrityError:
+            except psycopg2.IntegrityError:
                 # Duplicate entry - order already notified
                 skip_count += 1
                 print(f"   ⏭️  Already in notifications table")
@@ -5029,14 +4988,14 @@ def all_scans():
             total_scans=total_scans,
             order_search=order_search
         )
-    except mysql.connector.errors.OperationalError as e:
-        print(f"MySQL connection error in all_scans: {e}")
+    except psycopg2.OperationalError as e:
+        print(f"Database connection error in all_scans: {e}")
         import traceback
         traceback.print_exc()
         flash("Database connection error. Please try again in a moment.", "error")
         return redirect(url_for("index"))
-    except mysql.connector.Error as e:
-        print(f"MySQL error in all_scans: {e}")
+    except psycopg2.Error as e:
+        print(f"Database error in all_scans: {e}")
         import traceback
         traceback.print_exc()
         flash("Database error occurred. Please contact support if this persists.", "error")
@@ -5560,11 +5519,11 @@ def check_shipments():
                     COUNT(*) as total,
                     SUM(CASE WHEN s.tracking_number IS NOT NULL AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL) THEN 1 ELSE 0 END) as scanned_not_delivered,
                     SUM(CASE WHEN s.tracking_number IS NULL AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL)
-                             AND sc.ship_date <= DATE_SUB(CURDATE(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as not_scanned_not_delivered
+                             AND sc.ship_date <= CURRENT_DATE - INTERVAL '7 days' THEN 1 ELSE 0 END) as not_scanned_not_delivered
                 FROM shipments_cache sc
                 LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
                 LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
-                WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+                WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '90 days'
             """
             cursor.execute(stats_query)
             stats_row = cursor.fetchone()
@@ -5665,7 +5624,7 @@ def check_shipments():
             if current_filter == "scanned_not_delivered":
                 filter_condition = "AND s.tracking_number IS NOT NULL AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL)"
             elif current_filter == "not_scanned_not_delivered":
-                filter_condition = "AND s.tracking_number IS NULL AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL) AND sc.ship_date <= DATE_SUB(CURDATE(), INTERVAL 7 DAY)"
+                filter_condition = "AND s.tracking_number IS NULL AND (tc.is_delivered = 0 OR tc.is_delivered IS NULL) AND sc.ship_date <= CURRENT_DATE - INTERVAL '7 days'"
 
             # Count for pagination with filter
             count_query = f"""
@@ -5673,7 +5632,7 @@ def check_shipments():
                 FROM shipments_cache sc
                 LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
                 LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
-                WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+                WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '90 days'
                 {filter_condition}
                 {search_condition}
             """
@@ -5704,7 +5663,7 @@ def check_shipments():
                 LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
                 LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
                 LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
-                WHERE sc.ship_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+                WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '90 days'
                 {filter_condition}
                 {search_condition}
                 GROUP BY sc.tracking_number, sc.order_number, sc.customer_name,
