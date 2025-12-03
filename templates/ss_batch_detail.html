@@ -101,7 +101,7 @@
               <td>{{ s.order_number or '-' }}</td>
               <td>{{ s.customer_name or '-' }}</td>
               <td>{{ s.carrier_code or '-' }}</td>
-              <td>{{ s.ship_date[:10] if s.ship_date else '-' }}</td>
+              <td>{{ s.ship_date or '-' }}</td>
               <td>
                 <span class="status-badge status-{{ s.tracking_status or 'unknown' }}">
                   {{ s.tracking_status_text or 'Unknown' }}

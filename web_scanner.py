@@ -3766,6 +3766,9 @@ def ss_batch_detail(batch_id):
             if not ship_date:
                 ship_date = get_nested(s, "ship_date", "shipDate", "created_at", "createdAt",
                                       ("label_data", "ship_date"), ("labelData", "shipDate"))
+            # Convert date object to string for template
+            if ship_date and hasattr(ship_date, 'strftime'):
+                ship_date = ship_date.strftime('%Y-%m-%d')
 
             # Get tracking status from tracking_status_cache
             cached_tracking = tracking_cache.get(tracking_number, {})
