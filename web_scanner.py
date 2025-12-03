@@ -193,6 +193,7 @@ PASSWORD_HASH = os.environ["APP_PASSWORD_HASH"].encode()
 # Read ShipStation credentials from environment
 SHIPSTATION_API_KEY = os.environ.get("SHIPSTATION_API_KEY", "")
 SHIPSTATION_API_SECRET = os.environ.get("SHIPSTATION_API_SECRET", "")
+SHIPSTATION_V2_API_KEY = os.environ.get("SHIPSTATION_V2_API_KEY", "")
 
 # ShipStation V2 API functions
 def get_shipstation_batches(status="completed", page=1, page_size=25):
@@ -200,14 +201,14 @@ def get_shipstation_batches(status="completed", page=1, page_size=25):
     Fetch batches from ShipStation V2 API.
     Status can be: open, queued, completed, processing, archived, invalid, completed_with_errors
     """
-    if not SHIPSTATION_API_KEY:
-        print("⚠️ ShipStation API key not configured")
+    if not SHIPSTATION_V2_API_KEY:
+        print("⚠️ ShipStation V2 API key not configured")
         return {"batches": [], "total": 0, "pages": 0}
 
     try:
         response = requests.get(
             "https://api.shipstation.com/v2/batches",
-            headers={"API-Key": SHIPSTATION_API_KEY},
+            headers={"API-Key": SHIPSTATION_V2_API_KEY},
             params={
                 "status": status,
                 "page": page,
@@ -234,14 +235,14 @@ def get_shipstation_batch_shipments(batch_id):
     Fetch shipments for a specific ShipStation batch.
     Uses the batch_shipments_url or queries shipments with batch_id filter.
     """
-    if not SHIPSTATION_API_KEY:
-        print("⚠️ ShipStation API key not configured")
+    if not SHIPSTATION_V2_API_KEY:
+        print("⚠️ ShipStation V2 API key not configured")
         return []
 
     try:
         response = requests.get(
             f"https://api.shipstation.com/v2/shipments",
-            headers={"API-Key": SHIPSTATION_API_KEY},
+            headers={"API-Key": SHIPSTATION_V2_API_KEY},
             params={"batch_id": batch_id},
             timeout=30
         )
