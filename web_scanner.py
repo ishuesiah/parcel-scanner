@@ -5730,8 +5730,15 @@ def check_shipments():
                     tracking_url = f"https://www.ups.com/track?loc=en_US&tracknum={tracking_number}"
 
                     # Check if tracking needs refresh (older than 2 hours or missing)
-                    if not tracking_updated or (datetime.now() - tracking_updated).seconds > 7200:
+                    if not tracking_updated:
                         tracking_to_refresh.append(tracking_number)
+                    else:
+                        # Handle timezone-aware timestamps from PostgreSQL
+                        now = datetime.now()
+                        if hasattr(tracking_updated, 'tzinfo') and tracking_updated.tzinfo is not None:
+                            tracking_updated = tracking_updated.replace(tzinfo=None)
+                        if (now - tracking_updated).total_seconds() > 7200:
+                            tracking_to_refresh.append(tracking_number)
 
                 # Save original status for flag logic (before we modify it for display)
                 original_ups_status = ups_status
