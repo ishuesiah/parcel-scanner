@@ -3657,34 +3657,73 @@ def ss_batch_detail(batch_id):
 
     if shipments_raw:
         # Debug: Log first shipment structure to understand API response
+        import json
         if shipments_raw:
             print(f"📦 Sample shipment keys: {list(shipments_raw[0].keys())}")
+            print(f"📦 Full first shipment: {json.dumps(shipments_raw[0], indent=2, default=str)[:2000]}")
 
-        # Helper to extract tracking number from V2 API response
-        def extract_tracking(s):
-            # Try direct fields first
-            tn = s.get("tracking_number") or s.get("trackingNumber")
-            if tn:
-                return tn
-            # Try label_data object (V2 API structure)
-            label_data = s.get("label_data") or s.get("labelData") or {}
-            tn = label_data.get("tracking_number") or label_data.get("trackingNumber")
-            if tn:
-                return tn
-            # Try packages array
-            packages = s.get("packages") or []
-            if packages and len(packages) > 0:
-                tn = packages[0].get("tracking_number") or packages[0].get("trackingNumber")
-                if tn:
-                    return tn
+        # Helper to extract field from nested V2 API response
+        def get_nested(obj, *keys):
+            """Try multiple keys/paths to find a value."""
+            for key in keys:
+                if isinstance(key, tuple):
+                    # Nested path like ("label_data", "tracking_number")
+                    val = obj
+                    for k in key:
+                        if isinstance(val, dict):
+                            val = val.get(k)
+                        else:
+                            val = None
+                            break
+                    if val:
+                        return val
+                else:
+                    val = obj.get(key) if isinstance(obj, dict) else None
+                    if val:
+                        return val
             return ""
 
-        # Get tracking numbers
-        tracking_numbers = [extract_tracking(s) for s in shipments_raw]
-        tracking_numbers = [t for t in tracking_numbers if t]
-        print(f"📦 Found {len(tracking_numbers)} tracking numbers out of {len(shipments_raw)} shipments")
+        # Build a lookup from shipments_cache by customer name (to get tracking/order info)
+        # First collect all customer names from the batch
+        customer_names = []
+        for s in shipments_raw:
+            ship_to = s.get("ship_to") or s.get("shipTo") or {}
+            name = ship_to.get("name", "")
+            if name:
+                customer_names.append(name)
 
-        # Fetch cached tracking data
+        # Fetch matching shipments from our cache
+        shipments_cache_lookup = {}
+        if customer_names:
+            try:
+                conn = get_mysql_connection()
+                cursor = conn.cursor()
+                # Get recent shipments matching these customer names
+                placeholders = ",".join(["%s"] * len(customer_names))
+                cursor.execute(f"""
+                    SELECT tracking_number, order_number, customer_name, carrier_code, ship_date,
+                           shipstation_batch_number
+                    FROM shipments_cache
+                    WHERE customer_name IN ({placeholders})
+                    AND ship_date >= CURRENT_DATE - INTERVAL '30 days'
+                """, customer_names)
+                for row in cursor.fetchall():
+                    # Key by customer name (might have duplicates, but usually unique per batch)
+                    shipments_cache_lookup[row["customer_name"]] = row
+                cursor.close()
+                conn.close()
+                print(f"📦 Found {len(shipments_cache_lookup)} matching shipments in cache by customer name")
+            except Exception as e:
+                print(f"Error fetching shipments cache: {e}")
+
+        # Get tracking numbers for tracking_status_cache lookup
+        tracking_numbers = [shipments_cache_lookup.get(
+            (s.get("ship_to") or s.get("shipTo") or {}).get("name", ""), {}
+        ).get("tracking_number", "") for s in shipments_raw]
+        tracking_numbers = [t for t in tracking_numbers if t]
+        print(f"📦 Found {len(tracking_numbers)} tracking numbers from cache lookup")
+
+        # Fetch cached tracking status data
         tracking_cache = {}
         if tracking_numbers:
             try:
@@ -3700,41 +3739,40 @@ def ss_batch_detail(batch_id):
                     tracking_cache[row["tracking_number"]] = row
                 cursor.close()
                 conn.close()
-                print(f"📦 Found {len(tracking_cache)} cached tracking records")
+                print(f"📦 Found {len(tracking_cache)} cached tracking status records")
             except Exception as e:
                 print(f"Error fetching tracking cache: {e}")
 
         # Process shipments
         for s in shipments_raw:
-            tracking_number = extract_tracking(s)
-
-            # Try multiple field names for carrier
-            carrier_code = (s.get("carrier_code") or s.get("carrierCode") or
-                          s.get("carrier_id") or s.get("carrierId") or "")
-            # Also check label_data
-            label_data = s.get("label_data") or s.get("labelData") or {}
-            if not carrier_code:
-                carrier_code = label_data.get("carrier_code") or label_data.get("carrierCode") or ""
-
-            # Get ship_to info for customer name
+            # Get customer name from ship_to
             ship_to = s.get("ship_to") or s.get("shipTo") or {}
             customer_name = ship_to.get("name", "")
 
-            # Get order number - try multiple field names
-            order_number = (s.get("order_number") or s.get("orderNumber") or
-                          s.get("order_key") or s.get("orderKey") or "")
+            # Look up from our shipments_cache by customer name
+            cached_shipment = shipments_cache_lookup.get(customer_name, {})
 
-            # Get ship date - try multiple field names
-            ship_date = (s.get("ship_date") or s.get("shipDate") or
-                        s.get("created_at") or s.get("createdAt") or
-                        label_data.get("ship_date") or label_data.get("shipDate") or "")
+            # Get tracking number from our cache (more reliable than API)
+            tracking_number = cached_shipment.get("tracking_number", "")
 
-            # Get tracking status from cache
-            cached = tracking_cache.get(tracking_number, {})
-            tracking_status = cached.get("status", "unknown")
-            tracking_status_text = cached.get("status_description", "Unknown")
-            last_location = cached.get("last_location", "")
-            is_delivered = cached.get("is_delivered", False)
+            # Get order number from our cache
+            order_number = cached_shipment.get("order_number", "")
+
+            # Get carrier from our cache
+            carrier_code = cached_shipment.get("carrier_code", "")
+
+            # Get ship date - prefer our cache, fallback to API
+            ship_date = cached_shipment.get("ship_date", "")
+            if not ship_date:
+                ship_date = get_nested(s, "ship_date", "shipDate", "created_at", "createdAt",
+                                      ("label_data", "ship_date"), ("labelData", "shipDate"))
+
+            # Get tracking status from tracking_status_cache
+            cached_tracking = tracking_cache.get(tracking_number, {})
+            tracking_status = cached_tracking.get("status", "unknown")
+            tracking_status_text = cached_tracking.get("status_description", "Unknown")
+            last_location = cached_tracking.get("last_location", "")
+            is_delivered = cached_tracking.get("is_delivered", False)
 
             # Format status text
             if tracking_status == "delivered" or is_delivered:
