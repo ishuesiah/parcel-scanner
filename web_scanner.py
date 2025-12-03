@@ -61,6 +61,7 @@ def format_pst(dt):
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 from klaviyo_events import KlaviyoEvents  # Klaviyo integration for event tracking
 from ups_api import UPSAPI  # UPS tracking integration
+from canadapost_api import CanadaPostAPI  # Canada Post tracking integration
 from tracking_utils import split_concatenated_tracking_numbers  # Tracking number split detection
 from address_utils import is_po_box, check_po_box_compatibility  # PO Box detection
 
@@ -216,6 +217,14 @@ def get_ups_api():
     if _ups_api is None:
         _ups_api = UPSAPI()
     return _ups_api
+
+# ── Canada Post singleton ──
+_canadapost_api = None
+def get_canadapost_api():
+    global _canadapost_api
+    if _canadapost_api is None:
+        _canadapost_api = CanadaPostAPI()
+    return _canadapost_api
 
 # ── Stats Cache (5 minute TTL) ──
 _stats_cache = {
@@ -424,6 +433,120 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
 
     except Exception as e:
         print(f"❌ Error updating tracking cache: {e}")
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def update_canadapost_tracking_cache(tracking_numbers, force_refresh=False):
+    """
+    Update Canada Post tracking cache for given tracking numbers.
+    Only updates entries older than 2 hours unless force_refresh=True.
+    """
+    if not tracking_numbers:
+        print("⚠️ update_canadapost_tracking_cache called with no tracking numbers")
+        return
+
+    cp_api = get_canadapost_api()
+    if not cp_api.enabled:
+        print("⚠️ Canada Post API is not enabled (missing credentials?)")
+        return
+
+    print(f"📮 update_canadapost_tracking_cache called with {len(tracking_numbers)} numbers, force_refresh={force_refresh}")
+
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+    except Exception as e:
+        print(f"❌ Failed to get connection in update_canadapost_tracking_cache: {e}")
+        return
+
+    try:
+        # Filter to Canada Post tracking numbers (typically start with digits, are 12-16 chars)
+        # Canada Post PINs are typically numeric and 12, 13, or 16 digits
+        cp_tracking = [t for t in tracking_numbers if t and len(t) >= 12 and not t.startswith("1Z")]
+        if not cp_tracking:
+            print("⚠️ No valid Canada Post tracking numbers to update")
+            return
+
+        # Check which ones need updating (older than 2 hours or not in cache)
+        if force_refresh:
+            to_update = cp_tracking
+            print(f"🔄 Force refresh: will update all {len(to_update)} tracking numbers")
+        else:
+            placeholders = ",".join(["%s"] * len(cp_tracking))
+            cursor.execute(f"""
+                SELECT tracking_number, updated_at FROM tracking_status_cache
+                WHERE tracking_number IN ({placeholders})
+            """, cp_tracking)
+            cached = {row["tracking_number"]: row["updated_at"] for row in cursor.fetchall()}
+
+            cutoff = datetime.now() - timedelta(hours=2)
+            to_update = []
+            for tn in cp_tracking:
+                if tn not in cached:
+                    to_update.append(tn)
+                elif cached[tn] and cached[tn].replace(tzinfo=None) < cutoff:
+                    to_update.append(tn)
+
+        if not to_update:
+            print(f"✓ All {len(cp_tracking)} Canada Post tracking numbers are cached and fresh")
+            return
+
+        print(f"🔄 Updating Canada Post tracking cache for {len(to_update)} tracking numbers...")
+        updated_count = 0
+        error_count = 0
+
+        for i, tracking_number in enumerate(to_update[:30]):  # Limit to 30 at a time
+            try:
+                # Add delay between requests to avoid rate limiting
+                if i > 0:
+                    time.sleep(0.5)  # 500ms delay between requests
+
+                result = cp_api.get_tracking_summary(tracking_number)
+
+                if result.get("status") == "error":
+                    print(f"⚠️ Canada Post API error for {tracking_number}: {result.get('error', 'Unknown error')}")
+                    error_count += 1
+                    continue
+
+                print(f"✅ CP {tracking_number}: status={result.get('status')}, desc={result.get('status_description', 'N/A')[:30]}")
+
+                cursor.execute("""
+                    INSERT INTO tracking_status_cache
+                    (tracking_number, carrier, status, status_description, estimated_delivery,
+                     last_location, last_activity_date, is_delivered, raw_status_code, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (tracking_number) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        status_description = EXCLUDED.status_description,
+                        estimated_delivery = EXCLUDED.estimated_delivery,
+                        last_location = EXCLUDED.last_location,
+                        last_activity_date = EXCLUDED.last_activity_date,
+                        is_delivered = EXCLUDED.is_delivered,
+                        raw_status_code = EXCLUDED.raw_status_code,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (
+                    tracking_number,
+                    "Canada Post",
+                    result.get("status", "unknown"),
+                    result.get("status_description", "")[:500] if result.get("status_description") else "",
+                    result.get("estimated_delivery", ""),
+                    result.get("location", ""),
+                    result.get("last_activity", ""),
+                    result.get("status") == "delivered",
+                    result.get("raw_status_code", "")
+                ))
+                conn.commit()
+                updated_count += 1
+            except Exception as e:
+                print(f"⚠️ Error caching Canada Post tracking for {tracking_number}: {e}")
+                error_count += 1
+
+        print(f"✓ Canada Post tracking cache update complete: {updated_count} updated, {error_count} errors")
+
+    except Exception as e:
+        print(f"❌ Error updating Canada Post tracking cache: {e}")
     finally:
         cursor.close()
         conn.close()
@@ -775,10 +898,57 @@ def refresh_ups_tracking_background():
         print(f"❌ Error in background UPS tracking refresh: {e}")
 
 
+def refresh_canadapost_tracking_background():
+    """
+    Background function to refresh Canada Post tracking for non-delivered shipments.
+    Only updates shipments from the last 30 days that aren't marked delivered.
+    """
+    print("📮 Starting background Canada Post tracking refresh...")
+    try:
+        cp_api = get_canadapost_api()
+        if not cp_api.enabled:
+            print("⚠️ Canada Post API not enabled, skipping tracking refresh")
+            return
+
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Find Canada Post tracking numbers that need refresh
+        # Canada Post carrier codes might be variations like "canada_post", "canadapost", etc.
+        cursor.execute("""
+            SELECT sc.tracking_number
+            FROM shipments_cache sc
+            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+            WHERE LOWER(sc.carrier_code) LIKE '%canada%'
+              AND sc.ship_date >= CURRENT_DATE - INTERVAL '30 days'
+              AND (
+                  tc.is_delivered = false
+                  OR tc.is_delivered IS NULL
+                  OR (tc.is_delivered = true AND tc.updated_at > NOW() - INTERVAL '24 hours')
+              )
+              AND (tc.updated_at IS NULL OR tc.updated_at < NOW() - INTERVAL '2 hours')
+            ORDER BY sc.ship_date DESC
+            LIMIT 50
+        """)
+        to_refresh = [row['tracking_number'] for row in cursor.fetchall()]
+        cursor.close()
+        conn.close()
+
+        if to_refresh:
+            print(f"📮 Refreshing {len(to_refresh)} Canada Post tracking statuses in background...")
+            update_canadapost_tracking_cache(to_refresh, force_refresh=True)
+            print(f"✅ Background Canada Post tracking refresh complete")
+        else:
+            print("✓ No Canada Post tracking needs refresh")
+
+    except Exception as e:
+        print(f"❌ Error in background Canada Post tracking refresh: {e}")
+
+
 def start_background_sync():
     """
     Start background thread that syncs shipments every 5 minutes.
-    Also runs UPS tracking refresh every 15 minutes.
+    Also runs UPS and Canada Post tracking refresh every 15 minutes.
     Also runs email backfill and split tracking backfill on startup and once per day.
     """
     def sync_loop():
@@ -787,16 +957,17 @@ def start_background_sync():
         backfill_missing_emails()  # Then, fill missing emails for all scans (including newly split ones)
 
         last_backfill = datetime.now()
-        ups_refresh_counter = 0  # Track cycles for UPS refresh
+        tracking_refresh_counter = 0  # Track cycles for tracking refresh
 
         while True:
             sync_shipments_from_shipstation()
 
-            # Run UPS tracking refresh every 15 minutes (every 3rd cycle)
-            ups_refresh_counter += 1
-            if ups_refresh_counter >= 3:
+            # Run tracking refresh every 15 minutes (every 3rd cycle)
+            tracking_refresh_counter += 1
+            if tracking_refresh_counter >= 3:
                 refresh_ups_tracking_background()
-                ups_refresh_counter = 0
+                refresh_canadapost_tracking_background()
+                tracking_refresh_counter = 0
 
             # Run backfills once per day
             if (datetime.now() - last_backfill).total_seconds() > 86400:  # 24 hours
