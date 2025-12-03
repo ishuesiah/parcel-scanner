@@ -4735,7 +4735,7 @@ def all_batches():
             FROM batches b
             LEFT JOIN scans s ON s.batch_id = b.id
            GROUP BY b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes
-           ORDER BY b.created_at DESC, b.id DESC
+           ORDER BY b.id DESC
         """)
         batches = cursor.fetchall()
         return render_template_string(
