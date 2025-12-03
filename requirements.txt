@@ -1,5 +1,7 @@
 Flask
-mysql-connector-python
+PyMySQL
+cryptography
 gunicorn
 requests
 bcrypt
+klaviyo-api
