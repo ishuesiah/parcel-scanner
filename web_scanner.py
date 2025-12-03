@@ -6336,12 +6336,18 @@ def check_shipments():
                 is_delivered = cached_ship.get("is_delivered") or False
                 tracking_updated = cached_ship.get("tracking_updated_at")
 
-                # Build UPS tracking URL
+                # Build tracking URL and check if refresh needed
                 tracking_url = ""
-                if carrier_code == "UPS" and tracking_number.startswith("1Z"):
-                    tracking_url = f"https://www.ups.com/track?loc=en_US&tracknum={tracking_number}"
+                is_canada_post = "canada" in carrier_code.lower() if carrier_code else False
+                is_ups = carrier_code == "UPS" or tracking_number.startswith("1Z")
 
-                    # Check if tracking needs refresh (older than 2 hours or missing)
+                if is_ups:
+                    tracking_url = f"https://www.ups.com/track?loc=en_US&tracknum={tracking_number}"
+                elif is_canada_post:
+                    tracking_url = f"https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor={tracking_number}"
+
+                # Check if tracking needs refresh (older than 2 hours or missing)
+                if is_ups or is_canada_post:
                     if not tracking_updated:
                         tracking_to_refresh.append(tracking_number)
                     else:
@@ -6400,14 +6406,15 @@ def check_shipments():
                         ups_status_text = "📦 Label Created"
                 elif ups_status == "exception":
                     ups_status_text = "⚠️ Exception/Delay"
-                elif carrier_code != "UPS":
-                    ups_status_text = "N/A (Non-UPS)"
+                elif not is_ups and not is_canada_post:
+                    # Other carriers we don't track
+                    ups_status_text = "N/A (Other Carrier)"
                     ups_status = "non_ups"
-                elif not ups_status_text or ups_status_text == "-":
+                elif not ups_status_text or ups_status_text == "-" or ups_status == "unknown":
                     # No cached data - needs refresh
                     ups_status_text = "🔄 Loading..."
                     ups_status = "unknown"
-                    if tracking_number.startswith("1Z"):
+                    if is_ups or is_canada_post:
                         tracking_to_refresh.append(tracking_number)
 
                 # Determine if shipment should be flagged
@@ -6415,7 +6422,7 @@ def check_shipments():
                 flag_reason = ""
                 flag_severity = "normal"
 
-                if carrier_code == "UPS":
+                if is_ups or is_canada_post:
                     try:
                         ship_datetime = datetime.strptime(ship_date, "%Y-%m-%d")
                         days_since_ship = (datetime.now() - ship_datetime).days
@@ -6465,17 +6472,29 @@ def check_shipments():
             # Refresh tracking cache in background (don't block page load)
             # If user clicked "Refresh Tracking" button, force refresh all visible shipments
             if refresh_tracking:
-                # Get all UPS tracking numbers from current page for force refresh
-                all_tracking = [s["tracking_number"] for s in shipments if s.get("tracking_number", "").startswith("1Z")]
+                # Get all tracking numbers from current page for force refresh
+                all_tracking = [s["tracking_number"] for s in shipments if s.get("tracking_number")]
                 if all_tracking:
                     print(f"🔄 User requested refresh: force-refreshing {len(all_tracking)} tracking statuses...")
                     import threading
-                    threading.Thread(target=update_ups_tracking_cache, args=(all_tracking[:50], True)).start()
+                    # Split into UPS and Canada Post
+                    ups_tracking = [t for t in all_tracking if t.startswith("1Z")]
+                    cp_tracking = [t for t in all_tracking if not t.startswith("1Z")]
+                    if ups_tracking:
+                        threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:50], True)).start()
+                    if cp_tracking:
+                        threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:30], True)).start()
             elif tracking_to_refresh and len(tracking_to_refresh) <= 20:
                 # Auto-refresh stale/missing tracking data (small batches only)
                 print(f"🔄 Auto-refreshing {len(tracking_to_refresh)} stale tracking statuses...")
                 import threading
-                threading.Thread(target=update_ups_tracking_cache, args=(tracking_to_refresh[:50], False)).start()
+                # Split into UPS and Canada Post
+                ups_tracking = [t for t in tracking_to_refresh if t.startswith("1Z")]
+                cp_tracking = [t for t in tracking_to_refresh if not t.startswith("1Z")]
+                if ups_tracking:
+                    threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:50], False)).start()
+                if cp_tracking:
+                    threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:30], False)).start()
 
         # Pagination URLs
         has_prev = page > 1
