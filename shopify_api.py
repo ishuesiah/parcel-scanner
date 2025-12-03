@@ -315,6 +315,28 @@ class ShopifyAPI:
     def clear_cache(self):
         self._order_cache.clear()
 
+    def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a single order by Shopify order ID.
+        
+        Args:
+            order_id: Shopify order ID (numeric string)
+            
+        Returns:
+            Dict with order data including customer info, or None if not found
+        """
+        try:
+            if not order_id:
+                return None
+                
+            response, _ = self._make_request(f"orders/{order_id}.json")
+            if response and "order" in response:
+                return response["order"]
+            return None
+        except Exception as e:
+            print(f"Error fetching order {order_id}: {e}")
+            return None
+
     def get_order_details_for_verification(self, identifier: str) -> Optional[Dict[str, Any]]:
         """
         Get full order details including line items for verification.
