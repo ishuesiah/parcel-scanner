@@ -25,6 +25,7 @@ from flask import (
     request,
     redirect,
     url_for,
+    render_template,
     render_template_string,
     flash,
     session,
@@ -3794,375 +3795,6 @@ CHECK_SHIPMENTS_TEMPLATE = r'''
 </body>
 </html>
 '''
-
-SS_BATCHES_TEMPLATE = r'''
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>ShipStation Batches – H&O Parcel Scans</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body {
-      height: 100%;
-      font-family: "Figtree", sans-serif;
-      background-color: #fbfaf5;
-      color: #333;
-    }
-    .container { display: flex; height: 100vh; }
-    .sidebar {
-      width: 240px; background: #fff; border-right: 1px solid #e0e0e0;
-      display: flex; flex-direction: column; padding: 24px 16px;
-    }
-    .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
-    .sidebar ul { list-style: none; margin-top: 8px; }
-    .sidebar li { margin-bottom: 8px; }
-    .sidebar a {
-      display: block; padding: 8px 12px; text-decoration: none;
-      color: #534bc4; font-size: 1rem; font-weight: 500;
-      border-radius: 4px; transition: background-color 0.2s;
-    }
-    .sidebar a:hover { background-color: #f0f0f0; }
-    .sidebar .logout {
-      display: block; margin-top: auto; padding: 8px 12px;
-      color: #952746; font-size: 0.95rem; text-decoration: none;
-      border-radius: 4px; transition: background-color 0.2s;
-    }
-    .sidebar .logout:hover { background-color: #fdecea; }
-
-    .main-content { flex: 1; overflow-y: auto; padding: 24px; }
-    h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 16px; }
-
-    .flash {
-      padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid;
-    }
-    .flash.success { background-color: #e0f7e9; color: #199b76; border-color: #b2e6c2; }
-    .flash.error   { background-color: #fdecea; color: #952746; border-color: #f5c6cb; }
-    .flash.warning { background-color: #fff4e5; color: #8a6100; border-color: #ffe0b2; }
-
-    .status-filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-    .filter-btn {
-      padding: 8px 16px; border-radius: 4px; text-decoration: none;
-      font-size: 0.9rem; font-weight: 500; border: 1px solid #ddd;
-      background: white; color: #333;
-    }
-    .filter-btn:hover { background: #f0f0f0; }
-    .filter-btn.active { background: #534bc4; color: white; border-color: #534bc4; }
-
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
-    th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
-    th { background-color: #eeeee5; text-align: left; font-weight: 600; }
-    tr:nth-child(even) { background-color: #fbfaf5; }
-    tr:hover { background-color: #f1f1f1; }
-
-    .batch-link { color: #534bc4; text-decoration: none; font-weight: 600; }
-    .batch-link:hover { text-decoration: underline; }
-
-    .status-badge {
-      display: inline-block; padding: 4px 8px; border-radius: 4px;
-      font-size: 0.85rem; font-weight: 500;
-    }
-    .status-completed { background-color: #e0f7e9; color: #199b76; }
-    .status-processing { background-color: #fff4e5; color: #8a6100; }
-    .status-open { background-color: #e3f2fd; color: #1976d2; }
-    .status-queued { background-color: #f3e5f5; color: #7b1fa2; }
-    .status-invalid { background-color: #fdecea; color: #952746; }
-    .status-completed_with_errors { background-color: #fff3cd; color: #856404; }
-    .status-archived { background-color: #f5f5f5; color: #666; }
-
-    .pagination { margin-top: 16px; display: flex; gap: 8px; align-items: center; }
-    .pagination a {
-      padding: 6px 12px; border: 1px solid #ddd; border-radius: 4px;
-      text-decoration: none; color: #534bc4; background: white;
-    }
-    .pagination a:hover { background: #f0f0f0; }
-    .pagination span { color: #666; font-size: 0.9rem; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="sidebar">
-      <h1>H&O Parcel Scans</h1>
-      <ul>
-        <li><a href="{{ url_for('index') }}">Current Batch</a></li>
-        <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
-        <li><a href="{{ url_for('ss_batches') }}">ShipStation Batches</a></li>
-        <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
-        <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
-        <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
-        <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
-        <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
-      </ul>
-      <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
-      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
-        v{{ version }}
-      </div>
-    </div>
-
-    <div class="main-content">
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% for category, msg in messages %}
-          <div class="flash {{ category }}">{{ msg }}</div>
-        {% endfor %}
-      {% endwith %}
-
-      <h2>ShipStation Batches</h2>
-
-      <div class="status-filters">
-        <a href="{{ url_for('ss_batches', status='completed') }}" class="filter-btn {{ 'active' if current_status == 'completed' else '' }}">Completed</a>
-        <a href="{{ url_for('ss_batches', status='processing') }}" class="filter-btn {{ 'active' if current_status == 'processing' else '' }}">Processing</a>
-        <a href="{{ url_for('ss_batches', status='open') }}" class="filter-btn {{ 'active' if current_status == 'open' else '' }}">Open</a>
-        <a href="{{ url_for('ss_batches', status='queued') }}" class="filter-btn {{ 'active' if current_status == 'queued' else '' }}">Queued</a>
-        <a href="{{ url_for('ss_batches', status='completed_with_errors') }}" class="filter-btn {{ 'active' if current_status == 'completed_with_errors' else '' }}">With Errors</a>
-      </div>
-
-      {% if error %}
-        <div class="flash error">{{ error }}</div>
-      {% endif %}
-
-      {% if batches %}
-        <table>
-          <thead>
-            <tr>
-              <th>Batch ID</th>
-              <th>Notes</th>
-              <th>Created</th>
-              <th>Count</th>
-              <th>Status</th>
-              <th>Errors</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for b in batches %}
-              <tr>
-                <td><a class="batch-link" href="{{ url_for('ss_batch_detail', batch_id=b.batch_id) }}">{{ b.batch_id }}</a></td>
-                <td>{{ b.batch_notes or '-' }}</td>
-                <td>{{ b.created_at[:16] if b.created_at else '-' }}</td>
-                <td>{{ b.count }}</td>
-                <td><span class="status-badge status-{{ b.status }}">{{ b.status }}</span></td>
-                <td>{{ b.errors or 0 }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-
-        <div class="pagination">
-          {% if page > 1 %}
-            <a href="{{ url_for('ss_batches', status=current_status, page=page-1) }}">&larr; Prev</a>
-          {% endif %}
-          <span>Page {{ page }} of {{ pages }}</span>
-          {% if page < pages %}
-            <a href="{{ url_for('ss_batches', status=current_status, page=page+1) }}">Next &rarr;</a>
-          {% endif %}
-        </div>
-      {% else %}
-        <p style="color: #666; margin-top: 20px;">No batches found with status "{{ current_status }}".</p>
-      {% endif %}
-    </div>
-  </div>
-</body>
-</html>
-'''
-
-SS_BATCH_DETAIL_TEMPLATE = r'''
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Batch {{ batch_id }} – H&O Parcel Scans</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap" rel="stylesheet">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body {
-      height: 100%;
-      font-family: "Figtree", sans-serif;
-      background-color: #fbfaf5;
-      color: #333;
-    }
-    .container { display: flex; height: 100vh; }
-    .sidebar {
-      width: 240px; background: #fff; border-right: 1px solid #e0e0e0;
-      display: flex; flex-direction: column; padding: 24px 16px;
-    }
-    .sidebar h1 { font-size: 1.25rem; font-weight: bold; margin-bottom: 16px; color: #2c3e50; }
-    .sidebar ul { list-style: none; margin-top: 8px; }
-    .sidebar li { margin-bottom: 8px; }
-    .sidebar a {
-      display: block; padding: 8px 12px; text-decoration: none;
-      color: #534bc4; font-size: 1rem; font-weight: 500;
-      border-radius: 4px; transition: background-color 0.2s;
-    }
-    .sidebar a:hover { background-color: #f0f0f0; }
-    .sidebar .logout {
-      display: block; margin-top: auto; padding: 8px 12px;
-      color: #952746; font-size: 0.95rem; text-decoration: none;
-      border-radius: 4px; transition: background-color 0.2s;
-    }
-    .sidebar .logout:hover { background-color: #fdecea; }
-
-    .main-content { flex: 1; overflow-y: auto; padding: 24px; }
-    h2 { font-size: 1.5rem; color: #2c3e50; margin-bottom: 8px; }
-    .back-link { color: #534bc4; text-decoration: none; margin-bottom: 16px; display: inline-block; }
-    .back-link:hover { text-decoration: underline; }
-
-    .batch-info {
-      background: white; padding: 16px; border-radius: 8px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;
-    }
-    .batch-info p { margin: 4px 0; color: #666; }
-    .batch-info strong { color: #333; }
-
-    .flash {
-      padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 500; border: 1px solid;
-    }
-    .flash.success { background-color: #e0f7e9; color: #199b76; border-color: #b2e6c2; }
-    .flash.error   { background-color: #fdecea; color: #952746; border-color: #f5c6cb; }
-
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; background: white; }
-    th, td { border: 1px solid #ddd; padding: 10px 8px; font-size: 0.93rem; color: #34495e; }
-    th { background-color: #eeeee5; text-align: left; font-weight: 600; }
-    tr:nth-child(even) { background-color: #fbfaf5; }
-    tr:hover { background-color: #f1f1f1; }
-
-    .tracking-link { color: #534bc4; text-decoration: none; }
-    .tracking-link:hover { text-decoration: underline; }
-
-    .status-badge {
-      display: inline-block; padding: 4px 8px; border-radius: 4px;
-      font-size: 0.85rem; font-weight: 500;
-    }
-    .status-label_created { background-color: #e3f2fd; color: #1976d2; }
-    .status-in_transit { background-color: #fff4e5; color: #8a6100; }
-    .status-delivered { background-color: #e0f7e9; color: #199b76; }
-    .status-almost_there { background-color: #d4edda; color: #155724; font-weight: 600; }
-    .status-exception { background-color: #fdecea; color: #952746; }
-    .status-unknown { background-color: #f5f5f5; color: #666; }
-
-    .summary-stats {
-      display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;
-    }
-    .stat-box {
-      background: white; padding: 12px 20px; border-radius: 8px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    .stat-box .label { font-size: 0.85rem; color: #666; }
-    .stat-box .value { font-size: 1.5rem; font-weight: 600; color: #2c3e50; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="sidebar">
-      <h1>H&O Parcel Scans</h1>
-      <ul>
-        <li><a href="{{ url_for('index') }}">Current Batch</a></li>
-        <li><a href="{{ url_for('all_batches') }}">Recorded Pick‐ups</a></li>
-        <li><a href="{{ url_for('ss_batches') }}">ShipStation Batches</a></li>
-        <li><a href="{{ url_for('all_scans') }}">All Scans</a></li>
-        <li><a href="{{ url_for('stuck_orders') }}">Fix Stuck Orders</a></li>
-        <li><a href="{{ url_for('pick_and_pack') }}">Pick and Pack</a></li>
-        <li><a href="{{ url_for('item_locations') }}">Item Locations</a></li>
-        <li><a href="{{ url_for('check_shipments') }}">Check Shipments</a></li>
-      </ul>
-      <a href="{{ url_for('logout') }}" class="logout">Log Out</a>
-      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-size: 0.75rem; color: #999; text-align: center;">
-        v{{ version }}
-      </div>
-    </div>
-
-    <div class="main-content">
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% for category, msg in messages %}
-          <div class="flash {{ category }}">{{ msg }}</div>
-        {% endfor %}
-      {% endwith %}
-
-      <a href="{{ url_for('ss_batches') }}" class="back-link">&larr; Back to Batches</a>
-      <h2>Batch {{ batch_id }}</h2>
-
-      {% if batch %}
-        <div class="batch-info">
-          <p><strong>Notes:</strong> {{ batch.batch_notes or 'None' }}</p>
-          <p><strong>Created:</strong> {{ batch.created_at }}</p>
-          <p><strong>Status:</strong> {{ batch.status }}</p>
-          <p><strong>Total Shipments:</strong> {{ batch.count }}</p>
-          {% if batch.errors %}
-            <p><strong>Errors:</strong> {{ batch.errors }}</p>
-          {% endif %}
-        </div>
-      {% endif %}
-
-      <div class="summary-stats">
-        <div class="stat-box">
-          <div class="label">Total</div>
-          <div class="value">{{ shipments|length }}</div>
-        </div>
-        <div class="stat-box">
-          <div class="label">Delivered</div>
-          <div class="value" style="color: #199b76;">{{ stats.delivered }}</div>
-        </div>
-        <div class="stat-box">
-          <div class="label">In Transit</div>
-          <div class="value" style="color: #8a6100;">{{ stats.in_transit }}</div>
-        </div>
-        <div class="stat-box">
-          <div class="label">Not Moving</div>
-          <div class="value" style="color: #952746;">{{ stats.not_moving }}</div>
-        </div>
-      </div>
-
-      {% if shipments %}
-        <table>
-          <thead>
-            <tr>
-              <th>Tracking #</th>
-              <th>Order</th>
-              <th>Customer</th>
-              <th>Carrier</th>
-              <th>Ship Date</th>
-              <th>Status</th>
-              <th>Location</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for s in shipments %}
-              <tr>
-                <td>
-                  {% if s.carrier_code == 'UPS' or s.tracking_number.startswith('1Z') %}
-                    <a class="tracking-link" href="https://www.ups.com/track?loc=en_US&tracknum={{ s.tracking_number }}" target="_blank">{{ s.tracking_number }}</a>
-                  {% elif 'canada' in (s.carrier_code or '')|lower %}
-                    <a class="tracking-link" href="https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor={{ s.tracking_number }}" target="_blank">{{ s.tracking_number }}</a>
-                  {% else %}
-                    {{ s.tracking_number }}
-                  {% endif %}
-                </td>
-                <td>{{ s.order_number or '-' }}</td>
-                <td>{{ s.customer_name or '-' }}</td>
-                <td>{{ s.carrier_code or '-' }}</td>
-                <td>{{ s.ship_date[:10] if s.ship_date else '-' }}</td>
-                <td>
-                  <span class="status-badge status-{{ s.tracking_status or 'unknown' }}">
-                    {{ s.tracking_status_text or 'Unknown' }}
-                  </span>
-                </td>
-                <td>{{ s.last_location or '-' }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      {% else %}
-        <p style="color: #666; margin-top: 20px;">No shipments found in this batch.</p>
-      {% endif %}
-    </div>
-  </div>
-</body>
-</html>
-'''
-
 # ─────────────────────────────────────────────────────────────────────────────
 # ── BEFORE REQUEST: require login ──────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
@@ -6665,15 +6297,16 @@ def ss_batches():
 
     result = get_shipstation_batches(status=status, page=page, page_size=25)
 
-    return render_template_string(
-        SS_BATCHES_TEMPLATE,
+    return render_template(
+        "ss_batches.html",
         batches=result.get("batches", []),
         current_status=status,
         page=page,
         pages=result.get("pages", 1),
         total=result.get("total", 0),
         error=result.get("error"),
-        version=__version__
+        version=__version__,
+        active_page="ss_batches"
     )
 
 
@@ -6686,7 +6319,7 @@ def ss_batch_detail(batch_id):
     try:
         response = requests.get(
             f"https://api.shipstation.com/v2/batches/{batch_id}",
-            headers={"API-Key": SHIPSTATION_API_KEY},
+            headers={"API-Key": SHIPSTATION_V2_API_KEY},
             timeout=30
         )
         if response.status_code == 200:
@@ -6775,13 +6408,14 @@ def ss_batch_detail(batch_id):
                 "last_location": last_location
             })
 
-    return render_template_string(
-        SS_BATCH_DETAIL_TEMPLATE,
+    return render_template(
+        "ss_batch_detail.html",
         batch_id=batch_id,
         batch=batch,
         shipments=shipments,
         stats=stats,
-        version=__version__
+        version=__version__,
+        active_page="ss_batches"
     )
 
 
