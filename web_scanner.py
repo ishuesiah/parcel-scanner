@@ -3195,8 +3195,12 @@ def check_shipments():
     current_tab = request.args.get("tab", "batches")  # Default to batches tab
     search_query = request.args.get("search", "").strip()
     page = int(request.args.get("page", 1))
-    per_page = 100
+    # Configurable items per page (default 100, max 500)
+    per_page = min(int(request.args.get("per_page", 100)), 500)
     refresh_tracking = request.args.get("refresh", "") == "1"
+
+    # Get Shopify store URL for customer links
+    shop_url = os.environ.get("SHOP_URL", "")
 
     # Batch tab parameters
     batch_status = request.args.get("status", "completed")
@@ -3215,9 +3219,25 @@ def check_shipments():
         # FETCH BATCHES DATA (for batches tab)
         # ══════════════════════════════════════════════════════════════════════
         batch_result = get_shipstation_batches(status=batch_status, page=batch_page, page_size=25)
-        batches = batch_result.get("batches", [])
+        raw_batches = batch_result.get("batches", [])
         batch_pages = batch_result.get("pages", 1)
         batch_error = batch_result.get("error")
+
+        # Normalize batch field names (API might return camelCase)
+        batches = []
+        for b in raw_batches:
+            # Debug: log first batch structure
+            if not batches:
+                print(f"📦 Batch API fields: {list(b.keys())}")
+            batches.append({
+                "batch_id": b.get("batch_id") or b.get("batchId") or "",
+                "batch_number": b.get("batch_number") or b.get("batchNumber") or "",
+                "batch_notes": b.get("batch_notes") or b.get("batchNotes") or b.get("notes") or "",
+                "created_at": b.get("created_at") or b.get("createdAt") or "",
+                "status": b.get("status") or "",
+                "count": b.get("count") or b.get("label_count") or b.get("labelCount") or 0,
+                "errors": b.get("errors") or b.get("error_count") or b.get("errorCount") or 0
+            })
 
         # ══════════════════════════════════════════════════════════════════════
         # FETCH SHIPMENTS DATA (for shipments tab)
@@ -3488,8 +3508,8 @@ def check_shipments():
         # Pagination URLs for shipments tab
         has_prev = page > 1
         has_next = page < total_pages
-        prev_url = url_for("check_shipments", tab="shipments", page=page-1, search=search_query) if has_prev else "#"
-        next_url = url_for("check_shipments", tab="shipments", page=page+1, search=search_query) if has_next else "#"
+        prev_url = url_for("check_shipments", tab="shipments", page=page-1, search=search_query, per_page=per_page) if has_prev else "#"
+        next_url = url_for("check_shipments", tab="shipments", page=page+1, search=search_query, per_page=per_page) if has_next else "#"
 
         return render_template(
             "check_shipments.html",
@@ -3506,12 +3526,15 @@ def check_shipments():
             search_query=search_query,
             loading=False,
             page=page,
+            per_page=per_page,
             total_pages=total_pages,
             total_shipments=total_shipments,
             has_prev=has_prev,
             has_next=has_next,
             prev_url=prev_url,
             next_url=next_url,
+            # Shopify
+            shop_url=shop_url,
             version=__version__,
             active_page="check_shipments"
         )
@@ -3833,6 +3856,9 @@ def ss_batch_detail(batch_id):
                 "scanned": scanned
             })
 
+    # Get Shopify store URL for customer links
+    shop_url = os.environ.get("SHOP_URL", "")
+
     return render_template(
         "ss_batch_detail.html",
         batch_id=batch_id,
@@ -3840,6 +3866,7 @@ def ss_batch_detail(batch_id):
         shipments=shipments,
         stats=stats,
         batch_ship_date=batch_ship_date,
+        shop_url=shop_url,
         version=__version__,
         active_page="ss_batches"
     )

@@ -93,14 +93,53 @@
 
     .pagination {
       margin-top: 20px; display: flex; gap: 8px; align-items: center;
-      justify-content: center;
+      justify-content: center; flex-wrap: wrap;
     }
     .pagination button, .pagination a {
       padding: 6px 12px; border: 1px solid #534bc4; background: white;
       color: #534bc4; border-radius: 4px; cursor: pointer; text-decoration: none;
+      font-size: 0.9rem;
     }
     .pagination button:hover, .pagination a:hover { background-color: #534bc4; color: white; }
-    .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .pagination button:disabled, .pagination a.disabled {
+      opacity: 0.5; cursor: not-allowed; pointer-events: none;
+    }
+    .pagination .current-page {
+      background-color: #534bc4; color: white;
+    }
+    .pagination .ellipsis {
+      border: none; background: none; color: #666; cursor: default;
+    }
+    .pagination .ellipsis:hover { background: none; color: #666; }
+    .per-page-select {
+      margin-left: 16px; display: flex; align-items: center; gap: 8px;
+    }
+    .per-page-select select {
+      padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;
+      font-size: 0.9rem;
+    }
+
+    /* Progress bar for shipment status */
+    .progress-bar {
+      width: 60px; height: 6px; background: #e0e0e0; border-radius: 3px;
+      overflow: hidden; display: inline-block; vertical-align: middle;
+      margin-left: 8px;
+    }
+    .progress-bar-fill {
+      height: 100%; border-radius: 3px; transition: width 0.3s ease;
+    }
+    .progress-0 { width: 0%; background: #ccc; }
+    .progress-10 { width: 10%; background: #1976d2; }
+    .progress-25 { width: 25%; background: #f57c00; }
+    .progress-50 { width: 50%; background: #ffa726; }
+    .progress-75 { width: 75%; background: #66bb6a; }
+    .progress-90 { width: 90%; background: #43a047; }
+    .progress-100 { width: 100%; background: #199b76; }
+    .progress-exception { width: 100%; background: #952746; }
+
+    /* Customer link */
+    .customer-link { color: #534bc4; text-decoration: none; }
+    .customer-link:hover { text-decoration: underline; }
 
     .loading {
       text-align: center; padding: 40px; color: #666;
@@ -185,13 +224,35 @@
         </table>
 
         <div class="pagination">
-          {% if batch_page > 1 %}
-            <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=batch_page-1) }}">&larr; Prev</a>
+          {# Previous button #}
+          <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=batch_page-1) }}" class="{% if batch_page <= 1 %}disabled{% endif %}">← Prev</a>
+
+          {# Page numbers for batches #}
+          {% set b_show = 5 %}
+          {% set b_start = [1, batch_page - b_show // 2] | max %}
+          {% set b_end = [batch_pages, b_start + b_show - 1] | min %}
+          {% set b_start = [1, b_end - b_show + 1] | max %}
+
+          {% if b_start > 1 %}
+            <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=1) }}">1</a>
+            {% if b_start > 2 %}<span class="ellipsis">...</span>{% endif %}
           {% endif %}
-          <span style="color: #666;">Page {{ batch_page }} of {{ batch_pages }}</span>
-          {% if batch_page < batch_pages %}
-            <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=batch_page+1) }}">Next &rarr;</a>
+
+          {% for p in range(b_start, b_end + 1) %}
+            {% if p == batch_page %}
+              <a href="#" class="current-page">{{ p }}</a>
+            {% else %}
+              <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=p) }}">{{ p }}</a>
+            {% endif %}
+          {% endfor %}
+
+          {% if b_end < batch_pages %}
+            {% if b_end < batch_pages - 1 %}<span class="ellipsis">...</span>{% endif %}
+            <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=batch_pages) }}">{{ batch_pages }}</a>
           {% endif %}
+
+          {# Next button #}
+          <a href="{{ url_for('check_shipments', tab='batches', status=batch_status, page=batch_page+1) }}" class="{% if batch_page >= batch_pages %}disabled{% endif %}">Next →</a>
         </div>
       {% else %}
         <p style="color: #666; margin-top: 20px;">No batches found with status "{{ batch_status }}".</p>
@@ -254,7 +315,13 @@
                 </td>
                 <td>{{ ship.order_number }}</td>
                 <td>{{ ship.batch_number or '-' }}</td>
-                <td>{{ ship.customer_name }}</td>
+                <td>
+                  {% if shop_url and ship.order_number %}
+                    <a href="https://{{ shop_url }}/admin/orders?query={{ ship.order_number }}" target="_blank" class="customer-link" title="View in Shopify">{{ ship.customer_name }}</a>
+                  {% else %}
+                    {{ ship.customer_name }}
+                  {% endif %}
+                </td>
                 <td style="font-family: monospace; font-size: 0.85rem;">
                   {% if ship.tracking_url %}
                     <a href="{{ ship.tracking_url }}" target="_blank" title="View tracking">{{ ship.tracking_number }}</a>
@@ -283,6 +350,17 @@
                       {{ ship.ups_status_text }}
                     </span>
                   {% endif %}
+                  {# Progress bar based on status #}
+                  {% set progress_class = {
+                    'delivered': 'progress-100',
+                    'almost_there': 'progress-90',
+                    'in_transit': 'progress-50',
+                    'hasnt_moved': 'progress-25',
+                    'label_created': 'progress-10',
+                    'exception': 'progress-exception',
+                    'unknown': 'progress-0'
+                  }.get(ship.ups_status, 'progress-0') %}
+                  <div class="progress-bar"><div class="progress-bar-fill {{ progress_class }}"></div></div>
                 </td>
                 <td style="font-size: 0.85rem;">{{ ship.ups_last_activity }}</td>
                 <td>
@@ -301,9 +379,48 @@
         </table>
 
         <div class="pagination">
-          <button onclick="window.location.href='{{ prev_url }}'" {% if not has_prev %}disabled{% endif %}>← Previous</button>
-          <span>Page {{ page }} of {{ total_pages }} ({{ total_shipments }} shipments)</span>
-          <button onclick="window.location.href='{{ next_url }}'" {% if not has_next %}disabled{% endif %}>Next →</button>
+          {# Previous button #}
+          <a href="{{ prev_url }}" class="{% if not has_prev %}disabled{% endif %}">← Prev</a>
+
+          {# Page numbers #}
+          {% set show_pages = 5 %}
+          {% set start_page = [1, page - show_pages // 2] | max %}
+          {% set end_page = [total_pages, start_page + show_pages - 1] | min %}
+          {% set start_page = [1, end_page - show_pages + 1] | max %}
+
+          {% if start_page > 1 %}
+            <a href="{{ url_for('check_shipments', tab='shipments', page=1, search=search_query, per_page=per_page) }}">1</a>
+            {% if start_page > 2 %}<span class="ellipsis">...</span>{% endif %}
+          {% endif %}
+
+          {% for p in range(start_page, end_page + 1) %}
+            {% if p == page %}
+              <a href="#" class="current-page">{{ p }}</a>
+            {% else %}
+              <a href="{{ url_for('check_shipments', tab='shipments', page=p, search=search_query, per_page=per_page) }}">{{ p }}</a>
+            {% endif %}
+          {% endfor %}
+
+          {% if end_page < total_pages %}
+            {% if end_page < total_pages - 1 %}<span class="ellipsis">...</span>{% endif %}
+            <a href="{{ url_for('check_shipments', tab='shipments', page=total_pages, search=search_query, per_page=per_page) }}">{{ total_pages }}</a>
+          {% endif %}
+
+          {# Next button #}
+          <a href="{{ next_url }}" class="{% if not has_next %}disabled{% endif %}">Next →</a>
+
+          {# Per page selector #}
+          <div class="per-page-select">
+            <label>Show:</label>
+            <select onchange="changePerPage(this.value)">
+              <option value="50" {% if per_page == 50 %}selected{% endif %}>50</option>
+              <option value="100" {% if per_page == 100 %}selected{% endif %}>100</option>
+              <option value="200" {% if per_page == 200 %}selected{% endif %}>200</option>
+              <option value="500" {% if per_page == 500 %}selected{% endif %}>500</option>
+            </select>
+          </div>
+
+          <span style="margin-left: 12px; color: #666;">({{ total_shipments }} total)</span>
         </div>
       {% else %}
         <p style="padding: 40px; text-align: center; color: #666;">
@@ -325,6 +442,13 @@
       url.searchParams.set('tab', tab);
       // Reset page when switching tabs
       url.searchParams.delete('page');
+      window.location.href = url.toString();
+    }
+
+    function changePerPage(value) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('per_page', value);
+      url.searchParams.set('page', '1');  // Reset to page 1
       window.location.href = url.toString();
     }
 
