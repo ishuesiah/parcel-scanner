@@ -2213,9 +2213,10 @@ def mark_batch_picked_up():
            WHERE batch_id = %s
         """, (batch_id,))
         rows = cursor.fetchall()
-        tracking_list = [row["tracking_number"] for row in rows]
+        # Filter out NULL tracking numbers
+        tracking_list = [row["tracking_number"] for row in rows if row["tracking_number"]]
         pkg_count = len(tracking_list)
-        tracking_csv = ",".join(tracking_list)
+        tracking_csv = ",".join(tracking_list) if tracking_list else ""
 
         cursor.execute("""
           UPDATE batches
@@ -2261,9 +2262,10 @@ def bulk_mark_picked_up():
                    WHERE batch_id = %s
                 """, (batch_id,))
                 rows = cursor.fetchall()
-                tracking_list = [row["tracking_number"] for row in rows]
+                # Filter out NULL tracking numbers
+                tracking_list = [row["tracking_number"] for row in rows if row["tracking_number"]]
                 pkg_count = len(tracking_list)
-                tracking_csv = ",".join(tracking_list)
+                tracking_csv = ",".join(tracking_list) if tracking_list else ""
 
                 # Update batch status
                 cursor.execute("""
@@ -4248,17 +4250,49 @@ def api_orders_sync():
     Trigger a manual orders sync from Shopify.
     Query params:
         - full: If 'true', do full 90-day sync. Otherwise incremental.
+        - async: If 'true', run in background (default for full sync)
     """
     full_sync = request.args.get('full', 'false').lower() == 'true'
+    run_async = request.args.get('async', 'true' if full_sync else 'false').lower() == 'true'
 
     try:
         orders_sync = get_orders_sync()
-        count, message = orders_sync.sync_orders(full_sync=full_sync, days_back=90)
-        return jsonify({
-            "success": True,
-            "synced_count": count,
-            "message": message
-        })
+
+        # Check if sync is already running
+        status = orders_sync.get_sync_status()
+        if status.get('status') == 'running':
+            return jsonify({
+                "success": False,
+                "error": "Sync already in progress. Please wait for it to complete.",
+                "status": "running"
+            }), 409
+
+        if run_async:
+            # Run sync in background thread
+            def run_sync():
+                try:
+                    orders_sync.sync_orders(full_sync=full_sync, days_back=90)
+                except Exception as e:
+                    print(f"Background orders sync error: {e}")
+
+            import threading
+            sync_thread = threading.Thread(target=run_sync, daemon=True)
+            sync_thread.start()
+
+            return jsonify({
+                "success": True,
+                "synced_count": 0,
+                "message": "Sync started in background. Check status for progress.",
+                "async": True
+            })
+        else:
+            # Synchronous sync (for small incremental syncs)
+            count, message = orders_sync.sync_orders(full_sync=full_sync, days_back=90)
+            return jsonify({
+                "success": True,
+                "synced_count": count,
+                "message": message
+            })
     except Exception as e:
         return jsonify({
             "success": False,

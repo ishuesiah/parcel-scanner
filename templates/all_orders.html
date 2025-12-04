@@ -604,7 +604,7 @@
     refreshBtn.classList.add('syncing');
 
     const syncStatus = document.getElementById('syncStatus');
-    syncStatus.textContent = 'Syncing... (this may take a few minutes for large syncs)';
+    syncStatus.textContent = 'Starting sync...';
     syncStatus.classList.add('syncing');
 
     try {
@@ -622,22 +622,87 @@
       const data = await response.json();
 
       if (data.success) {
-        syncStatus.textContent = 'Synced ' + data.synced_count + ' orders. Refreshing...';
-        setTimeout(() => location.reload(), 1000);
+        if (data.async) {
+          // Async sync started - poll for status
+          syncStatus.textContent = 'Sync running in background... Checking status...';
+          pollSyncStatus();
+        } else {
+          syncStatus.textContent = 'Synced ' + data.synced_count + ' orders. Refreshing...';
+          setTimeout(() => location.reload(), 1000);
+        }
       } else {
-        alert('Sync failed: ' + (data.error || 'Unknown error'));
-        syncStatus.textContent = 'Sync failed';
+        if (data.status === 'running') {
+          syncStatus.textContent = 'Sync already in progress. Checking status...';
+          pollSyncStatus();
+        } else {
+          alert('Sync failed: ' + (data.error || 'Unknown error'));
+          syncStatus.textContent = 'Sync failed';
+          resetSyncButtons();
+        }
       }
     } catch (error) {
       console.error('Sync error:', error);
       alert('Error syncing: ' + error.message);
       syncStatus.textContent = 'Sync error - please try again';
-    } finally {
-      refreshBtn.disabled = false;
-      fullSyncBtn.disabled = false;
-      refreshBtn.classList.remove('syncing');
-      syncStatus.classList.remove('syncing');
+      resetSyncButtons();
     }
+  }
+
+  function resetSyncButtons() {
+    const refreshBtn = document.getElementById('refreshBtn');
+    const fullSyncBtn = document.getElementById('fullSyncBtn');
+    const syncStatus = document.getElementById('syncStatus');
+
+    refreshBtn.disabled = false;
+    fullSyncBtn.disabled = false;
+    refreshBtn.classList.remove('syncing');
+    syncStatus.classList.remove('syncing');
+  }
+
+  async function pollSyncStatus() {
+    const syncStatus = document.getElementById('syncStatus');
+    let attempts = 0;
+    const maxAttempts = 120; // Poll for up to 10 minutes (5s interval)
+
+    const poll = async () => {
+      attempts++;
+      try {
+        const response = await fetch('/api/orders/sync/status');
+        const status = await response.json();
+
+        if (status.status === 'running') {
+          syncStatus.textContent = 'Sync in progress... (checked ' + attempts + ' times)';
+          if (attempts < maxAttempts) {
+            setTimeout(poll, 5000); // Check every 5 seconds
+          } else {
+            syncStatus.textContent = 'Sync still running. Refresh page to check later.';
+            resetSyncButtons();
+          }
+        } else if (status.status === 'idle') {
+          const count = status.last_sync_count || 0;
+          syncStatus.textContent = 'Synced ' + count + ' orders. Refreshing...';
+          setTimeout(() => location.reload(), 1500);
+        } else if (status.status === 'error') {
+          alert('Sync error: ' + (status.error_message || 'Unknown error'));
+          syncStatus.textContent = 'Sync failed: ' + (status.error_message || 'Unknown error');
+          resetSyncButtons();
+        } else {
+          // Unknown status, reload anyway
+          location.reload();
+        }
+      } catch (error) {
+        console.error('Error polling sync status:', error);
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 5000);
+        } else {
+          syncStatus.textContent = 'Could not check sync status. Refresh page.';
+          resetSyncButtons();
+        }
+      }
+    };
+
+    // Start polling after a brief delay
+    setTimeout(poll, 3000);
   }
 
   // Close modal on escape key
