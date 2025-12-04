@@ -135,6 +135,15 @@ def init_orders_tables(get_db_connection):
             ON CONFLICT (sync_type) DO NOTHING
         """)
 
+        # Reset any stuck "running" status (from interrupted syncs)
+        cursor.execute("""
+            UPDATE order_sync_status
+            SET status = 'idle',
+                error_message = 'Reset from interrupted sync on server restart',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE sync_type = 'shopify_orders' AND status = 'running'
+        """)
+
         # Update cancelled_orders table if it exists but lacks columns
         # First check if table exists
         cursor.execute("""
@@ -295,12 +304,24 @@ class OrdersSync:
 
             # Upsert each order
             synced_count = 0
-            for order in orders:
+            error_count = 0
+            total_orders = len(orders)
+            for i, order in enumerate(orders):
                 try:
                     self._upsert_order(order)
                     synced_count += 1
+                    # Log progress every 100 orders
+                    if synced_count % 100 == 0:
+                        print(f"Progress: {synced_count}/{total_orders} orders synced...")
                 except Exception as e:
+                    error_count += 1
                     print(f"Error upserting order {order.get('id')}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Continue with other orders even if one fails
+
+            if error_count > 0:
+                print(f"Warning: {error_count} orders failed to sync")
 
             self.update_sync_status('completed', synced_count)
             message = f"Synced {synced_count} orders successfully"
@@ -399,6 +420,11 @@ class OrdersSync:
         cursor = conn.cursor()
 
         try:
+            # Debug: log first order to verify data structure
+            order_name = shopify_order.get('name', 'Unknown')
+            if not hasattr(self, '_logged_first_order'):
+                print(f"First order being processed: {order_name} (ID: {shopify_order.get('id')})")
+                self._logged_first_order = True
             shopify_order_id = str(shopify_order['id'])
 
             # Check if order exists
