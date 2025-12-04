@@ -194,7 +194,24 @@ class OrdersSync:
             else:
                 request_params = params
 
-            response, next_token = self.shopify._make_request("orders.json", params=request_params)
+            # Retry logic for individual page fetches
+            max_retries = 3
+            response = None
+            next_token = None
+
+            for retry in range(max_retries):
+                try:
+                    response, next_token = self.shopify._make_request("orders.json", params=request_params)
+                    if response:
+                        break
+                except Exception as e:
+                    print(f"Page {page} fetch error (attempt {retry + 1}/{max_retries}): {e}")
+                    if retry < max_retries - 1:
+                        wait = min(2 ** retry, 8)
+                        print(f"Retrying in {wait}s...")
+                        time.sleep(wait)
+                    else:
+                        print(f"Failed to fetch page {page} after {max_retries} attempts, continuing with partial results")
 
             if not response or "orders" not in response:
                 print(f"No more orders or error on page {page}")

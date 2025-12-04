@@ -57,7 +57,7 @@ class ShopifyAPI:
 
         while retry < max_retries:
             try:
-                resp = self.session.request(method, url, params=params, timeout=15)
+                resp = self.session.request(method, url, params=params, timeout=30)
 
                 # Handle rate limiting (429)
                 if resp.status_code == 429:
