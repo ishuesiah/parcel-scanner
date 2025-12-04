@@ -130,6 +130,61 @@
       opacity: 0.92;
     }
 
+    /* Bulk actions bar */
+    .bulk-actions-bar {
+      background: #fff4e5;
+      border: 1px solid #ffe0b2;
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .bulk-actions-bar label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .bulk-actions-bar input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+    .selected-count {
+      color: #8a6100;
+      font-size: 0.9rem;
+    }
+    .btn-bulk-action {
+      background: #f39c12;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+    .btn-bulk-action:hover {
+      opacity: 0.92;
+    }
+    .btn-bulk-action:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .batch-checkbox {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      margin-right: 12px;
+    }
+    .batch-card-with-checkbox {
+      display: flex;
+      align-items: center;
+    }
+
     /* Completed batches section */
     .completed-batches-section {
       margin-top: 24px;
@@ -152,41 +207,53 @@
       </h2>
 
       {% if active_batches %}
-        {% for b in active_batches %}
-          <div class="active-batch-card">
-            <div class="batch-card-info">
-              <h3>
-                <a href="{{ url_for('view_batch', batch_id=b.id) }}">
-                  Batch #{{ b.id }}
-                </a>
-              </h3>
-              <div class="batch-card-meta">
-                <span>{{ b.carrier }}</span>
-                <span>{{ b.pkg_count }} packages</span>
-                <span>Started {{ b.created_at }}</span>
-                {% if b.notes %}
-                  <span style="color: #534bc4;">{{ b.notes }}</span>
-                {% endif %}
+        <!-- Bulk Actions Bar -->
+        <div class="bulk-actions-bar">
+          <label>
+            <input type="checkbox" id="selectAll" onchange="toggleSelectAll()">
+            Select All
+          </label>
+          <span class="selected-count" id="selectedCount">0 selected</span>
+          <button type="button" class="btn-bulk-action" id="bulkMarkBtn" onclick="bulkMarkPickedUp()" disabled>
+            Mark Selected as Picked Up
+          </button>
+        </div>
+
+        <form id="bulkForm" action="{{ url_for('bulk_mark_picked_up') }}" method="post">
+          {% for b in active_batches %}
+            <div class="active-batch-card batch-card-with-checkbox">
+              <input type="checkbox" name="batch_ids" value="{{ b.id }}" class="batch-checkbox" onchange="updateSelectedCount()">
+              <div class="batch-card-info" style="flex: 1;">
+                <h3>
+                  <a href="{{ url_for('view_batch', batch_id=b.id) }}">
+                    Batch #{{ b.id }}
+                  </a>
+                </h3>
+                <div class="batch-card-meta">
+                  <span>{{ b.carrier }}</span>
+                  <span>{{ b.pkg_count }} packages</span>
+                  <span>Started {{ b.created_at }}</span>
+                  {% if b.notes %}
+                    <span style="color: #534bc4;">{{ b.notes }}</span>
+                  {% endif %}
+                </div>
               </div>
-            </div>
-            <div class="batch-card-actions">
-              <form action="{{ url_for('mark_batch_picked_up') }}" method="post" style="display: inline;">
-                <input type="hidden" name="batch_id" value="{{ b.id }}">
-                <button type="submit" class="btn-picked-up" title="Mark as picked up to move to Completed">
+              <div class="batch-card-actions">
+                <button type="button" class="btn-picked-up" title="Mark as picked up to move to Completed"
+                        onclick="markSinglePickedUp({{ b.id }})">
                   Mark Picked Up
                 </button>
-              </form>
-              <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="btn-resume">
-                Resume Scanning
-              </a>
-              <form action="{{ url_for('delete_batch') }}" method="post" style="display: inline;"
-                    onsubmit="return confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.');">
-                <input type="hidden" name="batch_id" value="{{ b.id }}">
-                <button type="submit" class="btn-delete-small">Delete</button>
-              </form>
+                <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="btn-resume">
+                  Resume Scanning
+                </a>
+                <button type="button" class="btn-delete-small"
+                        onclick="if(confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.')) { deleteBatch({{ b.id }}); }">
+                  Delete
+                </button>
+              </div>
             </div>
-          </div>
-        {% endfor %}
+          {% endfor %}
+        </form>
       {% else %}
         <div class="empty-state">
           <div class="empty-state-icon">📦</div>
@@ -251,4 +318,66 @@
         <p style="color: #999; padding: 20px 0;">No completed batches yet.</p>
       {% endif %}
     </div>
+
+    <!-- Hidden forms for single actions -->
+    <form id="singleMarkForm" action="{{ url_for('mark_batch_picked_up') }}" method="post" style="display: none;">
+      <input type="hidden" name="batch_id" id="singleMarkBatchId">
+    </form>
+    <form id="deleteForm" action="{{ url_for('delete_batch') }}" method="post" style="display: none;">
+      <input type="hidden" name="batch_id" id="deleteBatchId">
+    </form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function toggleSelectAll() {
+    const selectAll = document.getElementById('selectAll');
+    const checkboxes = document.querySelectorAll('.batch-checkbox');
+    checkboxes.forEach(cb => cb.checked = selectAll.checked);
+    updateSelectedCount();
+  }
+
+  function updateSelectedCount() {
+    const checkboxes = document.querySelectorAll('.batch-checkbox:checked');
+    const count = checkboxes.length;
+    document.getElementById('selectedCount').textContent = count + ' selected';
+    document.getElementById('bulkMarkBtn').disabled = count === 0;
+
+    // Update select all checkbox state
+    const allCheckboxes = document.querySelectorAll('.batch-checkbox');
+    const selectAll = document.getElementById('selectAll');
+    if (count === 0) {
+      selectAll.checked = false;
+      selectAll.indeterminate = false;
+    } else if (count === allCheckboxes.length) {
+      selectAll.checked = true;
+      selectAll.indeterminate = false;
+    } else {
+      selectAll.checked = false;
+      selectAll.indeterminate = true;
+    }
+  }
+
+  function bulkMarkPickedUp() {
+    const checkboxes = document.querySelectorAll('.batch-checkbox:checked');
+    if (checkboxes.length === 0) {
+      alert('Please select at least one batch.');
+      return;
+    }
+
+    if (confirm('Mark ' + checkboxes.length + ' batches as picked up?')) {
+      document.getElementById('bulkForm').submit();
+    }
+  }
+
+  function markSinglePickedUp(batchId) {
+    document.getElementById('singleMarkBatchId').value = batchId;
+    document.getElementById('singleMarkForm').submit();
+  }
+
+  function deleteBatch(batchId) {
+    document.getElementById('deleteBatchId').value = batchId;
+    document.getElementById('deleteForm').submit();
+  }
+</script>
 {% endblock %}

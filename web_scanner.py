@@ -2239,6 +2239,58 @@ def mark_batch_picked_up():
         conn.close()
 
 
+@app.route("/bulk_mark_picked_up", methods=["POST"])
+def bulk_mark_picked_up():
+    """Mark multiple batches as picked up at once."""
+    batch_ids = request.form.getlist("batch_ids")
+    if not batch_ids:
+        flash("No batches selected.", "error")
+        return redirect(url_for("all_batches"))
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        marked_count = 0
+
+        for batch_id in batch_ids:
+            try:
+                # Get tracking numbers for this batch
+                cursor.execute("""
+                  SELECT tracking_number
+                    FROM scans
+                   WHERE batch_id = %s
+                """, (batch_id,))
+                rows = cursor.fetchall()
+                tracking_list = [row["tracking_number"] for row in rows]
+                pkg_count = len(tracking_list)
+                tracking_csv = ",".join(tracking_list)
+
+                # Update batch status
+                cursor.execute("""
+                  UPDATE batches
+                     SET pkg_count = %s,
+                         tracking_numbers = %s,
+                         status = 'recorded'
+                   WHERE id = %s
+                """, (pkg_count, tracking_csv, batch_id))
+                marked_count += 1
+            except Exception as e:
+                print(f"Error marking batch {batch_id}: {e}")
+
+        conn.commit()
+        flash(f"Marked {marked_count} batches as picked up.", "success")
+        return redirect(url_for("all_batches"))
+    except psycopg2.Error as e:
+        flash(f"Database Error: {e}", "error")
+        return redirect(url_for("all_batches"))
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
 @app.route("/record_batch", methods=["POST"])
 def record_batch():
     batch_id = session.get("batch_id")
