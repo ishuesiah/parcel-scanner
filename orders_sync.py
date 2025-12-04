@@ -280,6 +280,8 @@ class OrdersSync:
         print(f"Starting orders sync (full_sync={full_sync}, days_back={days_back})...")
         self.update_sync_status('running')
 
+        # Use a single connection for the entire sync to avoid connection exhaustion
+        conn = None
         try:
             # Determine time range
             if full_sync:
@@ -302,23 +304,35 @@ class OrdersSync:
             orders = self._fetch_orders_from_shopify(updated_at_min)
             print(f"Fetched {len(orders)} orders from Shopify")
 
-            # Upsert each order
+            # Get a single connection for all upserts
+            conn = self.get_db_connection()
+            conn.autocommit = False  # Use transactions for batch commits
+
+            # Upsert each order using the shared connection
             synced_count = 0
             error_count = 0
             total_orders = len(orders)
+
             for i, order in enumerate(orders):
                 try:
-                    self._upsert_order(order)
+                    self._upsert_order_with_conn(conn, order)
                     synced_count += 1
-                    # Log progress every 100 orders
+
+                    # Commit every 100 orders to avoid holding too much in transaction
                     if synced_count % 100 == 0:
+                        conn.commit()
                         print(f"Progress: {synced_count}/{total_orders} orders synced...")
                 except Exception as e:
                     error_count += 1
                     print(f"Error upserting order {order.get('id')}: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    # Continue with other orders even if one fails
+                    # Rollback this order but continue with others
+                    try:
+                        conn.rollback()
+                    except:
+                        pass
+
+            # Final commit for remaining orders
+            conn.commit()
 
             if error_count > 0:
                 print(f"Warning: {error_count} orders failed to sync")
@@ -331,8 +345,17 @@ class OrdersSync:
         except Exception as e:
             error_msg = str(e)
             print(f"Orders sync error: {error_msg}")
+            import traceback
+            traceback.print_exc()
             self.update_sync_status('error', error=error_msg)
             return 0, f"Sync failed: {error_msg}"
+        finally:
+            # Always close the connection
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
 
     def _fetch_orders_from_shopify(self, updated_at_min: datetime) -> List[Dict]:
         """
@@ -409,14 +432,14 @@ class OrdersSync:
 
         return orders
 
-    def _upsert_order(self, shopify_order: Dict):
+    def _upsert_order_with_conn(self, conn, shopify_order: Dict):
         """
-        Insert or update an order from Shopify data.
+        Insert or update an order from Shopify data using an existing connection.
 
         Args:
+            conn: Database connection to use
             shopify_order: Order data from Shopify API
         """
-        conn = self.get_db_connection()
         cursor = conn.cursor()
 
         try:
@@ -562,78 +585,67 @@ class OrdersSync:
                 result = cursor.fetchone()
                 order_id = result['id']
 
-            conn.commit()
-
-            # Sync line items
-            self._sync_line_items(order_id, shopify_order.get('line_items', []))
+            # Sync line items using the same connection
+            self._sync_line_items_with_conn(conn, cursor, order_id, shopify_order.get('line_items', []))
 
         finally:
             cursor.close()
-            conn.close()
 
-    def _sync_line_items(self, order_id: int, line_items: List[Dict]):
+    def _sync_line_items_with_conn(self, conn, cursor, order_id: int, line_items: List[Dict]):
         """
-        Sync line items for an order. Deletes existing and re-inserts.
+        Sync line items for an order using an existing connection/cursor.
 
         Args:
+            conn: Database connection
+            cursor: Database cursor
             order_id: Local order ID
             line_items: Line items from Shopify API
         """
-        conn = self.get_db_connection()
-        cursor = conn.cursor()
+        # Delete existing line items (CASCADE will delete options too)
+        cursor.execute("DELETE FROM order_line_items WHERE order_id = %s", (order_id,))
 
-        try:
-            # Delete existing line items (CASCADE will delete options too)
-            cursor.execute("DELETE FROM order_line_items WHERE order_id = %s", (order_id,))
+        for item in line_items:
+            # Calculate total discount
+            discount_allocations = item.get('discount_allocations', [])
+            total_discount = sum(float(d.get('amount', 0)) for d in discount_allocations)
 
-            for item in line_items:
-                # Calculate total discount
-                discount_allocations = item.get('discount_allocations', [])
-                total_discount = sum(float(d.get('amount', 0)) for d in discount_allocations)
+            cursor.execute("""
+                INSERT INTO order_line_items (
+                    order_id, shopify_line_item_id, sku, product_id, variant_id,
+                    product_title, variant_title, quantity, price, total_discount,
+                    fulfillable_quantity, fulfillment_status, requires_shipping
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                order_id,
+                str(item.get('id', '')),
+                item.get('sku'),
+                str(item.get('product_id', '')),
+                str(item.get('variant_id', '')),
+                item.get('title'),
+                item.get('variant_title'),
+                item.get('quantity', 1),
+                float(item.get('price', 0)),
+                total_discount,
+                item.get('fulfillable_quantity', 0),
+                item.get('fulfillment_status'),
+                1 if item.get('requires_shipping', True) else 0
+            ))
+            result = cursor.fetchone()
+            line_item_id = result['id']
 
-                cursor.execute("""
-                    INSERT INTO order_line_items (
-                        order_id, shopify_line_item_id, sku, product_id, variant_id,
-                        product_title, variant_title, quantity, price, total_discount,
-                        fulfillable_quantity, fulfillment_status, requires_shipping
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                """, (
-                    order_id,
-                    str(item.get('id', '')),
-                    item.get('sku'),
-                    str(item.get('product_id', '')),
-                    str(item.get('variant_id', '')),
-                    item.get('title'),
-                    item.get('variant_title'),
-                    item.get('quantity', 1),
-                    float(item.get('price', 0)),
-                    total_discount,
-                    item.get('fulfillable_quantity', 0),
-                    item.get('fulfillment_status'),
-                    1 if item.get('requires_shipping', True) else 0
-                ))
-                result = cursor.fetchone()
-                line_item_id = result['id']
+            # Sync line item options/properties (TEPO customizations)
+            properties = item.get('properties', [])
+            for prop in properties:
+                prop_name = prop.get('name', '')
+                prop_value = prop.get('value', '')
 
-                # Sync line item options/properties (TEPO customizations)
-                properties = item.get('properties', [])
-                for prop in properties:
-                    prop_name = prop.get('name', '')
-                    prop_value = prop.get('value', '')
-
-                    # Skip internal properties that start with underscore
-                    if prop_name and prop_value and not prop_name.startswith('_'):
-                        cursor.execute("""
-                            INSERT INTO order_line_item_options (line_item_id, name, value)
-                            VALUES (%s, %s, %s)
-                        """, (line_item_id, prop_name, str(prop_value)))
-
-            conn.commit()
-
-        finally:
-            cursor.close()
-            conn.close()
+                # Skip internal properties that start with underscore
+                if prop_name and prop_value and not prop_name.startswith('_'):
+                    cursor.execute("""
+                        INSERT INTO order_line_item_options (line_item_id, name, value)
+                        VALUES (%s, %s, %s)
+                    """, (line_item_id, prop_name, str(prop_value)))
 
     def _get_customer_name(self, order: Dict) -> str:
         """Extract customer name from order, trying multiple sources."""
