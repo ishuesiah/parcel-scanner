@@ -2010,9 +2010,14 @@ def _process_single_scan(code, is_ajax):
                 validation_error = f"❌ Not a UPS label! UPS tracking numbers must start with '1Z'. (Scanned: {code[:20]}...)"
 
         elif batch_carrier == "Canada Post":
-            # Canada Post: MUST be exactly 28 chars
-            if len(code) != 28:
-                validation_error = f"❌ Not a Canada Post label! Expected 28 characters. (Scanned: {code[:20]}... - Length: {len(code)})"
+            # Canada Post formats:
+            # - 28 chars: full barcode from label (most common from scanner)
+            # - 22 chars: some label formats
+            # - 16 chars: normalized tracking number
+            # - 13 chars: international (e.g., RR123456789CA)
+            valid_cp_lengths = [28, 22, 16, 13]
+            if len(code) not in valid_cp_lengths:
+                validation_error = f"❌ Not a Canada Post label! Expected 28, 22, 16, or 13 characters. (Scanned: {code[:20]}... - Length: {len(code)})"
 
         elif batch_carrier == "Purolator":
             # Purolator: MUST be 12 digits (after normalization it would be 12 digits)
@@ -2036,10 +2041,21 @@ def _process_single_scan(code, is_ajax):
         # NOW normalize codes for specific carriers (AFTER validation)
         original_code = code
         if batch_carrier == "Canada Post":
-            # Canada Post: 28-character barcode -> extract middle 16 chars
+            # Canada Post normalization based on barcode length
             if len(code) == 28:
+                # Full barcode: extract middle 16 chars
                 code = code[7:-5]
-                print(f"📮 Canada Post: Normalized {original_code} -> {code}")
+                print(f"📮 Canada Post: Normalized 28-char {original_code} -> {code}")
+            elif len(code) == 22:
+                # Some label formats: extract middle 16 chars
+                code = code[3:-3]
+                print(f"📮 Canada Post: Normalized 22-char {original_code} -> {code}")
+            elif len(code) == 16:
+                # Already normalized, use as-is
+                print(f"📮 Canada Post: Already 16-char format {code}")
+            elif len(code) == 13:
+                # International format (RR123456789CA), use as-is
+                print(f"📮 Canada Post: International format {code}")
         elif batch_carrier == "Purolator":
             if len(code) == 34:
                 code = code[11:-11]
