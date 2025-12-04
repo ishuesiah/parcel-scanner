@@ -2313,6 +2313,61 @@ def delete_scans():
             pass
 
 
+@app.route("/resolve_duplicate/<int:scan_id>", methods=["POST"])
+def resolve_duplicate(scan_id):
+    """Mark a duplicate scan as resolved (change status to 'Complete')."""
+    try:
+        conn = get_mysql_connection()
+    except psycopg2.OperationalError:
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({"success": False, "error": "Database busy, try again"}), 503
+        flash("Database connection pool busy - please try again", "error")
+        return redirect(url_for("index"))
+    except Exception as e:
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({"success": False, "error": str(e)}), 500
+        flash(f"Database error: {e}", "error")
+        return redirect(url_for("index"))
+
+    try:
+        cursor = conn.cursor()
+        # Update the scan status from "Duplicate (Batch #X)" to "Complete"
+        cursor.execute(
+            """
+            UPDATE scans
+            SET status = 'Complete'
+            WHERE id = %s AND status LIKE 'Duplicate%%'
+            """,
+            (scan_id,)
+        )
+        rows_affected = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        if rows_affected > 0:
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({"success": True, "message": "Duplicate resolved"})
+            flash("Duplicate resolved - scan marked as Complete", "success")
+        else:
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({"success": False, "error": "Scan not found or not a duplicate"})
+            flash("Scan not found or not a duplicate", "error")
+
+        return redirect(url_for("index"))
+
+    except Exception as e:
+        print(f"Error resolving duplicate: {e}")
+        try:
+            conn.close()
+        except:
+            pass
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({"success": False, "error": str(e)}), 500
+        flash(f"Error: {e}", "error")
+        return redirect(url_for("index"))
+
+
 @app.route("/delete_scan", methods=["POST"])
 def delete_scan():
     scan_id = request.form.get("scan_id")

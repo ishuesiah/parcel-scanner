@@ -146,6 +146,7 @@
                     {% set batch_num = row.status.split('#')[1].rstrip(')') %}
                     {% if batch_num and batch_num.isdigit() %}
                       Duplicate (<a href="{{ url_for('view_batch', batch_id=batch_num|int) }}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #{{ batch_num }}</a>)
+                      <button type="button" class="btn-resolve" onclick="resolveDuplicate({{ row.id }})" style="margin-left: 8px; padding: 2px 8px; font-size: 0.75rem; background: #f39c12; color: white; border: none; border-radius: 3px; cursor: pointer;">Resolve</button>
                     {% else %}
                       {{ row.status }}
                     {% endif %}
@@ -433,13 +434,13 @@
         ? `<a href="https://${shopUrl}/admin/orders/${scan.order_id}" target="_blank">${scan.customer_name}</a>`
         : scan.customer_name;
 
-      // Format status with batch link if it's a duplicate
+      // Format status with batch link and resolve button if it's a duplicate
       let statusDisplay = scan.status;
       if (scan.status.startsWith('Duplicate (Batch #')) {
         const batchMatch = scan.status.match(/Batch #(\d+)/);
         if (batchMatch) {
           const batchNum = batchMatch[1];
-          statusDisplay = `Duplicate (<a href="/view_batch/${batchNum}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #${batchNum}</a>)`;
+          statusDisplay = `Duplicate (<a href="/view_batch/${batchNum}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #${batchNum}</a>) <button type="button" class="btn-resolve" onclick="resolveDuplicate(${scan.id})" style="margin-left: 8px; padding: 2px 8px; font-size: 0.75rem; background: #f39c12; color: white; border: none; border-radius: 3px; cursor: pointer;">Resolve</button>`;
         }
       }
 
@@ -486,6 +487,41 @@
       });
     });
     {% endif %}
+
+    // ── Resolve duplicate scan ──
+    async function resolveDuplicate(scanId) {
+      if (!confirm('Mark this scan as NOT a duplicate? Status will change to "Complete".')) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`/resolve_duplicate/${scanId}`, {
+          method: 'POST',
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+          }
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          // Update the row's status cell
+          const row = document.querySelector(`tr[data-scan-id="${scanId}"]`);
+          if (row) {
+            row.classList.remove('duplicate-row');
+            const statusCell = row.querySelector('td:last-child');
+            if (statusCell) {
+              statusCell.textContent = 'Complete';
+            }
+          }
+        } else {
+          alert('Error: ' + (data.error || 'Could not resolve duplicate'));
+        }
+      } catch (error) {
+        console.error('Error resolving duplicate:', error);
+        alert('Error resolving duplicate. Please try again.');
+      }
+    }
 
     // ── Cancel batch confirmation ──
     function confirmCancelBatch() {
