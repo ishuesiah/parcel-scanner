@@ -81,6 +81,7 @@ def normalize_carrier(carrier_code):
 
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 from klaviyo_events import KlaviyoEvents  # Klaviyo integration for event tracking
+from orders_sync import OrdersSync, update_order_scanned_status  # Orders sync from Shopify
 from ups_api import UPSAPI  # UPS tracking integration
 from canadapost_api import CanadaPostAPI  # Canada Post tracking integration
 from tracking_utils import split_concatenated_tracking_numbers  # Tracking number split detection
@@ -372,6 +373,14 @@ def get_canadapost_api():
     if _canadapost_api is None:
         _canadapost_api = CanadaPostAPI()
     return _canadapost_api
+
+# ── Orders Sync singleton ──
+_orders_sync = None
+def get_orders_sync():
+    global _orders_sync
+    if _orders_sync is None:
+        _orders_sync = OrdersSync(get_shopify_api(), get_db_connection)
+    return _orders_sync
 
 # ── Stats Cache (5 minute TTL) ──
 _stats_cache = {
@@ -1097,6 +1106,7 @@ def start_background_sync():
     Start background thread that syncs shipments every 5 minutes.
     Also runs UPS and Canada Post tracking refresh every 15 minutes.
     Also runs email backfill and split tracking backfill on startup and once per day.
+    Also syncs orders from Shopify every 5 minutes (incremental).
     """
     def sync_loop():
         # Run backfills immediately on startup
@@ -1108,6 +1118,13 @@ def start_background_sync():
 
         while True:
             sync_shipments_from_shipstation()
+
+            # Sync orders from Shopify (incremental sync)
+            try:
+                orders_sync = get_orders_sync()
+                orders_sync.sync_orders(full_sync=False)
+            except Exception as e:
+                print(f"❌ Orders sync error: {e}")
 
             # Run tracking refresh every 15 minutes (every 3rd cycle)
             tracking_refresh_counter += 1
@@ -1127,6 +1144,7 @@ def start_background_sync():
     thread = threading.Thread(target=sync_loop, daemon=True)
     thread.start()
     print("✓ Background shipments sync started (every 5 minutes)")
+    print("✓ Background orders sync from Shopify started (every 5 minutes)")
     print("✓ Background UPS tracking refresh started (every 15 minutes)")
     print("✓ Split tracking & email backfill will run on startup and once per day")
 
@@ -2479,18 +2497,34 @@ def all_batches():
     try:
         cursor = conn.cursor()
         # Calculate pkg_count dynamically from scans table (so it updates immediately)
+        # Fetch active batches (in_progress status) separately
         cursor.execute("""
           SELECT b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes,
                  COUNT(s.id) as pkg_count
             FROM batches b
             LEFT JOIN scans s ON s.batch_id = b.id
+           WHERE b.status = 'in_progress' OR b.status IS NULL
            GROUP BY b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes
            ORDER BY b.id DESC
         """)
-        batches = cursor.fetchall()
+        active_batches = cursor.fetchall()
+
+        # Fetch all batches (for "All Batches" section - completed/notified ones)
+        cursor.execute("""
+          SELECT b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes,
+                 COUNT(s.id) as pkg_count
+            FROM batches b
+            LEFT JOIN scans s ON s.batch_id = b.id
+           WHERE b.status IN ('recorded', 'notified')
+           GROUP BY b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes
+           ORDER BY b.id DESC
+        """)
+        completed_batches = cursor.fetchall()
+
         return render_template(
             "all_batches.html",
-            batches=batches,
+            active_batches=active_batches,
+            completed_batches=completed_batches,
             shop_url=SHOP_URL,
             version=__version__,
             active_page="all_batches"
@@ -4005,6 +4039,224 @@ def debug_tracking(tracking_number):
     }
 
     return f"<pre>{json.dumps(result, indent=2, default=str)}</pre>"
+
+
+# ============================================================================
+# ALL ORDERS PAGE & ORDERS SYNC API
+# ============================================================================
+
+@app.route("/all_orders", methods=["GET"])
+def all_orders():
+    """
+    Display all orders from local database with search and filtering.
+    Default filter: unfulfilled orders.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get query parameters
+        search_query = request.args.get('q', '').strip()
+        fulfillment_filter = request.args.get('filter', 'unfulfilled')  # unfulfilled, fulfilled, all
+        page = int(request.args.get('page', 1))
+        per_page = 50
+
+        # Build base query
+        base_query = """
+            SELECT id, shopify_order_id, order_number, customer_name, customer_email,
+                   tracking_number, fulfillment_status, financial_status, total_price,
+                   currency, shopify_created_at, scanned_status, cancelled_at
+            FROM orders
+            WHERE cancelled_at IS NULL
+        """
+        params = []
+
+        # Add search filter
+        if search_query:
+            base_query += """ AND (
+                order_number ILIKE %s OR
+                customer_name ILIKE %s OR
+                customer_email ILIKE %s OR
+                tracking_number ILIKE %s
+            )"""
+            search_term = f"%{search_query}%"
+            params.extend([search_term, search_term, search_term, search_term])
+
+        # Add fulfillment filter
+        if fulfillment_filter == 'fulfilled':
+            base_query += " AND fulfillment_status = 'fulfilled'"
+        elif fulfillment_filter == 'unfulfilled':
+            base_query += " AND (fulfillment_status IS NULL OR fulfillment_status = '' OR fulfillment_status = 'unfulfilled' OR fulfillment_status = 'partial')"
+
+        # Get total count for pagination
+        count_query = f"SELECT COUNT(*) as count FROM ({base_query}) as subquery"
+        cursor.execute(count_query, params)
+        total_count = cursor.fetchone()['count']
+
+        # Add ordering and pagination
+        base_query += " ORDER BY shopify_created_at DESC"
+        offset = (page - 1) * per_page
+        base_query += f" LIMIT {per_page} OFFSET {offset}"
+
+        cursor.execute(base_query, params)
+        orders = cursor.fetchall()
+
+        # Calculate pagination info
+        total_pages = (total_count + per_page - 1) // per_page
+
+        # Get sync status
+        sync_status = get_orders_sync().get_sync_status()
+
+        return render_template(
+            "all_orders.html",
+            orders=orders,
+            search_query=search_query,
+            fulfillment_filter=fulfillment_filter,
+            page=page,
+            per_page=per_page,
+            total_count=total_count,
+            total_pages=total_pages,
+            sync_status=sync_status,
+            shop_url=SHOP_URL,
+            version=__version__,
+            active_page="all_orders"
+        )
+    except Exception as e:
+        print(f"Error loading all orders: {e}")
+        flash(f"Error loading orders: {e}", "error")
+        return render_template(
+            "all_orders.html",
+            orders=[],
+            search_query='',
+            fulfillment_filter='unfulfilled',
+            page=1,
+            per_page=50,
+            total_count=0,
+            total_pages=0,
+            sync_status={},
+            shop_url=SHOP_URL,
+            version=__version__,
+            active_page="all_orders"
+        )
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@app.route("/api/orders/sync", methods=["POST"])
+def api_orders_sync():
+    """
+    Trigger a manual orders sync from Shopify.
+    Query params:
+        - full: If 'true', do full 90-day sync. Otherwise incremental.
+    """
+    full_sync = request.args.get('full', 'false').lower() == 'true'
+
+    try:
+        orders_sync = get_orders_sync()
+        count, message = orders_sync.sync_orders(full_sync=full_sync, days_back=90)
+        return jsonify({
+            "success": True,
+            "synced_count": count,
+            "message": message
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route("/api/orders/sync/status", methods=["GET"])
+def api_orders_sync_status():
+    """Get current orders sync status."""
+    try:
+        status = get_orders_sync().get_sync_status()
+        return jsonify(status)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/orders/<order_number>/cancel", methods=["POST"])
+def api_cancel_order(order_number):
+    """
+    Cancel an order (MVP: record-keeping only).
+    Moves order info to cancelled_orders table.
+
+    Request body:
+    {
+        "reason": "customer_cancelled",  # customer_cancelled, duplicate_order, fraud, refund_requested, other
+        "reason_notes": "Optional notes",
+        "cancelled_by": "Jess"
+    }
+    """
+    conn = get_mysql_connection()
+    try:
+        data = request.json or {}
+        cursor = conn.cursor()
+
+        # Get the order
+        cursor.execute("""
+            SELECT id, shopify_order_id, order_number, customer_name, customer_email, tracking_number
+            FROM orders
+            WHERE order_number = %s AND cancelled_at IS NULL
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            return jsonify({"success": False, "error": "Order not found or already cancelled"}), 404
+
+        reason = data.get('reason', 'other')
+        reason_notes = data.get('reason_notes', '')
+        cancelled_by = data.get('cancelled_by', '')
+
+        # Insert into cancelled_orders table
+        cursor.execute("""
+            INSERT INTO cancelled_orders (
+                order_id, shopify_order_id, order_number, tracking_number,
+                customer_name, customer_email, reason, reason_notes, cancelled_by
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            order['id'],
+            order['shopify_order_id'],
+            order['order_number'],
+            order.get('tracking_number'),
+            order['customer_name'],
+            order['customer_email'],
+            reason,
+            reason_notes,
+            cancelled_by
+        ))
+
+        # Update the orders table to mark as cancelled
+        cursor.execute("""
+            UPDATE orders
+            SET cancelled_at = CURRENT_TIMESTAMP,
+                cancel_reason = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (reason, order['id']))
+
+        conn.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"Order #{order_number} cancelled successfully",
+            "order_number": order_number
+        })
+
+    except Exception as e:
+        print(f"Error cancelling order {order_number}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
 
 
 if __name__ == "__main__":

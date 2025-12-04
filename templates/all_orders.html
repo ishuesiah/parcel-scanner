@@ -1,0 +1,647 @@
+{% extends "base.html" %}
+
+{% block title %}All Orders - H&O Parcel Scans{% endblock %}
+
+{% block extra_styles %}
+    /* Page header */
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .page-header h2 {
+      margin: 0;
+    }
+
+    /* Sync status */
+    .sync-status {
+      font-size: 0.85rem;
+      color: #666;
+    }
+    .sync-status.syncing {
+      color: #f39c12;
+    }
+
+    /* Filter and search bar */
+    .filter-bar {
+      background: white;
+      padding: 16px 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .filter-group {
+      display: flex;
+      gap: 8px;
+    }
+
+    .filter-btn {
+      padding: 8px 16px;
+      border: 1px solid #ddd;
+      background: white;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+    .filter-btn:hover {
+      background: #f5f5f5;
+    }
+    .filter-btn.active {
+      background: #534bc4;
+      color: white;
+      border-color: #534bc4;
+    }
+
+    .search-box {
+      flex: 1;
+      min-width: 200px;
+      max-width: 400px;
+    }
+    .search-box input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .search-box input:focus {
+      outline: none;
+      border-color: #534bc4;
+      box-shadow: 0 0 0 2px rgba(83, 75, 196, 0.1);
+    }
+
+    .btn-refresh {
+      padding: 8px 16px;
+      background: #f0f0f0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn-refresh:hover {
+      background: #e5e5e5;
+    }
+    .btn-refresh:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .btn-refresh.syncing .refresh-icon {
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    /* Orders table */
+    .orders-table-container {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+
+    .orders-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .orders-table th {
+      background: #f9f9f9;
+      padding: 12px 16px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: #555;
+      border-bottom: 2px solid #eee;
+    }
+    .orders-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.9rem;
+    }
+    .orders-table tr:hover {
+      background: #fafafa;
+    }
+
+    .order-number-link {
+      color: #534bc4;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .order-number-link:hover {
+      text-decoration: underline;
+    }
+
+    .tracking-number {
+      font-family: monospace;
+      font-size: 0.85rem;
+      color: #666;
+    }
+
+    .fulfillment-badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .fulfillment-badge.fulfilled {
+      background: #e0f7e9;
+      color: #199b76;
+    }
+    .fulfillment-badge.unfulfilled {
+      background: #fff4e5;
+      color: #8a6100;
+    }
+    .fulfillment-badge.partial {
+      background: #e3f2fd;
+      color: #1976d2;
+    }
+
+    .btn-cancel {
+      padding: 4px 10px;
+      background: #952746;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: all 0.2s;
+    }
+    .btn-cancel:hover {
+      opacity: 0.9;
+    }
+
+    /* Pagination */
+    .pagination {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-top: 1px solid #eee;
+    }
+    .pagination-info {
+      color: #666;
+      font-size: 0.9rem;
+    }
+    .pagination-controls {
+      display: flex;
+      gap: 8px;
+    }
+    .pagination-btn {
+      padding: 6px 12px;
+      border: 1px solid #ddd;
+      background: white;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      text-decoration: none;
+      color: #333;
+    }
+    .pagination-btn:hover {
+      background: #f5f5f5;
+    }
+    .pagination-btn:disabled, .pagination-btn.disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #666;
+    }
+    .empty-state h3 {
+      margin-bottom: 8px;
+      color: #333;
+    }
+
+    /* Cancel Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-overlay.show {
+      display: flex;
+    }
+    .modal {
+      background: white;
+      border-radius: 12px;
+      max-width: 500px;
+      width: 90%;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+    .modal-header {
+      padding: 20px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-header h3 {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: #666;
+      padding: 0;
+      line-height: 1;
+    }
+    .modal-body {
+      padding: 20px;
+    }
+    .modal-footer {
+      padding: 16px 20px;
+      border-top: 1px solid #eee;
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    .order-summary {
+      background: #f9f9f9;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+    }
+    .order-summary p {
+      margin: 4px 0;
+      font-size: 0.9rem;
+    }
+    .order-summary strong {
+      color: #333;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+    .form-group select, .form-group input, .form-group textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .form-group textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    .btn-modal-cancel {
+      padding: 10px 20px;
+      background: #f0f0f0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .btn-modal-confirm {
+      padding: 10px 20px;
+      background: #952746;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .btn-modal-confirm:hover {
+      opacity: 0.9;
+    }
+    .btn-modal-confirm:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+{% endblock %}
+
+{% block content %}
+    <div class="page-header">
+      <h2>All Orders</h2>
+      <div class="sync-status" id="syncStatus">
+        {% if sync_status.last_sync_at %}
+          Last synced: {{ sync_status.last_sync_at.strftime('%Y-%m-%d %H:%M') if sync_status.last_sync_at else 'Never' }}
+          ({{ sync_status.last_sync_count or 0 }} orders)
+        {% else %}
+          Not synced yet
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Filter and Search Bar -->
+    <div class="filter-bar">
+      <div class="filter-group">
+        <a href="{{ url_for('all_orders', filter='unfulfilled', q=search_query) }}"
+           class="filter-btn {% if fulfillment_filter == 'unfulfilled' %}active{% endif %}">
+          Unfulfilled
+        </a>
+        <a href="{{ url_for('all_orders', filter='fulfilled', q=search_query) }}"
+           class="filter-btn {% if fulfillment_filter == 'fulfilled' %}active{% endif %}">
+          Fulfilled
+        </a>
+        <a href="{{ url_for('all_orders', filter='all', q=search_query) }}"
+           class="filter-btn {% if fulfillment_filter == 'all' %}active{% endif %}">
+          All
+        </a>
+      </div>
+
+      <form action="{{ url_for('all_orders') }}" method="get" class="search-box">
+        <input type="hidden" name="filter" value="{{ fulfillment_filter }}">
+        <input type="text" name="q" placeholder="Search order #, name, email, tracking..."
+               value="{{ search_query }}">
+      </form>
+
+      <button type="button" class="btn-refresh" id="refreshBtn" onclick="syncOrders(false)">
+        <span class="refresh-icon">&#x21bb;</span>
+        Refresh
+      </button>
+
+      <button type="button" class="btn-refresh" id="fullSyncBtn" onclick="syncOrders(true)"
+              style="background: #e8f5e9; border-color: #c8e6c9;">
+        <span class="refresh-icon">&#x21bb;</span>
+        Full Sync (90 days)
+      </button>
+    </div>
+
+    <!-- Orders Table -->
+    <div class="orders-table-container">
+      {% if orders %}
+        <table class="orders-table">
+          <thead>
+            <tr>
+              <th>Order #</th>
+              <th>Customer</th>
+              <th>Email</th>
+              <th>Tracking #</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for order in orders %}
+              <tr>
+                <td>
+                  <a href="{{ shop_url }}/admin/orders/{{ order.shopify_order_id }}" target="_blank" class="order-number-link">
+                    #{{ order.order_number }}
+                  </a>
+                </td>
+                <td>{{ order.customer_name or '—' }}</td>
+                <td>{{ order.customer_email or '—' }}</td>
+                <td>
+                  {% if order.tracking_number %}
+                    <span class="tracking-number">{{ order.tracking_number }}</span>
+                  {% else %}
+                    <span style="color: #999;">—</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% set status = order.fulfillment_status or 'unfulfilled' %}
+                  <span class="fulfillment-badge {{ status }}">
+                    {{ status|capitalize }}
+                  </span>
+                </td>
+                <td>
+                  <button type="button" class="btn-cancel"
+                          onclick="openCancelModal('{{ order.order_number }}', '{{ order.customer_name }}', '{{ order.customer_email }}', '{{ order.total_price }}', '{{ order.currency }}')">
+                    Cancel
+                  </button>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <!-- Pagination -->
+        <div class="pagination">
+          <div class="pagination-info">
+            Showing {{ ((page - 1) * per_page) + 1 }} - {{ [page * per_page, total_count]|min }} of {{ total_count }} orders
+          </div>
+          <div class="pagination-controls">
+            {% if page > 1 %}
+              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page-1) }}" class="pagination-btn">
+                &larr; Previous
+              </a>
+            {% else %}
+              <span class="pagination-btn disabled">&larr; Previous</span>
+            {% endif %}
+
+            {% if page < total_pages %}
+              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page+1) }}" class="pagination-btn">
+                Next &rarr;
+              </a>
+            {% else %}
+              <span class="pagination-btn disabled">Next &rarr;</span>
+            {% endif %}
+          </div>
+        </div>
+      {% else %}
+        <div class="empty-state">
+          {% if search_query %}
+            <h3>No orders found</h3>
+            <p>No orders match your search "{{ search_query }}"</p>
+          {% else %}
+            <h3>No orders yet</h3>
+            <p>Orders will appear here after the first sync from Shopify.</p>
+            <button type="button" class="btn-refresh" onclick="syncOrders(true)" style="margin-top: 16px;">
+              Run Initial Sync (90 days)
+            </button>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Cancel Order Modal -->
+    <div class="modal-overlay" id="cancelModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Cancel Order <span id="modalOrderNumber"></span></h3>
+          <button type="button" class="modal-close" onclick="closeCancelModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="order-summary" id="orderSummary">
+            <p><strong>Customer:</strong> <span id="modalCustomerName"></span></p>
+            <p><strong>Email:</strong> <span id="modalCustomerEmail"></span></p>
+            <p><strong>Order Total:</strong> <span id="modalOrderTotal"></span></p>
+          </div>
+
+          <div class="form-group">
+            <label for="cancelReason">Reason for cancellation *</label>
+            <select id="cancelReason" required>
+              <option value="">Select a reason...</option>
+              <option value="customer_cancelled">Customer cancelled</option>
+              <option value="duplicate_order">Duplicate order</option>
+              <option value="fraud">Fraud</option>
+              <option value="refund_requested">Refund requested</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="cancelNotes">Additional notes (optional)</label>
+            <textarea id="cancelNotes" placeholder="Enter any additional notes..."></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="cancelledBy">Cancelled by</label>
+            <input type="text" id="cancelledBy" placeholder="Your name (e.g., Jess, Tia)">
+          </div>
+
+          <p style="font-size: 0.85rem; color: #666; margin-top: 16px;">
+            <strong>Note:</strong> This is a record-keeping action. To issue refunds or void ShipStation labels,
+            please use Shopify Admin or ShipStation directly.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-modal-cancel" onclick="closeCancelModal()">Cancel</button>
+          <button type="button" class="btn-modal-confirm" id="confirmCancelBtn" onclick="confirmCancel()">
+            Confirm Cancellation
+          </button>
+        </div>
+      </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let currentOrderNumber = null;
+
+  function openCancelModal(orderNumber, customerName, customerEmail, totalPrice, currency) {
+    currentOrderNumber = orderNumber;
+    document.getElementById('modalOrderNumber').textContent = '#' + orderNumber;
+    document.getElementById('modalCustomerName').textContent = customerName || '—';
+    document.getElementById('modalCustomerEmail').textContent = customerEmail || '—';
+    document.getElementById('modalOrderTotal').textContent = '$' + (parseFloat(totalPrice) || 0).toFixed(2) + ' ' + (currency || 'CAD');
+    document.getElementById('cancelModal').classList.add('show');
+  }
+
+  function closeCancelModal() {
+    currentOrderNumber = null;
+    document.getElementById('cancelModal').classList.remove('show');
+    document.getElementById('cancelReason').value = '';
+    document.getElementById('cancelNotes').value = '';
+    document.getElementById('cancelledBy').value = '';
+  }
+
+  async function confirmCancel() {
+    const reason = document.getElementById('cancelReason').value;
+    if (!reason) {
+      alert('Please select a reason for cancellation.');
+      return;
+    }
+
+    const btn = document.getElementById('confirmCancelBtn');
+    btn.disabled = true;
+    btn.textContent = 'Cancelling...';
+
+    try {
+      const response = await fetch('/api/orders/' + currentOrderNumber + '/cancel', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          reason: reason,
+          reason_notes: document.getElementById('cancelNotes').value,
+          cancelled_by: document.getElementById('cancelledBy').value
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        alert('Order #' + currentOrderNumber + ' has been cancelled.');
+        closeCancelModal();
+        location.reload();
+      } else {
+        alert('Error: ' + (data.error || 'Unknown error'));
+      }
+    } catch (error) {
+      alert('Error cancelling order: ' + error.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Confirm Cancellation';
+    }
+  }
+
+  async function syncOrders(fullSync) {
+    const refreshBtn = document.getElementById('refreshBtn');
+    const fullSyncBtn = document.getElementById('fullSyncBtn');
+
+    refreshBtn.disabled = true;
+    fullSyncBtn.disabled = true;
+    refreshBtn.classList.add('syncing');
+
+    const syncStatus = document.getElementById('syncStatus');
+    syncStatus.textContent = 'Syncing...';
+    syncStatus.classList.add('syncing');
+
+    try {
+      const url = fullSync ? '/api/orders/sync?full=true' : '/api/orders/sync';
+      const response = await fetch(url, {method: 'POST'});
+      const data = await response.json();
+
+      if (data.success) {
+        syncStatus.textContent = 'Synced ' + data.synced_count + ' orders. Refreshing...';
+        setTimeout(() => location.reload(), 1000);
+      } else {
+        alert('Sync failed: ' + (data.error || 'Unknown error'));
+        syncStatus.textContent = 'Sync failed';
+      }
+    } catch (error) {
+      alert('Error syncing: ' + error.message);
+      syncStatus.textContent = 'Sync error';
+    } finally {
+      refreshBtn.disabled = false;
+      fullSyncBtn.disabled = false;
+      refreshBtn.classList.remove('syncing');
+      syncStatus.classList.remove('syncing');
+    }
+  }
+
+  // Close modal on escape key
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      closeCancelModal();
+    }
+  });
+
+  // Close modal on backdrop click
+  document.getElementById('cancelModal').addEventListener('click', function(e) {
+    if (e.target === this) {
+      closeCancelModal();
+    }
+  });
+</script>
+{% endblock %}

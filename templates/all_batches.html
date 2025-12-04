@@ -10,69 +10,226 @@
       border: none; border-radius: 4px; cursor: pointer;
     }
     .btn-delete-small:hover { opacity: 0.92; }
+
+    /* Active batches section styling */
+    .active-batches-section {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .active-batches-section h2 {
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .active-badge {
+      background-color: #e3f2fd;
+      color: #1976d2;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    /* Empty state styling */
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: #666;
+    }
+    .empty-state-icon {
+      font-size: 3rem;
+      margin-bottom: 12px;
+    }
+    .empty-state h3 {
+      font-size: 1.1rem;
+      color: #333;
+      margin-bottom: 16px;
+    }
+    .btn-create-batch {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background-color: #534bc4;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    .btn-create-batch:hover {
+      opacity: 0.92;
+      transform: translateY(-1px);
+    }
+
+    /* Active batch cards */
+    .active-batch-card {
+      background: #f8f9ff;
+      border: 1px solid #e0e4ff;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: all 0.2s;
+    }
+    .active-batch-card:hover {
+      background: #f0f2ff;
+      border-color: #c5caff;
+    }
+    .batch-card-info h3 {
+      font-size: 1.1rem;
+      margin-bottom: 4px;
+    }
+    .batch-card-info h3 a {
+      color: #333;
+      text-decoration: none;
+    }
+    .batch-card-info h3 a:hover {
+      color: #534bc4;
+    }
+    .batch-card-meta {
+      font-size: 0.85rem;
+      color: #666;
+      display: flex;
+      gap: 16px;
+    }
+    .batch-card-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .btn-resume {
+      background-color: #199b76;
+      color: white;
+      padding: 6px 12px;
+      border-radius: 4px;
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+    .btn-resume:hover {
+      opacity: 0.92;
+    }
+
+    /* Completed batches section */
+    .completed-batches-section {
+      margin-top: 24px;
+    }
+    .completed-batches-section h2 {
+      color: #666;
+      font-size: 1.2rem;
+      margin-bottom: 12px;
+    }
 {% endblock %}
 
 {% block content %}
-    <h2>Active Batches</h2>
- <table>
-      <thead>
-        <tr>
-          <th>Batch ID</th>
-          <th>Carrier</th>
-          <th>Created At</th>
-          <th>Pkg Count</th>
-          <th>Status</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-      </tbody>
- </table>
-    <h2>All Batches</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Batch ID</th>
-          <th>Carrier</th>
-          <th>Created At</th>
-          <th>Pkg Count</th>
-          <th>Status</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for b in batches %}
-          <tr>
-            <td>
-              <a class="batch-link" href="{{ url_for('view_batch', batch_id=b.id) }}">
-                Batch {{ b.id }}
+    <!-- Active Batches Section -->
+    <div class="active-batches-section">
+      <h2>
+        Active Batches
+        {% if active_batches %}
+          <span class="active-badge">{{ active_batches|length }}</span>
+        {% endif %}
+      </h2>
+
+      {% if active_batches %}
+        {% for b in active_batches %}
+          <div class="active-batch-card">
+            <div class="batch-card-info">
+              <h3>
+                <a href="{{ url_for('view_batch', batch_id=b.id) }}">
+                  Batch #{{ b.id }}
+                </a>
+              </h3>
+              <div class="batch-card-meta">
+                <span>{{ b.carrier }}</span>
+                <span>{{ b.pkg_count }} packages</span>
+                <span>Started {{ b.created_at }}</span>
+                {% if b.notes %}
+                  <span style="color: #534bc4;">{{ b.notes }}</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="batch-card-actions">
+              <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="btn-resume">
+                Resume Scanning
               </a>
-            </td>
-            <td>{{ b.carrier }}</td>
-            <td>{{ b.created_at }}</td>
-            <td>{{ b.pkg_count }}</td>
-            <td>
-              {% set batch_status = b.get('status', 'in_progress') %}
-              {% if batch_status == 'notified' %}
-                <span style="color: #199b76; font-weight: 500;">✉ Notified</span>
-              {% elif batch_status == 'recorded' %}
-                <span style="color: #f39c12; font-weight: 500;">✓ Picked Up</span>
-              {% else %}
-                <span style="color: #666;">⏳ In Progress</span>
-              {% endif %}
-            </td>
-            <td>
               <form action="{{ url_for('delete_batch') }}" method="post" style="display: inline;"
                     onsubmit="return confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.');">
                 <input type="hidden" name="batch_id" value="{{ b.id }}">
                 <button type="submit" class="btn-delete-small">Delete</button>
               </form>
-              <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="batch-link" style="margin-left:8px;">
-                Resume
-              </a>
-            </td>
-          </tr>
+            </div>
+          </div>
         {% endfor %}
-      </tbody>
-    </table>
+      {% else %}
+        <div class="empty-state">
+          <div class="empty-state-icon">📦</div>
+          <h3>No active batches currently</h3>
+          <a href="{{ url_for('new_batch') }}" class="btn-create-batch">
+            + Create New Batch
+          </a>
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Completed Batches Section -->
+    <div class="completed-batches-section">
+      <h2>Completed Batches</h2>
+      {% if completed_batches %}
+        <table>
+          <thead>
+            <tr>
+              <th>Batch ID</th>
+              <th>Carrier</th>
+              <th>Created At</th>
+              <th>Pkg Count</th>
+              <th>Status</th>
+              <th>Notes</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for b in completed_batches %}
+              <tr>
+                <td>
+                  <a class="batch-link" href="{{ url_for('view_batch', batch_id=b.id) }}">
+                    Batch {{ b.id }}
+                  </a>
+                </td>
+                <td>{{ b.carrier }}</td>
+                <td>{{ b.created_at }}</td>
+                <td>{{ b.pkg_count }}</td>
+                <td>
+                  {% set batch_status = b.get('status', 'in_progress') %}
+                  {% if batch_status == 'notified' %}
+                    <span style="color: #199b76; font-weight: 500;">✉ Notified</span>
+                  {% elif batch_status == 'recorded' %}
+                    <span style="color: #f39c12; font-weight: 500;">✓ Picked Up</span>
+                  {% else %}
+                    <span style="color: #666;">⏳ In Progress</span>
+                  {% endif %}
+                </td>
+                <td>{{ b.notes or '—' }}</td>
+                <td>
+                  <form action="{{ url_for('delete_batch') }}" method="post" style="display: inline;"
+                        onsubmit="return confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.');">
+                    <input type="hidden" name="batch_id" value="{{ b.id }}">
+                    <button type="submit" class="btn-delete-small">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p style="color: #999; padding: 20px 0;">No completed batches yet.</p>
+      {% endif %}
+    </div>
 {% endblock %}
