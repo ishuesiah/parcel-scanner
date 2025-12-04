@@ -225,7 +225,7 @@
               <input type="checkbox" name="batch_ids" value="{{ b.id }}" class="batch-checkbox" onchange="updateSelectedCount()">
               <div class="batch-card-info" style="flex: 1;">
                 <h3>
-                  <a href="{{ url_for('view_batch', batch_id=b.id) }}">
+                  <a href="{{ url_for('edit_batch', batch_id=b.id) }}" title="Click to resume scanning">
                     Batch #{{ b.id }}
                   </a>
                 </h3>
@@ -244,7 +244,10 @@
                   Mark Picked Up
                 </button>
                 <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="btn-resume">
-                  Resume Scanning
+                  Resume
+                </a>
+                <a href="{{ url_for('view_batch', batch_id=b.id) }}" style="color: #666; font-size: 0.85rem; text-decoration: none;" title="View without editing">
+                  View
                 </a>
                 <button type="button" class="btn-delete-small"
                         onclick="if(confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.')) { deleteBatch({{ b.id }}); }">
