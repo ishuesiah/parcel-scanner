@@ -604,12 +604,21 @@
     refreshBtn.classList.add('syncing');
 
     const syncStatus = document.getElementById('syncStatus');
-    syncStatus.textContent = 'Syncing...';
+    syncStatus.textContent = 'Syncing... (this may take a few minutes for large syncs)';
     syncStatus.classList.add('syncing');
 
     try {
       const url = fullSync ? '/api/orders/sync?full=true' : '/api/orders/sync';
       const response = await fetch(url, {method: 'POST'});
+
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('Non-JSON response:', text.substring(0, 200));
+        throw new Error('Server returned an error. Please try again or check the logs.');
+      }
+
       const data = await response.json();
 
       if (data.success) {
@@ -620,8 +629,9 @@
         syncStatus.textContent = 'Sync failed';
       }
     } catch (error) {
+      console.error('Sync error:', error);
       alert('Error syncing: ' + error.message);
-      syncStatus.textContent = 'Sync error';
+      syncStatus.textContent = 'Sync error - please try again';
     } finally {
       refreshBtn.disabled = false;
       fullSyncBtn.disabled = false;

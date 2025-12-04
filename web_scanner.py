@@ -81,7 +81,7 @@ def normalize_carrier(carrier_code):
 
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 from klaviyo_events import KlaviyoEvents  # Klaviyo integration for event tracking
-from orders_sync import OrdersSync, update_order_scanned_status  # Orders sync from Shopify
+from orders_sync import OrdersSync, update_order_scanned_status, init_orders_tables  # Orders sync from Shopify
 from ups_api import UPSAPI  # UPS tracking integration
 from canadapost_api import CanadaPostAPI  # Canada Post tracking integration
 from tracking_utils import split_concatenated_tracking_numbers  # Tracking number split detection
@@ -711,6 +711,7 @@ def update_canadapost_tracking_cache(tracking_numbers, force_refresh=False):
 # Initialize cache tables on startup
 init_shipments_cache()
 init_tracking_status_cache()
+init_orders_tables(get_db_connection)
 normalize_table_collations()
 
 def sync_shipments_from_shipstation():

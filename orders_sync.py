@@ -26,6 +26,162 @@ def now_pst():
     return datetime.now(PST)
 
 
+def init_orders_tables(get_db_connection):
+    """
+    Initialize the orders tables if they don't exist.
+    Called on app startup to ensure tables are ready.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Create orders table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,
+                shopify_order_id TEXT UNIQUE NOT NULL,
+                order_number TEXT NOT NULL,
+                customer_name TEXT,
+                customer_email TEXT,
+                customer_phone TEXT,
+                shipping_address TEXT,
+                billing_address TEXT,
+                note TEXT,
+                note_attributes TEXT,
+                total_price REAL,
+                subtotal_price REAL,
+                total_tax REAL,
+                total_shipping REAL,
+                currency TEXT DEFAULT 'CAD',
+                financial_status TEXT,
+                fulfillment_status TEXT,
+                tracking_number TEXT,
+                scanned_status INTEGER DEFAULT 0,
+                scanned_at TIMESTAMP,
+                shopify_created_at TIMESTAMP,
+                shopify_updated_at TIMESTAMP,
+                synced_at TIMESTAMP,
+                cancelled_at TIMESTAMP,
+                cancel_reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Create indexes for orders
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_shopify_order_id ON orders(shopify_order_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_customer_email ON orders(customer_email)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_tracking ON orders(tracking_number)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_fulfillment ON orders(fulfillment_status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_scanned ON orders(scanned_status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_shopify_updated ON orders(shopify_updated_at)")
+
+        # Create order_line_items table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS order_line_items (
+                id SERIAL PRIMARY KEY,
+                order_id INTEGER NOT NULL,
+                shopify_line_item_id TEXT,
+                sku TEXT,
+                product_id TEXT,
+                variant_id TEXT,
+                product_title TEXT,
+                variant_title TEXT,
+                quantity INTEGER DEFAULT 1,
+                price REAL,
+                total_discount REAL DEFAULT 0,
+                fulfillable_quantity INTEGER,
+                fulfillment_status TEXT,
+                requires_shipping INTEGER DEFAULT 1,
+                picked INTEGER DEFAULT 0,
+                picked_at TIMESTAMP,
+                FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_line_items_order ON order_line_items(order_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_line_items_sku ON order_line_items(sku)")
+
+        # Create order_line_item_options table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS order_line_item_options (
+                id SERIAL PRIMARY KEY,
+                line_item_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                value TEXT,
+                FOREIGN KEY (line_item_id) REFERENCES order_line_items(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_options_line_item ON order_line_item_options(line_item_id)")
+
+        # Create order_sync_status table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS order_sync_status (
+                id SERIAL PRIMARY KEY,
+                sync_type TEXT NOT NULL UNIQUE,
+                last_sync_at TIMESTAMP,
+                last_sync_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'idle',
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Insert initial sync status record if it doesn't exist
+        cursor.execute("""
+            INSERT INTO order_sync_status (sync_type, status)
+            VALUES ('shopify_orders', 'idle')
+            ON CONFLICT (sync_type) DO NOTHING
+        """)
+
+        # Update cancelled_orders table if it exists but lacks columns
+        # First check if table exists
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = 'cancelled_orders'
+            )
+        """)
+        table_exists = cursor.fetchone()
+
+        if not table_exists or not table_exists.get('exists', False):
+            # Create cancelled_orders table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cancelled_orders (
+                    id SERIAL PRIMARY KEY,
+                    order_id INTEGER,
+                    shopify_order_id TEXT,
+                    order_number TEXT NOT NULL,
+                    tracking_number TEXT,
+                    customer_name TEXT,
+                    customer_email TEXT,
+                    reason TEXT NOT NULL,
+                    reason_notes TEXT,
+                    cancelled_by TEXT,
+                    refund_amount REAL,
+                    refund_issued INTEGER DEFAULT 0,
+                    shopify_refund_id TEXT,
+                    refunded_at TIMESTAMP,
+                    shipstation_voided INTEGER DEFAULT 0,
+                    shipstation_shipment_id TEXT,
+                    shipstation_void_response TEXT,
+                    cancelled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_cancelled_order_number ON cancelled_orders(order_number)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_cancelled_shopify_id ON cancelled_orders(shopify_order_id)")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✓ Orders tables initialized")
+
+    except Exception as e:
+        print(f"❌ Error initializing orders tables: {e}")
+
+
 class OrdersSync:
     """
     Handles syncing orders from Shopify to local database.
