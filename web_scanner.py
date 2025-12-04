@@ -89,14 +89,20 @@ from ups_api import UPSAPI  # UPS tracking integration
 from canadapost_api import CanadaPostAPI  # Canada Post tracking integration
 from tracking_utils import split_concatenated_tracking_numbers  # Tracking number split detection
 from address_utils import is_po_box, check_po_box_compatibility  # PO Box detection
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
+
+# Trust proxy headers (Kinsta/cloud providers terminate SSL at the proxy)
+# This ensures url_for generates https:// URLs
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # ── Secure session cookie settings ──
 app.config.update(
     SESSION_COOKIE_SECURE=True,    # only send cookie over HTTPS
     SESSION_COOKIE_HTTPONLY=True,  # JS can't read the cookie
-    SESSION_COOKIE_SAMESITE='Lax'  # basic CSRF protection on cookies
+    SESSION_COOKIE_SAMESITE='Lax',  # basic CSRF protection on cookies
+    PREFERRED_URL_SCHEME='https'   # Force https in url_for
 )
 
 # Read SECRET_KEY from the environment (and fail loudly if missing)
