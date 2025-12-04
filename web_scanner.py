@@ -2195,6 +2195,49 @@ def delete_scan():
     return redirect(url_for("all_scans"))
 
 
+@app.route("/mark_batch_picked_up", methods=["POST"])
+def mark_batch_picked_up():
+    """Mark a batch as picked up from the all_batches page (for old batches without status)."""
+    batch_id = request.form.get("batch_id")
+    if not batch_id:
+        flash("No batch specified.", "error")
+        return redirect(url_for("all_batches"))
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+          SELECT tracking_number
+            FROM scans
+           WHERE batch_id = %s
+        """, (batch_id,))
+        rows = cursor.fetchall()
+        tracking_list = [row["tracking_number"] for row in rows]
+        pkg_count = len(tracking_list)
+        tracking_csv = ",".join(tracking_list)
+
+        cursor.execute("""
+          UPDATE batches
+             SET pkg_count = %s,
+                 tracking_numbers = %s,
+                 status = 'recorded'
+           WHERE id = %s
+        """, (pkg_count, tracking_csv, batch_id))
+        conn.commit()
+
+        flash(f"Batch #{batch_id} marked as picked up.", "success")
+        return redirect(url_for("all_batches"))
+    except psycopg2.Error as e:
+        flash(f"Database Error: {e}", "error")
+        return redirect(url_for("all_batches"))
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
 @app.route("/record_batch", methods=["POST"])
 def record_batch():
     batch_id = session.get("batch_id")

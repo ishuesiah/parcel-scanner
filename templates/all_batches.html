@@ -116,6 +116,19 @@
     .btn-resume:hover {
       opacity: 0.92;
     }
+    .btn-picked-up {
+      background-color: #f39c12;
+      color: white;
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: none;
+      font-size: 0.85rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .btn-picked-up:hover {
+      opacity: 0.92;
+    }
 
     /* Completed batches section */
     .completed-batches-section {
@@ -157,6 +170,12 @@
               </div>
             </div>
             <div class="batch-card-actions">
+              <form action="{{ url_for('mark_batch_picked_up') }}" method="post" style="display: inline;">
+                <input type="hidden" name="batch_id" value="{{ b.id }}">
+                <button type="submit" class="btn-picked-up" title="Mark as picked up to move to Completed">
+                  Mark Picked Up
+                </button>
+              </form>
               <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="btn-resume">
                 Resume Scanning
               </a>
