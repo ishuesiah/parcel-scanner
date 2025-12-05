@@ -83,6 +83,17 @@ def init_orders_tables(get_db_connection):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_scanned ON orders(scanned_status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_shopify_updated ON orders(shopify_updated_at)")
 
+        # Add total_weight_grams column if it doesn't exist (migration)
+        cursor.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'orders' AND column_name = 'total_weight_grams') THEN
+                    ALTER TABLE orders ADD COLUMN total_weight_grams INTEGER DEFAULT 0;
+                END IF;
+            END $$;
+        """)
+
         # Create order_line_items table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS order_line_items (
@@ -100,6 +111,7 @@ def init_orders_tables(get_db_connection):
                 fulfillable_quantity INTEGER,
                 fulfillment_status TEXT,
                 requires_shipping INTEGER DEFAULT 1,
+                grams INTEGER DEFAULT 0,
                 picked INTEGER DEFAULT 0,
                 picked_at TIMESTAMP,
                 FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
@@ -107,6 +119,17 @@ def init_orders_tables(get_db_connection):
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_line_items_order ON order_line_items(order_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_line_items_sku ON order_line_items(sku)")
+
+        # Add grams column if it doesn't exist (migration)
+        cursor.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'order_line_items' AND column_name = 'grams') THEN
+                    ALTER TABLE order_line_items ADD COLUMN grams INTEGER DEFAULT 0;
+                END IF;
+            END $$;
+        """)
 
         # Create order_line_item_options table
         cursor.execute("""
@@ -791,12 +814,15 @@ class OrdersSync:
             discount_allocations = item.get('discount_allocations', [])
             total_discount = sum(float(d.get('amount', 0)) for d in discount_allocations)
 
+            # Get weight in grams (Shopify provides this per item)
+            item_grams = item.get('grams', 0) or 0
+
             cursor.execute("""
                 INSERT INTO order_line_items (
                     order_id, shopify_line_item_id, sku, product_id, variant_id,
                     product_title, variant_title, quantity, price, total_discount,
-                    fulfillable_quantity, fulfillment_status, requires_shipping
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    fulfillable_quantity, fulfillment_status, requires_shipping, grams
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
                 order_id,
@@ -811,7 +837,8 @@ class OrdersSync:
                 total_discount,
                 item.get('fulfillable_quantity', 0),
                 item.get('fulfillment_status'),
-                1 if item.get('requires_shipping', True) else 0
+                1 if item.get('requires_shipping', True) else 0,
+                item_grams
             ))
             result = cursor.fetchone()
             line_item_id = result['id']
@@ -828,6 +855,17 @@ class OrdersSync:
                         INSERT INTO order_line_item_options (line_item_id, name, value)
                         VALUES (%s, %s, %s)
                     """, (line_item_id, prop_name, str(prop_value)))
+
+        # Calculate and update total weight for the order
+        cursor.execute("""
+            UPDATE orders
+            SET total_weight_grams = (
+                SELECT COALESCE(SUM(grams * quantity), 0)
+                FROM order_line_items
+                WHERE order_id = %s
+            )
+            WHERE id = %s
+        """, (order_id, order_id))
 
     def _get_customer_name(self, order: Dict) -> str:
         """Extract customer name from order, trying multiple sources."""

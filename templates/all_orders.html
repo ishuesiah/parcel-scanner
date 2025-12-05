@@ -591,6 +591,8 @@
                   <optgroup label="Order">
                     <option value="order_note" {{ 'selected' if f.field == 'order_note' else '' }}>Order Notes</option>
                     <option value="is_international" {{ 'selected' if f.field == 'is_international' else '' }}>International (non-Canada)</option>
+                    <option value="weight_over" {{ 'selected' if f.field == 'weight_over' else '' }}>Weight Over (grams)</option>
+                    <option value="weight_under" {{ 'selected' if f.field == 'weight_under' else '' }}>Weight Under (grams)</option>
                   </optgroup>
                 </select>
 
@@ -632,6 +634,8 @@
                 <optgroup label="Order">
                   <option value="order_note">Order Notes</option>
                   <option value="is_international">International (non-Canada)</option>
+                  <option value="weight_over">Weight Over (grams)</option>
+                  <option value="weight_under">Weight Under (grams)</option>
                 </optgroup>
               </select>
 
@@ -669,7 +673,9 @@
             'ship_address2': 'Address 2',
             'ship_zip': 'Postal Code',
             'order_note': 'Notes',
-            'is_international': 'International'
+            'is_international': 'International',
+            'weight_over': 'Weight >',
+            'weight_under': 'Weight <'
           } %}
           {% set cond_labels = {
             'contains': 'contains',

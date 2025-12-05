@@ -4736,6 +4736,24 @@ def all_orders():
                     base_query += f" AND {col_prefix}shipping_address::text ILIKE %s"
                     params.append('%"country"%Canada%')
 
+            elif adv_field == 'weight_over':
+                # Filter orders with total weight over X grams
+                try:
+                    weight_threshold = int(adv_value)
+                    base_query += f" AND COALESCE({col_prefix}total_weight_grams, 0) > %s"
+                    params.append(weight_threshold)
+                except ValueError:
+                    pass  # Invalid weight value, skip filter
+
+            elif adv_field == 'weight_under':
+                # Filter orders with total weight under X grams
+                try:
+                    weight_threshold = int(adv_value)
+                    base_query += f" AND COALESCE({col_prefix}total_weight_grams, 0) < %s"
+                    params.append(weight_threshold)
+                except ValueError:
+                    pass  # Invalid weight value, skip filter
+
         # Get total count for pagination
         count_query = f"SELECT COUNT(*) as count FROM ({base_query}) as subquery"
         cursor.execute(count_query, params)
