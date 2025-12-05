@@ -131,6 +131,25 @@ def init_orders_tables(get_db_connection):
             END $$;
         """)
 
+        # Add customs-related columns if they don't exist (migration)
+        cursor.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'order_line_items' AND column_name = 'hs_code') THEN
+                    ALTER TABLE order_line_items ADD COLUMN hs_code TEXT;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'order_line_items' AND column_name = 'country_of_origin') THEN
+                    ALTER TABLE order_line_items ADD COLUMN country_of_origin TEXT DEFAULT 'CA';
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                               WHERE table_name = 'order_line_items' AND column_name = 'customs_description') THEN
+                    ALTER TABLE order_line_items ADD COLUMN customs_description TEXT;
+                END IF;
+            END $$;
+        """)
+
         # Create order_line_item_options table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS order_line_item_options (

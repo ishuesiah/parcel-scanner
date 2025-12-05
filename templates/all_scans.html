@@ -363,8 +363,11 @@
         <div id="modalContent" style="padding: 20px;">
           <p style="text-align: center; color: #666;">Loading...</p>
         </div>
-        <div style="padding: 15px 20px; border-top: 1px solid #eee; display: flex; justify-content: space-between; background: #f9f9f9;">
-          <button onclick="printPackingSlip()" style="padding: 8px 16px; background: #534bc4; color: white; border: none; border-radius: 4px; cursor: pointer;">Print Packing Slip</button>
+        <div style="padding: 15px 20px; border-top: 1px solid #eee; display: flex; justify-content: space-between; background: #f9f9f9; flex-wrap: wrap; gap: 8px;">
+          <div style="display: flex; gap: 8px;">
+            <button onclick="printPackingSlip()" style="padding: 8px 16px; background: #534bc4; color: white; border: none; border-radius: 4px; cursor: pointer;">Print Packing Slip</button>
+            <button id="customsFormBtn" onclick="printCustomsForm()" style="padding: 8px 16px; background: #2e7d32; color: white; border: none; border-radius: 4px; cursor: pointer; display: none;">Print Customs Form</button>
+          </div>
           <button onclick="closeOrderModal()" style="padding: 8px 16px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
         </div>
       </div>
@@ -381,10 +384,12 @@
     const modal = document.getElementById('orderModal');
     const modalContent = document.getElementById('modalContent');
     const modalTitle = document.getElementById('modalTitle');
+    const customsBtn = document.getElementById('customsFormBtn');
 
     modal.style.display = 'flex';
     modalTitle.textContent = `Order #${orderNumber}`;
     modalContent.innerHTML = '<p style="text-align: center; color: #666;">Loading...</p>';
+    customsBtn.style.display = 'none'; // Hide customs button by default
 
     try {
       const response = await fetch(`/api/orders/${orderNumber}/details`);
@@ -394,8 +399,18 @@
         const order = data.order;
         const items = data.line_items;
 
-        let addressHtml = '';
+        // Check if international
+        let isInternational = false;
         const addr = order.shipping_address;
+        if (addr && addr.country) {
+          const country = addr.country.toUpperCase();
+          if (country !== 'CANADA' && country !== 'CA') {
+            isInternational = true;
+            customsBtn.style.display = 'inline-block';
+          }
+        }
+
+        let addressHtml = '';
         if (addr && Object.keys(addr).length > 0) {
           if (addr.raw) {
             addressHtml = `<p style="margin: 0; line-height: 1.6;">${addr.raw}</p>`;
@@ -441,6 +456,10 @@
           itemsHtml = '<p style="color: #999;">No items found</p>';
         }
 
+        // International order badge
+        const internationalBadge = isInternational ?
+          '<span style="display: inline-block; background: #1565c0; color: white; padding: 3px 8px; border-radius: 4px; font-size: 0.8em; margin-left: 8px;">INTERNATIONAL</span>' : '';
+
         modalContent.innerHTML = `
           <div style="margin-bottom: 20px;">
             <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Customer</h4>
@@ -450,7 +469,9 @@
           </div>
 
           <div style="margin-bottom: 20px;">
-            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Shipping Address</h4>
+            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">
+              Shipping Address ${internationalBadge}
+            </h4>
             ${addressHtml}
           </div>
 
@@ -473,6 +494,7 @@
 
           ${order.note ? '<div style="margin-top: 15px; padding: 10px; background: #fff8e1; border-radius: 4px;"><strong>Note:</strong> ' + order.note + '</div>' : ''}
           ${order.cancelled ? '<div style="margin-top: 15px; padding: 10px; background: #ffebee; border-radius: 4px; color: #c62828;"><strong>⚠ This order has been cancelled</strong></div>' : ''}
+          ${isInternational ? '<div style="margin-top: 15px; padding: 10px; background: #e3f2fd; border-radius: 4px; color: #1565c0;"><strong>🌍 International Order</strong> - Requires customs declaration</div>' : ''}
         `;
 
       } else {
@@ -495,6 +517,14 @@
       return;
     }
     window.open('/api/orders/' + currentViewingOrderNumber + '/packing-slip', '_blank');
+  }
+
+  function printCustomsForm() {
+    if (!currentViewingOrderNumber) {
+      alert('No order selected');
+      return;
+    }
+    window.open('/api/orders/' + currentViewingOrderNumber + '/customs-form', '_blank');
   }
 
   document.addEventListener('keydown', function(e) {

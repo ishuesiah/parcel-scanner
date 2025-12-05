@@ -5344,6 +5344,454 @@ def api_get_packing_slip(order_number):
         return f"<html><body><h1>Error</h1><p>{str(e)}</p></body></html>", 500
 
 
+@app.route("/api/orders/<order_number>/customs-info", methods=["GET"])
+def api_get_customs_info(order_number):
+    """
+    Get customs information for an order's line items.
+    Returns whether the order is international and customs details for each item.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get the order
+        cursor.execute("""
+            SELECT id, shipping_address, total_weight_grams
+            FROM orders
+            WHERE order_number = %s
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Order not found"}), 404
+
+        # Check if international
+        is_international = False
+        destination_country = "Canada"
+        shipping_address = {}
+        if order.get('shipping_address'):
+            try:
+                shipping_address = json.loads(order['shipping_address'])
+                country = shipping_address.get('country', '').upper()
+                destination_country = shipping_address.get('country', 'Canada')
+                if country and country not in ['CANADA', 'CA']:
+                    is_international = True
+            except:
+                pass
+
+        # Get line items with customs info
+        cursor.execute("""
+            SELECT id, product_title, variant_title, sku, quantity, price, grams,
+                   hs_code, country_of_origin, customs_description
+            FROM order_line_items
+            WHERE order_id = %s
+            ORDER BY id
+        """, (order['id'],))
+        line_items = cursor.fetchall()
+
+        items_data = []
+        for item in line_items:
+            items_data.append({
+                "id": item['id'],
+                "title": item['product_title'] or '',
+                "variant": item['variant_title'] or '',
+                "sku": item['sku'] or '',
+                "quantity": item['quantity'] or 1,
+                "price": float(item['price']) if item.get('price') else 0,
+                "weight_grams": item.get('grams') or 0,
+                "hs_code": item.get('hs_code') or '',
+                "country_of_origin": item.get('country_of_origin') or 'CA',
+                "customs_description": item.get('customs_description') or item['product_title'] or ''
+            })
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "is_international": is_international,
+            "destination_country": destination_country,
+            "total_weight_grams": order.get('total_weight_grams') or 0,
+            "items": items_data
+        })
+
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/orders/<order_number>/customs-info", methods=["POST"])
+def api_update_customs_info(order_number):
+    """
+    Update customs information for order line items.
+
+    Request body:
+    {
+        "items": [
+            {
+                "id": 123,
+                "hs_code": "4901.99",
+                "country_of_origin": "CA",
+                "customs_description": "Printed paper planner"
+            }
+        ]
+    }
+    """
+    data = request.get_json()
+    if not data or 'items' not in data:
+        return jsonify({"success": False, "error": "Missing items data"}), 400
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Verify order exists
+        cursor.execute("SELECT id FROM orders WHERE order_number = %s", (order_number,))
+        order = cursor.fetchone()
+        if not order:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Order not found"}), 404
+
+        # Update each line item
+        updated_count = 0
+        for item in data['items']:
+            if 'id' not in item:
+                continue
+
+            cursor.execute("""
+                UPDATE order_line_items
+                SET hs_code = %s,
+                    country_of_origin = %s,
+                    customs_description = %s
+                WHERE id = %s AND order_id = %s
+            """, (
+                item.get('hs_code') or None,
+                item.get('country_of_origin') or 'CA',
+                item.get('customs_description') or None,
+                item['id'],
+                order['id']
+            ))
+            updated_count += cursor.rowcount
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"success": True, "updated_count": updated_count})
+
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/orders/<order_number>/customs-form", methods=["GET"])
+def api_get_customs_form(order_number):
+    """
+    Generate a printable customs declaration form for an international order.
+    Returns HTML that can be printed.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get the order
+        cursor.execute("""
+            SELECT id, order_number, customer_name, customer_email,
+                   shipping_address, total_price, total_weight_grams, currency
+            FROM orders
+            WHERE order_number = %s
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            cursor.close()
+            conn.close()
+            return "<html><body><h1>Order not found</h1></body></html>", 404
+
+        # Parse shipping address
+        shipping_address = {}
+        if order.get('shipping_address'):
+            try:
+                shipping_address = json.loads(order['shipping_address'])
+            except:
+                pass
+
+        # Get line items with customs info
+        cursor.execute("""
+            SELECT id, product_title, variant_title, sku, quantity, price, grams,
+                   hs_code, country_of_origin, customs_description
+            FROM order_line_items
+            WHERE order_id = %s
+            ORDER BY id
+        """, (order['id'],))
+        line_items = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        # Calculate totals
+        total_items = sum(item.get('quantity', 1) for item in line_items)
+        total_value = sum(float(item.get('price', 0)) * (item.get('quantity', 1)) for item in line_items)
+        total_weight = order.get('total_weight_grams') or 0
+
+        # Build items HTML
+        items_html = ""
+        for i, item in enumerate(line_items, 1):
+            qty = item.get('quantity', 1)
+            price = float(item.get('price', 0))
+            weight_g = item.get('grams') or 0
+            description = item.get('customs_description') or item.get('product_title') or 'Goods'
+            hs_code = item.get('hs_code') or ''
+            origin = item.get('country_of_origin') or 'CA'
+
+            items_html += f'''
+            <tr>
+                <td style="text-align: center;">{i}</td>
+                <td>{description}</td>
+                <td style="text-align: center;">{qty}</td>
+                <td style="text-align: right;">{weight_g}g</td>
+                <td style="text-align: right;">${price:.2f} {order.get('currency', 'CAD')}</td>
+                <td style="text-align: center;">{origin}</td>
+                <td style="text-align: center;">{hs_code}</td>
+            </tr>'''
+
+        # Sender info - you can customize this
+        sender_name = "Your Company Name"
+        sender_address = "123 Your Street, City, Province, Postal Code, Canada"
+
+        # Recipient info
+        recipient_name = shipping_address.get('name', order.get('customer_name', ''))
+        recipient_addr_parts = []
+        if shipping_address.get('address1'):
+            recipient_addr_parts.append(shipping_address['address1'])
+        if shipping_address.get('address2'):
+            recipient_addr_parts.append(shipping_address['address2'])
+        city_line = ', '.join(filter(None, [
+            shipping_address.get('city'),
+            shipping_address.get('province') or shipping_address.get('province_code'),
+            shipping_address.get('zip')
+        ]))
+        if city_line:
+            recipient_addr_parts.append(city_line)
+        if shipping_address.get('country'):
+            recipient_addr_parts.append(shipping_address['country'])
+        recipient_address = '<br>'.join(recipient_addr_parts)
+
+        html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Customs Declaration - Order #{order_number}</title>
+    <style>
+        @media print {{
+            body {{ margin: 0; }}
+            .no-print {{ display: none; }}
+        }}
+        body {{
+            font-family: Arial, sans-serif;
+            font-size: 11pt;
+            max-width: 8.5in;
+            margin: 0 auto;
+            padding: 20px;
+            color: #000;
+        }}
+        .header {{
+            text-align: center;
+            border-bottom: 2px solid #000;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 18pt;
+            text-transform: uppercase;
+        }}
+        .header h2 {{
+            margin: 5px 0 0 0;
+            font-size: 12pt;
+            font-weight: normal;
+        }}
+        .address-section {{
+            display: flex;
+            gap: 40px;
+            margin-bottom: 20px;
+        }}
+        .address-box {{
+            flex: 1;
+            border: 1px solid #000;
+            padding: 10px;
+        }}
+        .address-box h3 {{
+            margin: 0 0 8px 0;
+            font-size: 10pt;
+            text-transform: uppercase;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 4px;
+        }}
+        .address-box p {{
+            margin: 0;
+            line-height: 1.4;
+        }}
+        .contents-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }}
+        .contents-table th {{
+            background: #f0f0f0;
+            border: 1px solid #000;
+            padding: 6px 8px;
+            text-align: left;
+            font-size: 9pt;
+            text-transform: uppercase;
+        }}
+        .contents-table td {{
+            border: 1px solid #000;
+            padding: 6px 8px;
+            font-size: 10pt;
+        }}
+        .totals {{
+            display: flex;
+            justify-content: flex-end;
+            gap: 30px;
+            margin-bottom: 20px;
+            font-size: 11pt;
+        }}
+        .totals div {{
+            padding: 8px 12px;
+            border: 1px solid #000;
+        }}
+        .totals strong {{
+            margin-right: 10px;
+        }}
+        .declaration {{
+            border: 1px solid #000;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 10pt;
+        }}
+        .declaration h3 {{
+            margin: 0 0 10px 0;
+            font-size: 11pt;
+        }}
+        .signature-section {{
+            display: flex;
+            gap: 40px;
+            margin-top: 30px;
+        }}
+        .signature-box {{
+            flex: 1;
+        }}
+        .signature-line {{
+            border-bottom: 1px solid #000;
+            height: 40px;
+            margin-bottom: 5px;
+        }}
+        .signature-label {{
+            font-size: 9pt;
+            color: #666;
+        }}
+        .print-btn {{
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 10px 20px;
+            background: #534bc4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12pt;
+        }}
+        .print-btn:hover {{
+            background: #3f3a99;
+        }}
+    </style>
+</head>
+<body>
+    <button class="print-btn no-print" onclick="window.print()">Print Form</button>
+
+    <div class="header">
+        <h1>Customs Declaration</h1>
+        <h2>CN 22 / Commercial Invoice</h2>
+        <p style="margin-top: 8px;">Order #{order_number}</p>
+    </div>
+
+    <div class="address-section">
+        <div class="address-box">
+            <h3>From (Sender)</h3>
+            <p>{sender_name}<br>{sender_address}</p>
+        </div>
+        <div class="address-box">
+            <h3>To (Recipient)</h3>
+            <p>{recipient_name}<br>{recipient_address}</p>
+        </div>
+    </div>
+
+    <h3 style="margin-bottom: 10px;">Contents Description</h3>
+    <table class="contents-table">
+        <thead>
+            <tr>
+                <th style="width: 30px;">#</th>
+                <th>Description of Contents</th>
+                <th style="width: 50px; text-align: center;">Qty</th>
+                <th style="width: 70px; text-align: right;">Weight</th>
+                <th style="width: 90px; text-align: right;">Value</th>
+                <th style="width: 60px; text-align: center;">Origin</th>
+                <th style="width: 80px; text-align: center;">HS Code</th>
+            </tr>
+        </thead>
+        <tbody>
+            {items_html}
+        </tbody>
+    </table>
+
+    <div class="totals">
+        <div><strong>Total Items:</strong> {total_items}</div>
+        <div><strong>Total Weight:</strong> {total_weight}g ({total_weight / 1000:.2f}kg)</div>
+        <div><strong>Total Value:</strong> ${total_value:.2f} {order.get('currency', 'CAD')}</div>
+    </div>
+
+    <div class="declaration">
+        <h3>Customs Declaration</h3>
+        <p>I, the undersigned, certify that the information given in this customs declaration is true and correct and that this parcel does not contain any dangerous article or articles prohibited by legislation or by postal or customs regulations.</p>
+        <p style="margin-top: 10px;"><strong>Category of Item:</strong> ☑ Sale of Goods &nbsp;&nbsp; ☐ Gift &nbsp;&nbsp; ☐ Documents &nbsp;&nbsp; ☐ Commercial Sample &nbsp;&nbsp; ☐ Return</p>
+    </div>
+
+    <div class="signature-section">
+        <div class="signature-box">
+            <div class="signature-line"></div>
+            <div class="signature-label">Signature of Sender</div>
+        </div>
+        <div class="signature-box">
+            <div class="signature-line"></div>
+            <div class="signature-label">Date</div>
+        </div>
+    </div>
+
+</body>
+</html>'''
+
+        return html, 200, {'Content-Type': 'text/html'}
+
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return f"<html><body><h1>Error</h1><p>{str(e)}</p></body></html>", 500
+
+
 @app.route("/api/orders/<order_number>/cancel", methods=["POST"])
 def api_cancel_order(order_number):
     """
