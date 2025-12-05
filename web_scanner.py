@@ -2108,48 +2108,85 @@ def _process_single_scan(code, is_ajax):
         # ─────────────────────────────────────────────────────────────────
         cursor = conn.cursor()
 
-        # First, get the order number for this tracking number (if known)
+        # First, find the order number for this tracking number from multiple sources
+        order_number_for_tracking = None
+
+        # Check orders table (synced from Shopify)
         cursor.execute(
-            """
-            SELECT order_number FROM scans
-            WHERE tracking_number = %s
-            ORDER BY scan_date DESC
-            LIMIT 1
-            """,
+            "SELECT order_number FROM orders WHERE tracking_number = %s LIMIT 1",
             (code,)
         )
-        scan_with_order = cursor.fetchone()
+        order_row = cursor.fetchone()
+        if order_row:
+            order_number_for_tracking = order_row.get('order_number')
 
-        # Check if this order is cancelled
-        order_to_check = scan_with_order.get('order_number') if scan_with_order else None
-        if order_to_check and order_to_check not in ('Processing...', 'N/A', ''):
+        # If not found, check scans table (from previous scans)
+        if not order_number_for_tracking:
             cursor.execute(
                 """
-                SELECT reason FROM cancelled_orders
-                WHERE order_number = %s
+                SELECT order_number FROM scans
+                WHERE tracking_number = %s AND order_number IS NOT NULL
+                  AND order_number NOT IN ('Processing...', 'N/A', '')
+                ORDER BY scan_date DESC LIMIT 1
                 """,
-                (order_to_check,)
+                (code,)
+            )
+            scan_row = cursor.fetchone()
+            if scan_row:
+                order_number_for_tracking = scan_row.get('order_number')
+
+        # Now check if this order is in cancelled_orders table
+        cancelled = None
+        if order_number_for_tracking:
+            cursor.execute(
+                "SELECT order_number, reason FROM cancelled_orders WHERE order_number = %s",
+                (order_number_for_tracking,)
             )
             cancelled = cursor.fetchone()
 
-            if cancelled:
-                cancel_reason = cancelled.get('reason', 'Order cancelled')
-                error_msg = f"🚫 CANCELLED ORDER: {order_to_check} - DO NOT SHIP\nReason: {cancel_reason}"
-                print(f"🚫 CANCELLED: {error_msg}")
+        # Also check by tracking number directly in cancelled_orders (in case it's stored there)
+        if not cancelled:
+            cursor.execute(
+                "SELECT order_number, reason FROM cancelled_orders WHERE tracking_number = %s",
+                (code,)
+            )
+            cancelled = cursor.fetchone()
 
-                cursor.close()
-                conn.close()
+        # Also check orders table for Shopify-cancelled orders
+        if not cancelled and order_number_for_tracking:
+            cursor.execute(
+                """
+                SELECT order_number, cancel_reason FROM orders
+                WHERE order_number = %s AND cancelled_at IS NOT NULL
+                """,
+                (order_number_for_tracking,)
+            )
+            shopify_cancelled = cursor.fetchone()
+            if shopify_cancelled:
+                cancelled = {
+                    'order_number': shopify_cancelled.get('order_number'),
+                    'reason': shopify_cancelled.get('cancel_reason') or 'Cancelled in Shopify'
+                }
 
-                if is_ajax:
-                    return jsonify({
-                        "success": False,
-                        "error": error_msg,
-                        "cancelled_order": True,
-                        "order_number": order_to_check,
-                        "cancel_reason": cancel_reason
-                    }), 400
-                flash(error_msg, "error")
-                return redirect(url_for("index"))
+        if cancelled:
+            cancel_order = cancelled.get('order_number', 'Unknown')
+            cancel_reason = cancelled.get('reason', 'Order cancelled')
+            error_msg = f"🚫 CANCELLED ORDER #{cancel_order} - DO NOT SHIP!\nReason: {cancel_reason}"
+            print(f"🚫 BLOCKED CANCELLED ORDER: {cancel_order} (tracking: {code})")
+
+            cursor.close()
+            conn.close()
+
+            if is_ajax:
+                return jsonify({
+                    "success": False,
+                    "error": error_msg,
+                    "cancelled_order": True,
+                    "order_number": cancel_order,
+                    "cancel_reason": cancel_reason
+                }), 400
+            flash(error_msg, "error")
+            return redirect(url_for("index"))
 
         # ─────────────────────────────────────────────────────────────────
         # ✨ Check for duplicate across ALL BATCHES in the database
