@@ -4593,12 +4593,32 @@ def api_get_order_details(order_number):
 
         # Get line items
         cursor.execute("""
-            SELECT product_title, variant_title, sku, quantity, price
+            SELECT id, product_title, variant_title, sku, quantity, price
             FROM order_line_items
             WHERE order_id = %s
             ORDER BY id
         """, (order['id'],))
         line_items = cursor.fetchall()
+
+        # Get properties for each line item
+        line_items_with_props = []
+        for item in line_items:
+            cursor.execute("""
+                SELECT name, value
+                FROM order_line_item_options
+                WHERE line_item_id = %s
+                ORDER BY id
+            """, (item['id'],))
+            properties = cursor.fetchall()
+
+            line_items_with_props.append({
+                "title": item['product_title'] or '',
+                "variant": item['variant_title'] or '',
+                "sku": item['sku'] or '',
+                "quantity": item['quantity'] or 1,
+                "price": float(item['price']) if item.get('price') else 0,
+                "properties": [{"name": p['name'], "value": p['value']} for p in properties]
+            })
 
         cursor.close()
         conn.close()
@@ -4630,16 +4650,7 @@ def api_get_order_details(order_number):
                 "created_at": order['shopify_created_at'].isoformat() if order.get('shopify_created_at') else '',
                 "cancelled": order.get('cancelled_at') is not None
             },
-            "line_items": [
-                {
-                    "title": item['product_title'] or '',
-                    "variant": item['variant_title'] or '',
-                    "sku": item['sku'] or '',
-                    "quantity": item['quantity'] or 1,
-                    "price": float(item['price']) if item.get('price') else 0
-                }
-                for item in line_items
-            ]
+            "line_items": line_items_with_props
         })
 
     except Exception as e:

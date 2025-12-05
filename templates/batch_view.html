@@ -164,19 +164,27 @@
 
         let itemsHtml = '';
         if (items && items.length > 0) {
-          itemsHtml = items.map(item => `
+          itemsHtml = items.map(item => {
+            let propsHtml = '';
+            if (item.properties && item.properties.length > 0) {
+              propsHtml = '<div style="margin-top: 6px; padding: 6px 8px; background: #f8f9fa; border-radius: 4px; font-size: 0.85em;">' +
+                item.properties.map(p => `<div style="color: #555;"><span style="color: #888;">${p.name}:</span> ${p.value}</div>`).join('') +
+                '</div>';
+            }
+            return `
             <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee;">
-              <div>
+              <div style="flex: 1;">
                 <strong>${item.title}</strong>
                 ${item.variant ? '<br><span style="color: #666; font-size: 0.9em;">' + item.variant + '</span>' : ''}
                 ${item.sku ? '<br><span style="color: #999; font-size: 0.85em;">SKU: ' + item.sku + '</span>' : ''}
+                ${propsHtml}
               </div>
-              <div style="text-align: right; white-space: nowrap;">
+              <div style="text-align: right; white-space: nowrap; margin-left: 12px;">
                 <span style="color: #666;">× ${item.quantity}</span>
                 <br><strong>$${item.price.toFixed(2)}</strong>
               </div>
             </div>
-          `).join('');
+          `}).join('');
         } else {
           itemsHtml = '<p style="color: #999;">No items found</p>';
         }
