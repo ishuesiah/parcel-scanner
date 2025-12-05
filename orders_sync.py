@@ -270,6 +270,9 @@ class OrdersSync:
         """
         Sync orders from Shopify API to local database.
 
+        Uses streaming approach: processes each page of orders immediately
+        to avoid memory exhaustion from accumulating all orders.
+
         Args:
             full_sync: If True, sync last `days_back` days. If False, incremental sync.
             days_back: Number of days to look back for full sync (default 90)
@@ -280,7 +283,6 @@ class OrdersSync:
         print(f"Starting orders sync (full_sync={full_sync}, days_back={days_back})...")
         self.update_sync_status('running')
 
-        # Use a single connection for the entire sync to avoid connection exhaustion
         conn = None
         try:
             # Determine time range
@@ -290,49 +292,92 @@ class OrdersSync:
             else:
                 last_sync = self.get_last_sync_time()
                 if last_sync:
-                    # Add timezone if missing
                     if last_sync.tzinfo is None:
                         last_sync = last_sync.replace(tzinfo=timezone.utc)
                     updated_at_min = last_sync
                     print(f"Incremental sync: fetching orders updated since {last_sync}")
                 else:
-                    # First ever sync - get last 30 days
                     updated_at_min = datetime.now(timezone.utc) - timedelta(days=30)
                     print(f"First sync: fetching orders from last 30 days")
 
-            # Fetch orders from Shopify
-            orders = self._fetch_orders_from_shopify(updated_at_min)
-            print(f"Fetched {len(orders)} orders from Shopify")
-
             # Get a single connection for all upserts
             conn = self.get_db_connection()
-            conn.autocommit = False  # Use transactions for batch commits
+            conn.autocommit = False
 
-            # Upsert each order using the shared connection
+            # Stream orders page-by-page to avoid memory exhaustion
             synced_count = 0
             error_count = 0
-            total_orders = len(orders)
+            page = 1
+            page_info = None
 
-            for i, order in enumerate(orders):
-                try:
-                    self._upsert_order_with_conn(conn, order)
-                    synced_count += 1
+            # Build initial params
+            params = {
+                "status": "any",
+                "updated_at_min": updated_at_min.isoformat(),
+                "limit": 250,
+                "fields": "id,name,email,phone,total_price,subtotal_price,total_tax,"
+                          "shipping_lines,financial_status,fulfillment_status,fulfillments,"
+                          "line_items,shipping_address,billing_address,note,note_attributes,"
+                          "created_at,updated_at,cancelled_at,cancel_reason,customer"
+            }
 
-                    # Commit every 100 orders to avoid holding too much in transaction
-                    if synced_count % 100 == 0:
-                        conn.commit()
-                        print(f"Progress: {synced_count}/{total_orders} orders synced...")
-                except Exception as e:
-                    error_count += 1
-                    print(f"Error upserting order {order.get('id')}: {e}")
-                    # Rollback this order but continue with others
+            while True:
+                print(f"Fetching orders page {page}...")
+                time.sleep(0.5)  # Rate limiting
+
+                if page_info:
+                    request_params = {"page_info": page_info, "limit": 250}
+                else:
+                    request_params = params
+
+                # Fetch page with retries
+                response = None
+                next_token = None
+                for retry in range(3):
                     try:
-                        conn.rollback()
-                    except:
-                        pass
+                        response, next_token = self.shopify._make_request("orders.json", params=request_params)
+                        if response:
+                            break
+                    except Exception as e:
+                        print(f"Page {page} fetch error (attempt {retry + 1}/3): {e}")
+                        if retry < 2:
+                            time.sleep(min(2 ** retry, 8))
 
-            # Final commit for remaining orders
-            conn.commit()
+                if not response or "orders" not in response:
+                    print(f"No more orders on page {page}")
+                    break
+
+                batch = response.get("orders", [])
+                if not batch:
+                    break
+
+                print(f"Page {page}: fetched {len(batch)} orders, processing...")
+
+                # Process this page immediately (don't accumulate)
+                for order in batch:
+                    try:
+                        self._upsert_order_with_conn(conn, order)
+                        synced_count += 1
+                    except Exception as e:
+                        error_count += 1
+                        print(f"Error upserting order {order.get('id')}: {e}")
+                        try:
+                            conn.rollback()
+                        except:
+                            pass
+
+                # Commit after each page
+                conn.commit()
+                print(f"Page {page}: committed {len(batch)} orders (total synced: {synced_count})")
+
+                # Clear batch from memory
+                del batch
+
+                if next_token:
+                    page_info = next_token
+                    page += 1
+                else:
+                    break
 
             if error_count > 0:
                 print(f"Warning: {error_count} orders failed to sync")
