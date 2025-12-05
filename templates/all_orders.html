@@ -223,6 +223,120 @@
       color: #534bc4;
     }
 
+    /* Advanced Filters */
+    .advanced-filters {
+      background: white;
+      padding: 16px 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    .filter-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .filter-header h4 {
+      margin: 0;
+      font-size: 0.95rem;
+      color: #333;
+    }
+    .filter-toggle {
+      background: none;
+      border: none;
+      color: #534bc4;
+      cursor: pointer;
+      font-size: 0.85rem;
+      padding: 4px 8px;
+    }
+    .filter-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .filter-row select, .filter-row input {
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .filter-row select {
+      min-width: 140px;
+    }
+    .filter-row input {
+      flex: 1;
+      min-width: 200px;
+    }
+    .filter-row .btn-add-filter {
+      padding: 8px 14px;
+      background: #534bc4;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .filter-row .btn-remove-filter {
+      padding: 8px 10px;
+      background: #dc3545;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .active-filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .filter-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: #e8f4fd;
+      border: 1px solid #b3d4fc;
+      border-radius: 4px;
+      font-size: 0.85rem;
+    }
+    .filter-tag .remove-tag {
+      background: none;
+      border: none;
+      color: #666;
+      cursor: pointer;
+      font-size: 1rem;
+      padding: 0;
+      line-height: 1;
+    }
+    .filter-actions {
+      margin-top: 12px;
+      display: flex;
+      gap: 10px;
+    }
+    .btn-apply-filters {
+      padding: 8px 16px;
+      background: #28a745;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .btn-clear-filters {
+      padding: 8px 16px;
+      background: #f0f0f0;
+      color: #333;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+
     /* Pagination */
     .pagination {
       display: flex;
@@ -434,6 +548,64 @@
         <span class="refresh-icon">&#x21bb;</span>
         Full Sync (90 days)
       </button>
+    </div>
+
+    <!-- Advanced Filters -->
+    <div class="advanced-filters" id="advancedFilters">
+      <div class="filter-header">
+        <h4>Advanced Filters</h4>
+        <button type="button" class="filter-toggle" onclick="toggleFilters()">
+          <span id="filterToggleText">{{ 'Hide' if item_filter or country_filter else 'Show' }}</span>
+        </button>
+      </div>
+      <div id="filterContent" style="{{ '' if item_filter or country_filter else 'display: none;' }}">
+        <form action="{{ url_for('all_orders') }}" method="get" id="advancedFilterForm">
+          <input type="hidden" name="filter" value="{{ fulfillment_filter }}">
+          <input type="hidden" name="q" value="{{ search_query }}">
+
+          <div class="filter-row">
+            <select name="item_condition" id="itemCondition">
+              <option value="contains" {{ 'selected' if item_condition == 'contains' else '' }}>Contains</option>
+              <option value="not_contains" {{ 'selected' if item_condition == 'not_contains' else '' }}>Does not contain</option>
+            </select>
+            <span style="color: #666;">Item Name:</span>
+            <input type="text" name="item_filter" id="itemFilter" placeholder="e.g., planner, charm (separate with commas)"
+                   value="{{ item_filter or '' }}">
+          </div>
+
+          <div class="filter-row">
+            <select name="country_condition" id="countryCondition">
+              <option value="equals" {{ 'selected' if country_condition == 'equals' else '' }}>Equals</option>
+              <option value="not_equals" {{ 'selected' if country_condition == 'not_equals' else '' }}>Not equals</option>
+            </select>
+            <span style="color: #666;">Country:</span>
+            <input type="text" name="country_filter" id="countryFilter" placeholder="e.g., Canada, US"
+                   value="{{ country_filter or '' }}">
+          </div>
+
+          <div class="filter-actions">
+            <button type="submit" class="btn-apply-filters">Apply Filters</button>
+            <button type="button" class="btn-clear-filters" onclick="clearAdvancedFilters()">Clear Filters</button>
+          </div>
+        </form>
+
+        {% if item_filter or country_filter %}
+        <div class="active-filters">
+          {% if item_filter %}
+            <span class="filter-tag">
+              Item {{ 'contains' if item_condition == 'contains' else 'not contains' }}: {{ item_filter }}
+              <button type="button" class="remove-tag" onclick="removeFilter('item')">&times;</button>
+            </span>
+          {% endif %}
+          {% if country_filter %}
+            <span class="filter-tag">
+              Country {{ 'equals' if country_condition == 'equals' else 'not equals' }}: {{ country_filter }}
+              <button type="button" class="remove-tag" onclick="removeFilter('country')">&times;</button>
+            </span>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
     </div>
 
     <!-- Orders Table -->
@@ -1156,5 +1328,37 @@
       sortTable(sortBy, newDir);
     });
   });
+
+  // Advanced filter functions
+  function toggleFilters() {
+    const content = document.getElementById('filterContent');
+    const toggleText = document.getElementById('filterToggleText');
+    if (content.style.display === 'none') {
+      content.style.display = 'block';
+      toggleText.textContent = 'Hide';
+    } else {
+      content.style.display = 'none';
+      toggleText.textContent = 'Show';
+    }
+  }
+
+  function clearAdvancedFilters() {
+    document.getElementById('itemFilter').value = '';
+    document.getElementById('countryFilter').value = '';
+    document.getElementById('itemCondition').value = 'contains';
+    document.getElementById('countryCondition').value = 'equals';
+    // Submit form to reload without filters
+    const form = document.getElementById('advancedFilterForm');
+    form.submit();
+  }
+
+  function removeFilter(filterType) {
+    if (filterType === 'item') {
+      document.getElementById('itemFilter').value = '';
+    } else if (filterType === 'country') {
+      document.getElementById('countryFilter').value = '';
+    }
+    document.getElementById('advancedFilterForm').submit();
+  }
 </script>
 {% endblock %}

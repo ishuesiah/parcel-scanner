@@ -1208,12 +1208,12 @@ def start_background_sync():
                 backfill_missing_emails()
                 last_backfill = datetime.now()
 
-            time.sleep(300)  # 5 minutes
+            time.sleep(120)  # 2 minutes
 
     thread = threading.Thread(target=sync_loop, daemon=True)
     thread.start()
-    print("✓ Background shipments sync started (every 5 minutes)")
-    print("✓ Background orders sync from Shopify started (every 5 minutes)")
+    print("✓ Background shipments sync started (every 2 minutes)")
+    print("✓ Background orders sync from Shopify started (every 2 minutes)")
     print("✓ Background UPS tracking refresh started (every 15 minutes)")
     print("✓ Split tracking & email backfill will run on startup and once per day")
 
@@ -4559,6 +4559,7 @@ def all_orders():
     """
     Display all orders from local database with search and filtering.
     Default filter: unfulfilled orders.
+    Supports advanced filtering by item name and country.
     """
     conn = get_mysql_connection()
     try:
@@ -4570,32 +4571,88 @@ def all_orders():
         page = int(request.args.get('page', 1))
         per_page = 50
 
+        # Advanced filter parameters
+        item_filter = request.args.get('item_filter', '').strip()
+        item_condition = request.args.get('item_condition', 'contains')  # contains, not_contains
+        country_filter = request.args.get('country_filter', '').strip()
+        country_condition = request.args.get('country_condition', 'equals')  # equals, not_equals
+
+        # Determine if we need to join with line items
+        need_line_items_join = bool(item_filter)
+
         # Build base query
-        base_query = """
-            SELECT id, shopify_order_id, order_number, customer_name, customer_email,
-                   tracking_number, fulfillment_status, financial_status, total_price,
-                   currency, shopify_created_at, scanned_status, cancelled_at
-            FROM orders
-            WHERE cancelled_at IS NULL
-        """
+        if need_line_items_join:
+            base_query = """
+                SELECT DISTINCT o.id, o.shopify_order_id, o.order_number, o.customer_name, o.customer_email,
+                       o.tracking_number, o.fulfillment_status, o.financial_status, o.total_price,
+                       o.currency, o.shopify_created_at, o.scanned_status, o.cancelled_at, o.shipping_address
+                FROM orders o
+                INNER JOIN order_line_items li ON li.order_id = o.id
+                WHERE o.cancelled_at IS NULL
+            """
+        else:
+            base_query = """
+                SELECT id, shopify_order_id, order_number, customer_name, customer_email,
+                       tracking_number, fulfillment_status, financial_status, total_price,
+                       currency, shopify_created_at, scanned_status, cancelled_at, shipping_address
+                FROM orders
+                WHERE cancelled_at IS NULL
+            """
         params = []
 
         # Add search filter
         if search_query:
-            base_query += """ AND (
-                order_number ILIKE %s OR
-                customer_name ILIKE %s OR
-                customer_email ILIKE %s OR
-                tracking_number ILIKE %s
-            )"""
+            if need_line_items_join:
+                base_query += """ AND (
+                    o.order_number ILIKE %s OR
+                    o.customer_name ILIKE %s OR
+                    o.customer_email ILIKE %s OR
+                    o.tracking_number ILIKE %s
+                )"""
+            else:
+                base_query += """ AND (
+                    order_number ILIKE %s OR
+                    customer_name ILIKE %s OR
+                    customer_email ILIKE %s OR
+                    tracking_number ILIKE %s
+                )"""
             search_term = f"%{search_query}%"
             params.extend([search_term, search_term, search_term, search_term])
 
         # Add fulfillment filter
+        col_prefix = "o." if need_line_items_join else ""
         if fulfillment_filter == 'fulfilled':
-            base_query += " AND fulfillment_status = 'fulfilled'"
+            base_query += f" AND {col_prefix}fulfillment_status = 'fulfilled'"
         elif fulfillment_filter == 'unfulfilled':
-            base_query += " AND (fulfillment_status IS NULL OR fulfillment_status = '' OR fulfillment_status = 'unfulfilled' OR fulfillment_status = 'partial')"
+            base_query += f" AND ({col_prefix}fulfillment_status IS NULL OR {col_prefix}fulfillment_status = '' OR {col_prefix}fulfillment_status = 'unfulfilled' OR {col_prefix}fulfillment_status = 'partial')"
+
+        # Add item filter (filter by line item product_title)
+        if item_filter:
+            # Split by commas for multiple keywords
+            keywords = [kw.strip() for kw in item_filter.split(',') if kw.strip()]
+            if keywords:
+                if item_condition == 'contains':
+                    # Any keyword matches
+                    keyword_conditions = []
+                    for kw in keywords:
+                        keyword_conditions.append("li.product_title ILIKE %s")
+                        params.append(f"%{kw}%")
+                    base_query += f" AND ({' OR '.join(keyword_conditions)})"
+                else:  # not_contains
+                    # None of the keywords match
+                    for kw in keywords:
+                        base_query += " AND (li.product_title IS NULL OR li.product_title NOT ILIKE %s)"
+                        params.append(f"%{kw}%")
+
+        # Add country filter (filter by shipping_address JSON)
+        if country_filter:
+            # shipping_address is stored as JSON, need to extract country
+            if country_condition == 'equals':
+                base_query += f" AND {col_prefix}shipping_address::text ILIKE %s"
+                params.append(f'%"country"%{country_filter}%')
+            else:  # not_equals
+                base_query += f" AND ({col_prefix}shipping_address IS NULL OR {col_prefix}shipping_address::text NOT ILIKE %s)"
+                params.append(f'%"country"%{country_filter}%')
 
         # Get total count for pagination
         count_query = f"SELECT COUNT(*) as count FROM ({base_query}) as subquery"
@@ -4603,7 +4660,7 @@ def all_orders():
         total_count = cursor.fetchone()['count']
 
         # Add ordering and pagination
-        base_query += " ORDER BY shopify_created_at DESC"
+        base_query += f" ORDER BY {col_prefix}shopify_created_at DESC"
         offset = (page - 1) * per_page
         base_query += f" LIMIT {per_page} OFFSET {offset}"
 
@@ -4628,10 +4685,17 @@ def all_orders():
             sync_status=sync_status,
             shop_url=SHOP_URL,
             version=__version__,
-            active_page="all_orders"
+            active_page="all_orders",
+            # Advanced filter values for template
+            item_filter=item_filter,
+            item_condition=item_condition,
+            country_filter=country_filter,
+            country_condition=country_condition
         )
     except Exception as e:
         print(f"Error loading all orders: {e}")
+        import traceback
+        traceback.print_exc()
         flash(f"Error loading orders: {e}", "error")
         return render_template(
             "all_orders.html",
@@ -4645,7 +4709,11 @@ def all_orders():
             sync_status={},
             shop_url=SHOP_URL,
             version=__version__,
-            active_page="all_orders"
+            active_page="all_orders",
+            item_filter='',
+            item_condition='contains',
+            country_filter='',
+            country_condition='equals'
         )
     finally:
         try:
@@ -4933,9 +5001,13 @@ def api_get_packing_slip(order_number):
                     props_html += f'<div class="prop"><span class="prop-name">{p["name"]}:</span> {p["value"]}</div>'
                 props_html += '</div>'
 
+            # Highlight quantities > 1 with a circle
+            qty = item["quantity"]
+            qty_class = "item-qty highlight-qty" if qty > 1 else "item-qty"
+
             items_html += f'''
             <tr>
-                <td class="item-qty">{item["quantity"]}</td>
+                <td class="{qty_class}"><span class="qty-number">{qty}</span></td>
                 <td class="item-details">
                     <div class="item-title">{item["title"]}</div>
                     {f'<div class="item-variant">{item["variant"]}</div>' if item["variant"] else ''}
@@ -5040,6 +5112,20 @@ def api_get_packing_slip(order_number):
             text-align: center;
             font-weight: bold;
             font-size: 14pt;
+        }}
+        .item-qty .qty-number {{
+            display: inline-block;
+            min-width: 28px;
+            padding: 4px 8px;
+        }}
+        .highlight-qty .qty-number {{
+            border: 3px solid #c62828;
+            border-radius: 50%;
+            background: #ffebee;
+            color: #c62828;
+            font-size: 16pt;
+            min-width: 36px;
+            padding: 6px 10px;
         }}
         .item-title {{
             font-weight: 600;
