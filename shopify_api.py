@@ -55,6 +55,10 @@ class ShopifyAPI:
         max_retries = 5  # Increased from 3 to 5
         retry = 0
 
+        # Debug log for orders.json requests
+        if endpoint == "orders.json" and params:
+            print(f"[Shopify API] GET {endpoint} with params: {params}")
+
         while retry < max_retries:
             try:
                 resp = self.session.request(method, url, params=params, timeout=30)

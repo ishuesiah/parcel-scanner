@@ -468,6 +468,13 @@ class OrdersSync:
                         if retry < 2:
                             time.sleep(min(2 ** retry, 8))
 
+                # Debug: Log what Shopify returned
+                if response:
+                    order_count = len(response.get("orders", []))
+                    sync_log(f"Shopify response: {order_count} orders in array")
+                else:
+                    sync_log(f"Shopify response: None or no 'orders' key")
+
                 if not response or "orders" not in response:
                     sync_log(f"End of orders reached at page {page}")
                     break
