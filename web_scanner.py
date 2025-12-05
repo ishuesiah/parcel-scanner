@@ -4830,14 +4830,17 @@ def api_get_order_details(order_number):
 @app.route("/api/orders/<order_number>/cancel", methods=["POST"])
 def api_cancel_order(order_number):
     """
-    Cancel an order (MVP: record-keeping only).
-    Moves order info to cancelled_orders table.
+    Cancel an order - locally and optionally in Shopify with refund.
 
     Request body:
     {
         "reason": "customer_cancelled",  # customer_cancelled, duplicate_order, fraud, refund_requested, other
         "reason_notes": "Optional notes",
-        "cancelled_by": "Jess"
+        "cancelled_by": "Jess",
+        "cancel_in_shopify": true,      # Whether to cancel in Shopify
+        "issue_refund": true,           # Whether to issue refund
+        "email_customer": true,         # Whether to email customer
+        "restock_inventory": true       # Whether to restock inventory
     }
     """
     conn = get_mysql_connection()
@@ -4847,7 +4850,8 @@ def api_cancel_order(order_number):
 
         # Get the order
         cursor.execute("""
-            SELECT id, shopify_order_id, order_number, customer_name, customer_email, tracking_number
+            SELECT id, shopify_order_id, order_number, customer_name, customer_email,
+                   tracking_number, total_price
             FROM orders
             WHERE order_number = %s AND cancelled_at IS NULL
         """, (order_number,))
@@ -4859,13 +4863,55 @@ def api_cancel_order(order_number):
         reason = data.get('reason', 'other')
         reason_notes = data.get('reason_notes', '')
         cancelled_by = data.get('cancelled_by', '')
+        cancel_in_shopify = data.get('cancel_in_shopify', False)
+        issue_refund = data.get('issue_refund', False)
+        email_customer = data.get('email_customer', True)
+        restock_inventory = data.get('restock_inventory', True)
+
+        shopify_order_id = order.get('shopify_order_id')
+        shopify_cancel_result = None
+        shopify_refund_result = None
+        refund_amount = None
+
+        # Cancel in Shopify if requested and we have a Shopify order ID
+        if cancel_in_shopify and shopify_order_id:
+            try:
+                shopify_api = get_shopify_api()
+
+                # If refund requested, do refund first (before cancelling)
+                if issue_refund:
+                    print(f"[Cancel] Creating refund for Shopify order {shopify_order_id}")
+                    shopify_refund_result = shopify_api.create_refund(shopify_order_id, notify_customer=email_customer)
+                    if shopify_refund_result.get('success'):
+                        refund_amount = shopify_refund_result.get('total_refunded', 0)
+                        print(f"[Cancel] Refund successful: ${refund_amount:.2f}")
+                    else:
+                        print(f"[Cancel] Refund failed: {shopify_refund_result.get('error')}")
+
+                # Cancel the order in Shopify
+                print(f"[Cancel] Cancelling Shopify order {shopify_order_id}")
+                shopify_cancel_result = shopify_api.cancel_order(
+                    shopify_order_id,
+                    reason=reason,
+                    email_customer=email_customer,
+                    restock=restock_inventory
+                )
+
+                if not shopify_cancel_result.get('success'):
+                    # If Shopify cancellation failed, return error but still record locally
+                    print(f"[Cancel] Shopify cancellation failed: {shopify_cancel_result.get('error')}")
+
+            except Exception as e:
+                print(f"[Cancel] Shopify API error: {e}")
+                shopify_cancel_result = {"success": False, "error": str(e)}
 
         # Insert into cancelled_orders table
         cursor.execute("""
             INSERT INTO cancelled_orders (
                 order_id, shopify_order_id, order_number, tracking_number,
-                customer_name, customer_email, reason, reason_notes, cancelled_by
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                customer_name, customer_email, reason, reason_notes, cancelled_by,
+                refund_amount, refund_issued, shopify_refund_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             order['id'],
             order['shopify_order_id'],
@@ -4875,7 +4921,10 @@ def api_cancel_order(order_number):
             order['customer_email'],
             reason,
             reason_notes,
-            cancelled_by
+            cancelled_by,
+            refund_amount,
+            1 if (shopify_refund_result and shopify_refund_result.get('success')) else 0,
+            shopify_refund_result.get('refund_id') if shopify_refund_result else None
         ))
 
         # Update the orders table to mark as cancelled
@@ -4889,14 +4938,32 @@ def api_cancel_order(order_number):
 
         conn.commit()
 
-        return jsonify({
+        # Build response
+        response_data = {
             "success": True,
             "message": f"Order #{order_number} cancelled successfully",
-            "order_number": order_number
-        })
+            "order_number": order_number,
+            "cancelled_locally": True
+        }
+
+        if cancel_in_shopify:
+            response_data["shopify_cancelled"] = shopify_cancel_result.get('success', False) if shopify_cancel_result else False
+            if shopify_cancel_result and not shopify_cancel_result.get('success'):
+                response_data["shopify_error"] = shopify_cancel_result.get('error')
+
+        if issue_refund:
+            response_data["refund_issued"] = shopify_refund_result.get('success', False) if shopify_refund_result else False
+            if shopify_refund_result and shopify_refund_result.get('success'):
+                response_data["refund_amount"] = refund_amount
+            elif shopify_refund_result:
+                response_data["refund_error"] = shopify_refund_result.get('error')
+
+        return jsonify(response_data)
 
     except Exception as e:
         print(f"Error cancelling order {order_number}: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
     finally:
         try:

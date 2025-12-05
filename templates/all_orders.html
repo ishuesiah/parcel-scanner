@@ -544,15 +544,38 @@
             <input type="text" id="cancelledBy" placeholder="Your name (e.g., Jess, Tia)">
           </div>
 
-          <p style="font-size: 0.85rem; color: #666; margin-top: 16px;">
-            <strong>Note:</strong> This is a record-keeping action. To issue refunds or void ShipStation labels,
-            please use Shopify Admin or ShipStation directly.
+          <div style="margin-top: 20px; padding: 16px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0;">
+            <h4 style="margin: 0 0 12px 0; font-size: 0.95rem; color: #333;">Shopify Actions</h4>
+
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; cursor: pointer;">
+              <input type="checkbox" id="cancelInShopify" checked style="width: 18px; height: 18px;">
+              <span>Cancel order in Shopify</span>
+            </label>
+
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; cursor: pointer;">
+              <input type="checkbox" id="issueRefund" checked style="width: 18px; height: 18px;">
+              <span>Issue full refund</span>
+            </label>
+
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; cursor: pointer;">
+              <input type="checkbox" id="emailCustomer" checked style="width: 18px; height: 18px;">
+              <span>Email customer</span>
+            </label>
+
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="restockInventory" checked style="width: 18px; height: 18px;">
+              <span>Restock inventory</span>
+            </label>
+          </div>
+
+          <p style="font-size: 0.85rem; color: #d32f2f; margin-top: 16px;">
+            <strong>Warning:</strong> This will cancel the order in Shopify and issue a refund. This action cannot be undone.
           </p>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn-modal-cancel" onclick="closeCancelModal()">Cancel</button>
-          <button type="button" class="btn-modal-confirm" id="confirmCancelBtn" onclick="confirmCancel()">
-            Confirm Cancellation
+          <button type="button" class="btn-modal-cancel" onclick="closeCancelModal()">Keep Order</button>
+          <button type="button" class="btn-modal-confirm" id="confirmCancelBtn" onclick="confirmCancel()" style="background: #d32f2f;">
+            Cancel &amp; Refund Order
           </button>
         </div>
       </div>
@@ -697,6 +720,11 @@
     document.getElementById('cancelReason').value = '';
     document.getElementById('cancelNotes').value = '';
     document.getElementById('cancelledBy').value = '';
+    // Reset checkboxes to default (checked)
+    document.getElementById('cancelInShopify').checked = true;
+    document.getElementById('issueRefund').checked = true;
+    document.getElementById('emailCustomer').checked = true;
+    document.getElementById('restockInventory').checked = true;
   }
 
   async function confirmCancel() {
@@ -706,9 +734,24 @@
       return;
     }
 
+    const cancelInShopify = document.getElementById('cancelInShopify').checked;
+    const issueRefund = document.getElementById('issueRefund').checked;
+
+    // Double-check with user if they're doing Shopify actions
+    if (cancelInShopify || issueRefund) {
+      const confirmMsg = `Are you sure you want to cancel order #${currentOrderNumber}?\n\n` +
+        (cancelInShopify ? '- Cancel order in Shopify\n' : '') +
+        (issueRefund ? '- Issue full refund to customer\n' : '') +
+        '\nThis action cannot be undone.';
+
+      if (!confirm(confirmMsg)) {
+        return;
+      }
+    }
+
     const btn = document.getElementById('confirmCancelBtn');
     btn.disabled = true;
-    btn.textContent = 'Cancelling...';
+    btn.textContent = issueRefund ? 'Processing refund...' : 'Cancelling...';
 
     try {
       const response = await fetch('/api/orders/' + currentOrderNumber + '/cancel', {
@@ -717,14 +760,32 @@
         body: JSON.stringify({
           reason: reason,
           reason_notes: document.getElementById('cancelNotes').value,
-          cancelled_by: document.getElementById('cancelledBy').value
+          cancelled_by: document.getElementById('cancelledBy').value,
+          cancel_in_shopify: cancelInShopify,
+          issue_refund: issueRefund,
+          email_customer: document.getElementById('emailCustomer').checked,
+          restock_inventory: document.getElementById('restockInventory').checked
         })
       });
 
       const data = await response.json();
 
       if (data.success) {
-        alert('Order #' + currentOrderNumber + ' has been cancelled.');
+        let message = 'Order #' + currentOrderNumber + ' has been cancelled.';
+
+        if (data.shopify_cancelled) {
+          message += '\n\nShopify: Order cancelled';
+        } else if (data.shopify_error) {
+          message += '\n\nShopify cancellation failed: ' + data.shopify_error;
+        }
+
+        if (data.refund_issued) {
+          message += '\nRefund: $' + (data.refund_amount || 0).toFixed(2) + ' refunded';
+        } else if (data.refund_error) {
+          message += '\nRefund failed: ' + data.refund_error;
+        }
+
+        alert(message);
         closeCancelModal();
         location.reload();
       } else {
@@ -734,7 +795,7 @@
       alert('Error cancelling order: ' + error.message);
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Confirm Cancellation';
+      btn.textContent = 'Cancel & Refund Order';
     }
   }
 
