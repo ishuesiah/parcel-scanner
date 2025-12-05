@@ -18,7 +18,7 @@
     </div>
 
     <p class="meta">
-      <em>Created at: {{ batch.created_at }}</em><br>
+      <em>Created at: {{ batch.created_at|friendly_date }}</em><br>
       <em>Parcel Count: {{ batch.pkg_count }}</em><br>
       <em>Tracking Numbers: {{ batch.tracking_numbers }}</em>
     </p>
@@ -60,7 +60,7 @@
                 {{ row.customer_name }}
               {% endif %}
             </td>
-            <td>{{ row.scan_date }}</td>
+            <td>{{ row.scan_date|friendly_date }}</td>
             <td>
               {% if row.status.startswith('Duplicate (Batch #') %}
                 {% set batch_num = row.status.split('#')[1].rstrip(')') %}

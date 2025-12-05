@@ -128,6 +128,33 @@ google = oauth.register(
 )
 
 
+# ── Jinja Template Filters ──
+@app.template_filter('friendly_date')
+def friendly_date_filter(value):
+    """Format datetime as 'Dec 4th 2025 · 2:09pm'"""
+    if not value:
+        return "—"
+
+    # If it's a string, parse it first
+    if isinstance(value, str):
+        try:
+            value = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return value  # Return as-is if can't parse
+
+    day = value.day
+    if 11 <= day <= 13:
+        suffix = 'th'
+    else:
+        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
+
+    month = value.strftime("%b")
+    year = value.strftime("%Y")
+    time = value.strftime("%-I:%M%p").lower()
+
+    return f"{month} {day}{suffix} {year} · {time}"
+
+
 # ── PostgreSQL connection settings (Neon) ──
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 

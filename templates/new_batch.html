@@ -24,7 +24,7 @@
       <div class="batch-header">
         <div class="batch-info">
           <h2>Batch #{{ current_batch.id }} ({{ current_batch.carrier }})</h2>
-          <p><em>Created: {{ current_batch.created_at }}</em></p>
+          <p><em>Created: {{ current_batch.created_at|friendly_date }}</em></p>
           <p>Scans in batch: <strong id="scan-count">{{ scans|length }}</strong></p>
           {% set batch_status = current_batch.get('status', 'in_progress') %}
           <p style="margin-top: 8px;">
@@ -140,7 +140,7 @@
                   {% endif %}
                 </td>
                 <td style="font-size: 0.85rem; color: #666;">{{ row.customer_email or '—' }}</td>
-                <td>{{ row.scan_date }}</td>
+                <td>{{ row.scan_date|friendly_date }}</td>
                 <td>
                   {% if row.status.startswith('Duplicate (Batch #') %}
                     {% set batch_num = row.status.split('#')[1].rstrip(')') %}
