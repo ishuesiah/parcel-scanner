@@ -263,7 +263,7 @@
                 {% endif %}
               </td>
               <td class="scan-datetime">
-                {{ s.scan_date.strftime('%m/%d/%y %I:%M %p') if s.scan_date else '—' }}
+                {{ s.scan_date|friendly_date }}
               </td>
               <td>
                 {% if s.status and s.status.startswith('Duplicate') %}
