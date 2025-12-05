@@ -4559,7 +4559,7 @@ def all_orders():
     """
     Display all orders from local database with search and filtering.
     Default filter: unfulfilled orders.
-    Supports advanced filtering by item name and country.
+    Supports flexible advanced filtering by multiple fields.
     """
     conn = get_mysql_connection()
     try:
@@ -4571,88 +4571,167 @@ def all_orders():
         page = int(request.args.get('page', 1))
         per_page = 50
 
-        # Advanced filter parameters
-        item_filter = request.args.get('item_filter', '').strip()
-        item_condition = request.args.get('item_condition', 'contains')  # contains, not_contains
-        country_filter = request.args.get('country_filter', '').strip()
-        country_condition = request.args.get('country_condition', 'equals')  # equals, not_equals
+        # Advanced filter parameters (new flexible system)
+        adv_field = request.args.get('adv_field', '').strip()
+        adv_condition = request.args.get('adv_condition', 'contains')
+        adv_value = request.args.get('adv_value', '').strip()
 
-        # Determine if we need to join with line items
-        need_line_items_join = bool(item_filter)
+        # Determine if we need to join with line items or options
+        need_line_items_join = adv_field in ('item_name', 'item_sku')
+        need_options_join = adv_field == 'item_options'
 
         # Build base query
-        if need_line_items_join:
+        if need_line_items_join or need_options_join:
             base_query = """
                 SELECT DISTINCT o.id, o.shopify_order_id, o.order_number, o.customer_name, o.customer_email,
                        o.tracking_number, o.fulfillment_status, o.financial_status, o.total_price,
-                       o.currency, o.shopify_created_at, o.scanned_status, o.cancelled_at, o.shipping_address
+                       o.currency, o.shopify_created_at, o.scanned_status, o.cancelled_at, o.shipping_address, o.note
                 FROM orders o
                 INNER JOIN order_line_items li ON li.order_id = o.id
-                WHERE o.cancelled_at IS NULL
             """
+            if need_options_join:
+                base_query += " LEFT JOIN order_line_item_options lio ON lio.line_item_id = li.id"
+            base_query += " WHERE o.cancelled_at IS NULL"
+            col_prefix = "o."
         else:
             base_query = """
                 SELECT id, shopify_order_id, order_number, customer_name, customer_email,
                        tracking_number, fulfillment_status, financial_status, total_price,
-                       currency, shopify_created_at, scanned_status, cancelled_at, shipping_address
+                       currency, shopify_created_at, scanned_status, cancelled_at, shipping_address, note
                 FROM orders
                 WHERE cancelled_at IS NULL
             """
+            col_prefix = ""
         params = []
 
         # Add search filter
         if search_query:
-            if need_line_items_join:
-                base_query += """ AND (
-                    o.order_number ILIKE %s OR
-                    o.customer_name ILIKE %s OR
-                    o.customer_email ILIKE %s OR
-                    o.tracking_number ILIKE %s
-                )"""
-            else:
-                base_query += """ AND (
-                    order_number ILIKE %s OR
-                    customer_name ILIKE %s OR
-                    customer_email ILIKE %s OR
-                    tracking_number ILIKE %s
-                )"""
+            base_query += f""" AND (
+                {col_prefix}order_number ILIKE %s OR
+                {col_prefix}customer_name ILIKE %s OR
+                {col_prefix}customer_email ILIKE %s OR
+                {col_prefix}tracking_number ILIKE %s
+            )"""
             search_term = f"%{search_query}%"
             params.extend([search_term, search_term, search_term, search_term])
 
         # Add fulfillment filter
-        col_prefix = "o." if need_line_items_join else ""
         if fulfillment_filter == 'fulfilled':
             base_query += f" AND {col_prefix}fulfillment_status = 'fulfilled'"
         elif fulfillment_filter == 'unfulfilled':
             base_query += f" AND ({col_prefix}fulfillment_status IS NULL OR {col_prefix}fulfillment_status = '' OR {col_prefix}fulfillment_status = 'unfulfilled' OR {col_prefix}fulfillment_status = 'partial')"
 
-        # Add item filter (filter by line item product_title)
-        if item_filter:
-            # Split by commas for multiple keywords
-            keywords = [kw.strip() for kw in item_filter.split(',') if kw.strip()]
-            if keywords:
-                if item_condition == 'contains':
-                    # Any keyword matches
-                    keyword_conditions = []
+        # Add advanced filter
+        if adv_field and adv_value:
+            keywords = [kw.strip() for kw in adv_value.split(',') if kw.strip()]
+            is_contains = adv_condition in ('contains', 'equals')
+            is_exact = adv_condition in ('equals', 'not_equals')
+
+            if adv_field == 'item_name':
+                # Filter by line item product_title
+                if is_contains:
+                    conds = ["li.product_title ILIKE %s" for _ in keywords]
                     for kw in keywords:
-                        keyword_conditions.append("li.product_title ILIKE %s")
-                        params.append(f"%{kw}%")
-                    base_query += f" AND ({' OR '.join(keyword_conditions)})"
-                else:  # not_contains
-                    # None of the keywords match
+                        params.append(f"%{kw}%" if not is_exact else kw)
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
                     for kw in keywords:
                         base_query += " AND (li.product_title IS NULL OR li.product_title NOT ILIKE %s)"
+                        params.append(f"%{kw}%" if not is_exact else kw)
+
+            elif adv_field == 'item_options':
+                # Filter by line item options (customizations)
+                if is_contains:
+                    conds = ["(lio.name ILIKE %s OR lio.value ILIKE %s)" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f"%{kw}%")
+                        params.append(f"%{kw}%")
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    # Not contains - exclude orders with matching options
+                    for kw in keywords:
+                        base_query += " AND (lio.value IS NULL OR (lio.name NOT ILIKE %s AND lio.value NOT ILIKE %s))"
+                        params.append(f"%{kw}%")
                         params.append(f"%{kw}%")
 
-        # Add country filter (filter by shipping_address JSON)
-        if country_filter:
-            # shipping_address is stored as JSON, need to extract country
-            if country_condition == 'equals':
-                base_query += f" AND {col_prefix}shipping_address::text ILIKE %s"
-                params.append(f'%"country"%{country_filter}%')
-            else:  # not_equals
-                base_query += f" AND ({col_prefix}shipping_address IS NULL OR {col_prefix}shipping_address::text NOT ILIKE %s)"
-                params.append(f'%"country"%{country_filter}%')
+            elif adv_field == 'item_sku':
+                # Filter by SKU
+                if is_contains:
+                    conds = ["li.sku ILIKE %s" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f"%{kw}%" if not is_exact else kw)
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += " AND (li.sku IS NULL OR li.sku NOT ILIKE %s)"
+                        params.append(f"%{kw}%" if not is_exact else kw)
+
+            elif adv_field == 'customer_name':
+                if is_contains:
+                    conds = [f"{col_prefix}customer_name ILIKE %s" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f"%{kw}%")
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += f" AND ({col_prefix}customer_name IS NULL OR {col_prefix}customer_name NOT ILIKE %s)"
+                        params.append(f"%{kw}%")
+
+            elif adv_field == 'customer_email':
+                if is_contains:
+                    conds = [f"{col_prefix}customer_email ILIKE %s" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f"%{kw}%")
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += f" AND ({col_prefix}customer_email IS NULL OR {col_prefix}customer_email NOT ILIKE %s)"
+                        params.append(f"%{kw}%")
+
+            elif adv_field == 'order_note':
+                if is_contains:
+                    conds = [f"{col_prefix}note ILIKE %s" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f"%{kw}%")
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += f" AND ({col_prefix}note IS NULL OR {col_prefix}note NOT ILIKE %s)"
+                        params.append(f"%{kw}%")
+
+            elif adv_field.startswith('ship_'):
+                # Shipping address fields (stored as JSON)
+                json_field_map = {
+                    'ship_country': 'country',
+                    'ship_province': 'province',
+                    'ship_city': 'city',
+                    'ship_address1': 'address1',
+                    'ship_address2': 'address2',
+                    'ship_zip': 'zip'
+                }
+                json_key = json_field_map.get(adv_field, 'country')
+
+                # Use JSON extraction for PostgreSQL
+                if is_contains:
+                    conds = [f"{col_prefix}shipping_address::text ILIKE %s" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f'%"{json_key}"%{kw}%')
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += f" AND ({col_prefix}shipping_address IS NULL OR {col_prefix}shipping_address::text NOT ILIKE %s)"
+                        params.append(f'%"{json_key}"%{kw}%')
+
+            elif adv_field == 'is_international':
+                # Filter for non-Canada orders (international)
+                if adv_condition in ('contains', 'equals'):
+                    # Show international orders (country NOT Canada)
+                    base_query += f" AND ({col_prefix}shipping_address IS NULL OR {col_prefix}shipping_address::text NOT ILIKE %s)"
+                    params.append('%"country"%Canada%')
+                else:
+                    # Show domestic orders (country IS Canada)
+                    base_query += f" AND {col_prefix}shipping_address::text ILIKE %s"
+                    params.append('%"country"%Canada%')
 
         # Get total count for pagination
         count_query = f"SELECT COUNT(*) as count FROM ({base_query}) as subquery"
@@ -4687,10 +4766,9 @@ def all_orders():
             version=__version__,
             active_page="all_orders",
             # Advanced filter values for template
-            item_filter=item_filter,
-            item_condition=item_condition,
-            country_filter=country_filter,
-            country_condition=country_condition
+            adv_field=adv_field,
+            adv_condition=adv_condition,
+            adv_value=adv_value
         )
     except Exception as e:
         print(f"Error loading all orders: {e}")
@@ -4710,10 +4788,9 @@ def all_orders():
             shop_url=SHOP_URL,
             version=__version__,
             active_page="all_orders",
-            item_filter='',
-            item_condition='contains',
-            country_filter='',
-            country_condition='equals'
+            adv_field='',
+            adv_condition='contains',
+            adv_value=''
         )
     finally:
         try:

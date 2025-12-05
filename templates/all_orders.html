@@ -555,54 +555,85 @@
       <div class="filter-header">
         <h4>Advanced Filters</h4>
         <button type="button" class="filter-toggle" onclick="toggleFilters()">
-          <span id="filterToggleText">{{ 'Hide' if item_filter or country_filter else 'Show' }}</span>
+          <span id="filterToggleText">{{ 'Hide' if adv_field else 'Show' }}</span>
         </button>
       </div>
-      <div id="filterContent" style="{{ '' if item_filter or country_filter else 'display: none;' }}">
+      <div id="filterContent" style="{{ '' if adv_field else 'display: none;' }}">
         <form action="{{ url_for('all_orders') }}" method="get" id="advancedFilterForm">
           <input type="hidden" name="filter" value="{{ fulfillment_filter }}">
           <input type="hidden" name="q" value="{{ search_query }}">
 
           <div class="filter-row">
-            <select name="item_condition" id="itemCondition">
-              <option value="contains" {{ 'selected' if item_condition == 'contains' else '' }}>Contains</option>
-              <option value="not_contains" {{ 'selected' if item_condition == 'not_contains' else '' }}>Does not contain</option>
+            <select name="adv_field" id="advField">
+              <option value="">-- Select Field --</option>
+              <optgroup label="Order Items">
+                <option value="item_name" {{ 'selected' if adv_field == 'item_name' else '' }}>Item Name</option>
+                <option value="item_options" {{ 'selected' if adv_field == 'item_options' else '' }}>Item Options (customizations)</option>
+                <option value="item_sku" {{ 'selected' if adv_field == 'item_sku' else '' }}>Item SKU</option>
+              </optgroup>
+              <optgroup label="Customer">
+                <option value="customer_name" {{ 'selected' if adv_field == 'customer_name' else '' }}>Customer Name</option>
+                <option value="customer_email" {{ 'selected' if adv_field == 'customer_email' else '' }}>Customer Email</option>
+              </optgroup>
+              <optgroup label="Shipping Address">
+                <option value="ship_country" {{ 'selected' if adv_field == 'ship_country' else '' }}>Country</option>
+                <option value="ship_province" {{ 'selected' if adv_field == 'ship_province' else '' }}>Province/State</option>
+                <option value="ship_city" {{ 'selected' if adv_field == 'ship_city' else '' }}>City</option>
+                <option value="ship_address1" {{ 'selected' if adv_field == 'ship_address1' else '' }}>Address Line 1</option>
+                <option value="ship_address2" {{ 'selected' if adv_field == 'ship_address2' else '' }}>Address Line 2</option>
+                <option value="ship_zip" {{ 'selected' if adv_field == 'ship_zip' else '' }}>Postal/ZIP Code</option>
+              </optgroup>
+              <optgroup label="Order">
+                <option value="order_note" {{ 'selected' if adv_field == 'order_note' else '' }}>Order Notes</option>
+                <option value="is_international" {{ 'selected' if adv_field == 'is_international' else '' }}>International (non-Canada)</option>
+              </optgroup>
             </select>
-            <span style="color: #666;">Item Name:</span>
-            <input type="text" name="item_filter" id="itemFilter" placeholder="e.g., planner, charm (separate with commas)"
-                   value="{{ item_filter or '' }}">
+
+            <select name="adv_condition" id="advCondition">
+              <option value="contains" {{ 'selected' if adv_condition == 'contains' else '' }}>Contains</option>
+              <option value="not_contains" {{ 'selected' if adv_condition == 'not_contains' else '' }}>Does not contain</option>
+              <option value="equals" {{ 'selected' if adv_condition == 'equals' else '' }}>Equals</option>
+              <option value="not_equals" {{ 'selected' if adv_condition == 'not_equals' else '' }}>Does not equal</option>
+            </select>
+
+            <input type="text" name="adv_value" id="advValue" placeholder="Enter value (comma-separate for multiple)"
+                   value="{{ adv_value or '' }}">
+
+            <button type="submit" class="btn-add-filter">Apply</button>
           </div>
 
-          <div class="filter-row">
-            <select name="country_condition" id="countryCondition">
-              <option value="equals" {{ 'selected' if country_condition == 'equals' else '' }}>Equals</option>
-              <option value="not_equals" {{ 'selected' if country_condition == 'not_equals' else '' }}>Not equals</option>
-            </select>
-            <span style="color: #666;">Country:</span>
-            <input type="text" name="country_filter" id="countryFilter" placeholder="e.g., Canada, US"
-                   value="{{ country_filter or '' }}">
-          </div>
-
-          <div class="filter-actions">
-            <button type="submit" class="btn-apply-filters">Apply Filters</button>
-            <button type="button" class="btn-clear-filters" onclick="clearAdvancedFilters()">Clear Filters</button>
+          <div class="filter-actions" style="margin-top: 8px;">
+            <button type="button" class="btn-clear-filters" onclick="clearAdvancedFilters()">Clear Filter</button>
           </div>
         </form>
 
-        {% if item_filter or country_filter %}
+        {% if adv_field and adv_value %}
         <div class="active-filters">
-          {% if item_filter %}
-            <span class="filter-tag">
-              Item {{ 'contains' if item_condition == 'contains' else 'not contains' }}: {{ item_filter }}
-              <button type="button" class="remove-tag" onclick="removeFilter('item')">&times;</button>
-            </span>
-          {% endif %}
-          {% if country_filter %}
-            <span class="filter-tag">
-              Country {{ 'equals' if country_condition == 'equals' else 'not equals' }}: {{ country_filter }}
-              <button type="button" class="remove-tag" onclick="removeFilter('country')">&times;</button>
-            </span>
-          {% endif %}
+          <span class="filter-tag">
+            {% set field_labels = {
+              'item_name': 'Item Name',
+              'item_options': 'Item Options',
+              'item_sku': 'SKU',
+              'customer_name': 'Customer',
+              'customer_email': 'Email',
+              'ship_country': 'Country',
+              'ship_province': 'Province',
+              'ship_city': 'City',
+              'ship_address1': 'Address 1',
+              'ship_address2': 'Address 2',
+              'ship_zip': 'Postal Code',
+              'order_note': 'Notes',
+              'is_international': 'International'
+            } %}
+            {% set cond_labels = {
+              'contains': 'contains',
+              'not_contains': 'does not contain',
+              'equals': 'equals',
+              'not_equals': 'does not equal'
+            } %}
+            {{ field_labels.get(adv_field, adv_field) }} {{ cond_labels.get(adv_condition, adv_condition) }}: <strong>{{ adv_value }}</strong>
+            <button type="button" class="remove-tag" onclick="clearAdvancedFilters()">&times;</button>
+          </span>
         </div>
         {% endif %}
       </div>
@@ -679,7 +710,7 @@
           </div>
           <div class="pagination-controls">
             {% if page > 1 %}
-              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page-1) }}" class="pagination-btn">
+              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page-1, adv_field=adv_field, adv_condition=adv_condition, adv_value=adv_value) }}" class="pagination-btn">
                 &larr; Previous
               </a>
             {% else %}
@@ -687,7 +718,7 @@
             {% endif %}
 
             {% if page < total_pages %}
-              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page+1) }}" class="pagination-btn">
+              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page+1, adv_field=adv_field, adv_condition=adv_condition, adv_value=adv_value) }}" class="pagination-btn">
                 Next &rarr;
               </a>
             {% else %}
@@ -1343,22 +1374,12 @@
   }
 
   function clearAdvancedFilters() {
-    document.getElementById('itemFilter').value = '';
-    document.getElementById('countryFilter').value = '';
-    document.getElementById('itemCondition').value = 'contains';
-    document.getElementById('countryCondition').value = 'equals';
+    document.getElementById('advField').value = '';
+    document.getElementById('advCondition').value = 'contains';
+    document.getElementById('advValue').value = '';
     // Submit form to reload without filters
     const form = document.getElementById('advancedFilterForm');
     form.submit();
-  }
-
-  function removeFilter(filterType) {
-    if (filterType === 'item') {
-      document.getElementById('itemFilter').value = '';
-    } else if (filterType === 'country') {
-      document.getElementById('countryFilter').value = '';
-    }
-    document.getElementById('advancedFilterForm').submit();
   }
 </script>
 {% endblock %}
