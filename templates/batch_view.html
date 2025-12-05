@@ -18,7 +18,7 @@
     </div>
 
     <p class="meta">
-      <em>Created at: {{ batch.created_at }}</em><br>
+      <em>Created at: {{ batch.created_at|friendly_date }}</em><br>
       <em>Parcel Count: {{ batch.pkg_count }}</em><br>
       <em>Tracking Numbers: {{ batch.tracking_numbers }}</em>
     </p>
@@ -43,8 +43,8 @@
             <td>{{ row.carrier }}</td>
             <td>{{ row.shipstation_batch_number or '' }}</td>
             <td>
-              {% if row.order_id %}
-                <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+              {% if row.order_number and row.order_number not in ['Processing...', 'N/A', ''] %}
+                <a href="#" onclick="showOrderDetails('{{ row.order_number }}'); return false;" style="color: #2d85f8; text-decoration: none;">
                   {{ row.order_number }}
                 </a>
               {% else %}
@@ -52,20 +52,21 @@
               {% endif %}
             </td>
             <td>
-              {% if row.order_id %}
-                <a href="https://{{ shop_url }}/admin/orders/{{ row.order_id }}" target="_blank">
+              {% if row.order_number and row.order_number not in ['Processing...', 'N/A', ''] %}
+                <a href="#" onclick="showOrderDetails('{{ row.order_number }}'); return false;" style="color: #2d85f8; text-decoration: none;">
                   {{ row.customer_name }}
                 </a>
               {% else %}
                 {{ row.customer_name }}
               {% endif %}
             </td>
-            <td>{{ row.scan_date }}</td>
+            <td>{{ row.scan_date|friendly_date }}</td>
             <td>
               {% if row.status.startswith('Duplicate (Batch #') %}
                 {% set batch_num = row.status.split('#')[1].rstrip(')') %}
                 {% if batch_num and batch_num.isdigit() %}
                   Duplicate (<a href="{{ url_for('view_batch', batch_id=batch_num|int) }}" style="color: #2d85f8; text-decoration: none; font-weight: 500;">Batch #{{ batch_num }}</a>)
+                  <button type="button" class="btn-resolve" onclick="resolveDuplicate({{ row.id }})" style="margin-left: 8px; padding: 2px 8px; font-size: 0.75rem; background: #f39c12; color: white; border: none; border-radius: 3px; cursor: pointer;">Resolve</button>
                 {% else %}
                   {{ row.status }}
                 {% endif %}
@@ -77,4 +78,174 @@
         {% endfor %}
       </tbody>
     </table>
+
+    <!-- Order Details Modal -->
+    <div id="orderModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;">
+      <div style="background: white; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; position: relative; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+        <div style="padding: 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="margin: 0; color: #333;" id="modalTitle">Order Details</h3>
+          <button onclick="closeOrderModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #666;">&times;</button>
+        </div>
+        <div id="modalContent" style="padding: 20px;">
+          <p style="text-align: center; color: #666;">Loading...</p>
+        </div>
+        <div style="padding: 15px 20px; border-top: 1px solid #eee; text-align: right; background: #f9f9f9;">
+          <button onclick="closeOrderModal()" style="padding: 8px 16px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+        </div>
+      </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function resolveDuplicate(scanId) {
+    if (!confirm('Mark this scan as NOT a duplicate? Status will change to "Complete".')) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/resolve_duplicate/${scanId}`, {
+        method: 'POST',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest'
+        }
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        window.location.reload();
+      } else {
+        alert('Error: ' + (data.error || 'Could not resolve duplicate'));
+      }
+    } catch (error) {
+      console.error('Error resolving duplicate:', error);
+      alert('Error resolving duplicate. Please try again.');
+    }
+  }
+
+  // ── Order Details Modal ──
+  async function showOrderDetails(orderNumber) {
+    const modal = document.getElementById('orderModal');
+    const modalContent = document.getElementById('modalContent');
+    const modalTitle = document.getElementById('modalTitle');
+
+    modal.style.display = 'flex';
+    modalTitle.textContent = `Order #${orderNumber}`;
+    modalContent.innerHTML = '<p style="text-align: center; color: #666;">Loading...</p>';
+
+    try {
+      const response = await fetch(`/api/orders/${orderNumber}/details`);
+      const data = await response.json();
+
+      if (data.success) {
+        const order = data.order;
+        const items = data.line_items;
+
+        let addressHtml = '';
+        const addr = order.shipping_address;
+        if (addr && Object.keys(addr).length > 0) {
+          if (addr.raw) {
+            addressHtml = `<p style="margin: 0; line-height: 1.6;">${addr.raw}</p>`;
+          } else {
+            addressHtml = `
+              <p style="margin: 0; line-height: 1.6;">
+                ${addr.name || ''}<br>
+                ${addr.address1 || ''}${addr.address2 ? '<br>' + addr.address2 : ''}<br>
+                ${addr.city || ''}, ${addr.province_code || addr.province || ''} ${addr.zip || ''}<br>
+                ${addr.country || ''}
+                ${addr.phone ? '<br>Phone: ' + addr.phone : ''}
+              </p>
+            `;
+          }
+        } else {
+          addressHtml = '<p style="color: #999;">No shipping address</p>';
+        }
+
+        let itemsHtml = '';
+        if (items && items.length > 0) {
+          itemsHtml = items.map(item => {
+            let propsHtml = '';
+            if (item.properties && item.properties.length > 0) {
+              propsHtml = '<div style="margin-top: 6px; padding: 6px 8px; background: #f8f9fa; border-radius: 4px; font-size: 0.85em;">' +
+                item.properties.map(p => `<div style="color: #555;"><span style="color: #888;">${p.name}:</span> ${p.value}</div>`).join('') +
+                '</div>';
+            }
+            return `
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee;">
+              <div style="flex: 1;">
+                <strong>${item.title}</strong>
+                ${item.variant ? '<br><span style="color: #666; font-size: 0.9em;">' + item.variant + '</span>' : ''}
+                ${item.sku ? '<br><span style="color: #999; font-size: 0.85em;">SKU: ' + item.sku + '</span>' : ''}
+                ${propsHtml}
+              </div>
+              <div style="text-align: right; white-space: nowrap; margin-left: 12px;">
+                <span style="color: #666;">× ${item.quantity}</span>
+                <br><strong>$${item.price.toFixed(2)}</strong>
+              </div>
+            </div>
+          `}).join('');
+        } else {
+          itemsHtml = '<p style="color: #999;">No items found</p>';
+        }
+
+        modalContent.innerHTML = `
+          <div style="margin-bottom: 20px;">
+            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Customer</h4>
+            <p style="margin: 0;"><strong>${order.customer_name || 'Unknown'}</strong></p>
+            <p style="margin: 4px 0; color: #666;">${order.customer_email || ''}</p>
+            ${order.customer_phone ? '<p style="margin: 4px 0; color: #666;">' + order.customer_phone + '</p>' : ''}
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Shipping Address</h4>
+            ${addressHtml}
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Items Ordered</h4>
+            ${itemsHtml}
+          </div>
+
+          <div style="background: #f5f5f5; padding: 12px; border-radius: 4px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+              <span>Subtotal:</span><span>$${order.subtotal_price.toFixed(2)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+              <span>Tax:</span><span>$${order.total_tax.toFixed(2)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.1em; border-top: 1px solid #ddd; padding-top: 8px; margin-top: 8px;">
+              <span>Total:</span><span>$${order.total_price.toFixed(2)}</span>
+            </div>
+          </div>
+
+          ${order.note ? '<div style="margin-top: 15px; padding: 10px; background: #fff8e1; border-radius: 4px;"><strong>Note:</strong> ' + order.note + '</div>' : ''}
+          ${order.cancelled ? '<div style="margin-top: 15px; padding: 10px; background: #ffebee; border-radius: 4px; color: #c62828;"><strong>⚠ This order has been cancelled</strong></div>' : ''}
+        `;
+
+      } else {
+        modalContent.innerHTML = `<p style="text-align: center; color: #c62828;">Error: ${data.error || 'Could not load order'}</p>`;
+      }
+    } catch (error) {
+      console.error('Error loading order:', error);
+      modalContent.innerHTML = '<p style="text-align: center; color: #c62828;">Error loading order details</p>';
+    }
+  }
+
+  function closeOrderModal() {
+    document.getElementById('orderModal').style.display = 'none';
+  }
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      closeOrderModal();
+    }
+  });
+
+  document.getElementById('orderModal').addEventListener('click', function(e) {
+    if (e.target === this) {
+      closeOrderModal();
+    }
+  });
+</script>
 {% endblock %}

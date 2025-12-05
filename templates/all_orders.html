@@ -1,0 +1,1588 @@
+{% extends "base.html" %}
+
+{% block title %}All Orders - H&O Parcel Scans{% endblock %}
+
+{% block extra_styles %}
+    /* Page header */
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .page-header h2 {
+      margin: 0;
+    }
+
+    /* Sync status */
+    .sync-status {
+      font-size: 0.85rem;
+      color: #666;
+    }
+    .sync-status.syncing {
+      color: #f39c12;
+    }
+
+    /* Filter and search bar */
+    .filter-bar {
+      background: white;
+      padding: 16px 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .filter-group {
+      display: flex;
+      gap: 8px;
+    }
+
+    .filter-btn {
+      padding: 8px 16px;
+      border: 1px solid #ddd;
+      background: white;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+    .filter-btn:hover {
+      background: #f5f5f5;
+    }
+    .filter-btn.active {
+      background: #534bc4;
+      color: white;
+      border-color: #534bc4;
+    }
+
+    .search-box {
+      flex: 1;
+      min-width: 200px;
+      max-width: 400px;
+    }
+    .search-box input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .search-box input:focus {
+      outline: none;
+      border-color: #534bc4;
+      box-shadow: 0 0 0 2px rgba(83, 75, 196, 0.1);
+    }
+
+    .btn-refresh {
+      padding: 8px 16px;
+      background: #f0f0f0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn-refresh:hover {
+      background: #e5e5e5;
+    }
+    .btn-refresh:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .btn-refresh.syncing .refresh-icon {
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    /* Orders table */
+    .orders-table-container {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+
+    .orders-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .orders-table th {
+      background: #f9f9f9;
+      padding: 12px 16px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: #555;
+      border-bottom: 2px solid #eee;
+    }
+    .orders-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.9rem;
+    }
+    .orders-table tr:hover {
+      background: #fafafa;
+    }
+
+    .order-number-link {
+      color: #534bc4;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .order-number-link:hover {
+      text-decoration: underline;
+    }
+
+    .tracking-number {
+      font-family: monospace;
+      font-size: 0.85rem;
+      color: #666;
+    }
+
+    .fulfillment-badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .fulfillment-badge.fulfilled {
+      background: #e0f7e9;
+      color: #199b76;
+    }
+    .fulfillment-badge.unfulfilled {
+      background: #fff4e5;
+      color: #8a6100;
+    }
+    .fulfillment-badge.partial {
+      background: #e3f2fd;
+      color: #1976d2;
+    }
+
+    .btn-cancel {
+      padding: 4px 10px;
+      background: #952746;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: all 0.2s;
+    }
+    .btn-cancel:hover {
+      opacity: 0.9;
+    }
+
+    .order-age {
+      font-size: 0.85rem;
+      color: #666;
+      white-space: nowrap;
+    }
+    .order-age.recent {
+      color: #199b76;
+      font-weight: 500;
+    }
+    .order-age.old {
+      color: #c62828;
+    }
+
+    /* Sortable table headers */
+    .sortable {
+      cursor: pointer;
+      user-select: none;
+      position: relative;
+      padding-right: 20px !important;
+    }
+    .sortable:hover {
+      background: #eee;
+    }
+    .sortable::after {
+      content: '⇅';
+      position: absolute;
+      right: 4px;
+      color: #999;
+      font-size: 0.8em;
+    }
+    .sortable.asc::after {
+      content: '↑';
+      color: #534bc4;
+    }
+    .sortable.desc::after {
+      content: '↓';
+      color: #534bc4;
+    }
+
+    /* Advanced Filters */
+    .advanced-filters {
+      background: white;
+      padding: 16px 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    .filter-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .filter-header h4 {
+      margin: 0;
+      font-size: 0.95rem;
+      color: #333;
+    }
+    .filter-toggle {
+      background: none;
+      border: none;
+      color: #534bc4;
+      cursor: pointer;
+      font-size: 0.85rem;
+      padding: 4px 8px;
+    }
+    .filter-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .filter-row select, .filter-row input {
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .filter-row select {
+      min-width: 140px;
+    }
+    .filter-row input {
+      flex: 1;
+      min-width: 200px;
+    }
+    .filter-row .btn-add-filter {
+      padding: 8px 14px;
+      background: #534bc4;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .filter-row .btn-remove-filter {
+      padding: 8px 10px;
+      background: #dc3545;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .active-filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .filter-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: #e8f4fd;
+      border: 1px solid #b3d4fc;
+      border-radius: 4px;
+      font-size: 0.85rem;
+    }
+    .filter-tag .remove-tag {
+      background: none;
+      border: none;
+      color: #666;
+      cursor: pointer;
+      font-size: 1rem;
+      padding: 0;
+      line-height: 1;
+    }
+    .filter-actions {
+      margin-top: 12px;
+      display: flex;
+      gap: 10px;
+    }
+    .btn-apply-filters {
+      padding: 8px 16px;
+      background: #28a745;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .btn-clear-filters {
+      padding: 8px 16px;
+      background: #f0f0f0;
+      color: #333;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+
+    /* Pagination */
+    .pagination {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-top: 1px solid #eee;
+    }
+    .pagination-info {
+      color: #666;
+      font-size: 0.9rem;
+    }
+    .pagination-controls {
+      display: flex;
+      gap: 8px;
+    }
+    .pagination-btn {
+      padding: 6px 12px;
+      border: 1px solid #ddd;
+      background: white;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      text-decoration: none;
+      color: #333;
+    }
+    .pagination-btn:hover {
+      background: #f5f5f5;
+    }
+    .pagination-btn:disabled, .pagination-btn.disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #666;
+    }
+    .empty-state h3 {
+      margin-bottom: 8px;
+      color: #333;
+    }
+
+    /* Cancel Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-overlay.show {
+      display: flex;
+    }
+    .modal {
+      background: white;
+      border-radius: 12px;
+      max-width: 500px;
+      width: 90%;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+    .modal-header {
+      padding: 20px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-header h3 {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: #666;
+      padding: 0;
+      line-height: 1;
+    }
+    .modal-body {
+      padding: 20px;
+    }
+    .modal-footer {
+      padding: 16px 20px;
+      border-top: 1px solid #eee;
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    .order-summary {
+      background: #f9f9f9;
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 20px;
+    }
+    .order-summary p {
+      margin: 4px 0;
+      font-size: 0.9rem;
+    }
+    .order-summary strong {
+      color: #333;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+    .form-group select, .form-group input, .form-group textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .form-group textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    .btn-modal-cancel {
+      padding: 10px 20px;
+      background: #f0f0f0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .btn-modal-confirm {
+      padding: 10px 20px;
+      background: #952746;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .btn-modal-confirm:hover {
+      opacity: 0.9;
+    }
+    .btn-modal-confirm:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+{% endblock %}
+
+{% block content %}
+    <div class="page-header">
+      <h2>All Orders</h2>
+      <div class="sync-status" id="syncStatus">
+        {% if sync_status.last_sync_at %}
+          Last synced: {{ sync_status.last_sync_at.strftime('%Y-%m-%d %H:%M') if sync_status.last_sync_at else 'Never' }}
+          ({{ sync_status.last_sync_count or 0 }} orders)
+        {% else %}
+          Not synced yet
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Filter and Search Bar -->
+    <div class="filter-bar">
+      <div class="filter-group">
+        <a href="{{ url_for('all_orders', filter='unfulfilled', q=search_query) }}"
+           class="filter-btn {% if fulfillment_filter == 'unfulfilled' %}active{% endif %}">
+          Unfulfilled
+        </a>
+        <a href="{{ url_for('all_orders', filter='fulfilled', q=search_query) }}"
+           class="filter-btn {% if fulfillment_filter == 'fulfilled' %}active{% endif %}">
+          Fulfilled
+        </a>
+        <a href="{{ url_for('all_orders', filter='all', q=search_query) }}"
+           class="filter-btn {% if fulfillment_filter == 'all' %}active{% endif %}">
+          All
+        </a>
+      </div>
+
+      <form action="{{ url_for('all_orders') }}" method="get" class="search-box">
+        <input type="hidden" name="filter" value="{{ fulfillment_filter }}">
+        <input type="text" name="q" placeholder="Search order #, name, email, tracking..."
+               value="{{ search_query }}">
+      </form>
+
+      <button type="button" class="btn-refresh" id="refreshBtn" onclick="syncOrders(false)">
+        <span class="refresh-icon">&#x21bb;</span>
+        Refresh
+      </button>
+
+      <button type="button" class="btn-refresh" id="fullSyncBtn" onclick="syncOrders(true)"
+              style="background: #e8f5e9; border-color: #c8e6c9;">
+        <span class="refresh-icon">&#x21bb;</span>
+        Full Sync (90 days)
+      </button>
+    </div>
+
+    <!-- Advanced Filters -->
+    <div class="advanced-filters" id="advancedFilters">
+      <div class="filter-header">
+        <h4>Advanced Filters</h4>
+        <button type="button" class="filter-toggle" onclick="toggleFilters()">
+          <span id="filterToggleText">{{ 'Hide' if filters else 'Show' }}</span>
+        </button>
+      </div>
+      <div id="filterContent" style="{{ '' if filters else 'display: none;' }}">
+        <form action="{{ url_for('all_orders') }}" method="get" id="advancedFilterForm">
+          <input type="hidden" name="filter" value="{{ fulfillment_filter }}">
+          <input type="hidden" name="q" value="{{ search_query }}">
+          <input type="hidden" name="filters" id="filtersJson" value="{{ filters_json or '' }}">
+
+          <!-- Filter Rows Container -->
+          <div id="filterRowsContainer">
+            {% if filters %}
+              {% for f in filters %}
+              <div class="filter-row" data-filter-index="{{ loop.index0 }}">
+                <select class="filter-field">
+                  <option value="">-- Select Field --</option>
+                  <optgroup label="Order Items">
+                    <option value="item_name" {{ 'selected' if f.field == 'item_name' else '' }}>Item Name</option>
+                    <option value="item_options" {{ 'selected' if f.field == 'item_options' else '' }}>Item Options (customizations)</option>
+                    <option value="item_sku" {{ 'selected' if f.field == 'item_sku' else '' }}>Item SKU</option>
+                  </optgroup>
+                  <optgroup label="Customer">
+                    <option value="customer_name" {{ 'selected' if f.field == 'customer_name' else '' }}>Customer Name</option>
+                    <option value="customer_email" {{ 'selected' if f.field == 'customer_email' else '' }}>Customer Email</option>
+                  </optgroup>
+                  <optgroup label="Shipping Address">
+                    <option value="ship_country" {{ 'selected' if f.field == 'ship_country' else '' }}>Country</option>
+                    <option value="ship_province" {{ 'selected' if f.field == 'ship_province' else '' }}>Province/State</option>
+                    <option value="ship_city" {{ 'selected' if f.field == 'ship_city' else '' }}>City</option>
+                    <option value="ship_address1" {{ 'selected' if f.field == 'ship_address1' else '' }}>Address Line 1</option>
+                    <option value="ship_address2" {{ 'selected' if f.field == 'ship_address2' else '' }}>Address Line 2</option>
+                    <option value="ship_zip" {{ 'selected' if f.field == 'ship_zip' else '' }}>Postal/ZIP Code</option>
+                  </optgroup>
+                  <optgroup label="Order">
+                    <option value="order_note" {{ 'selected' if f.field == 'order_note' else '' }}>Order Notes</option>
+                    <option value="is_international" {{ 'selected' if f.field == 'is_international' else '' }}>International (non-Canada)</option>
+                    <option value="weight_over" {{ 'selected' if f.field == 'weight_over' else '' }}>Weight Over (grams)</option>
+                    <option value="weight_under" {{ 'selected' if f.field == 'weight_under' else '' }}>Weight Under (grams)</option>
+                  </optgroup>
+                </select>
+
+                <select class="filter-condition">
+                  <option value="contains" {{ 'selected' if f.condition == 'contains' else '' }}>Contains</option>
+                  <option value="not_contains" {{ 'selected' if f.condition == 'not_contains' else '' }}>Does not contain</option>
+                  <option value="equals" {{ 'selected' if f.condition == 'equals' else '' }}>Equals</option>
+                  <option value="not_equals" {{ 'selected' if f.condition == 'not_equals' else '' }}>Does not equal</option>
+                </select>
+
+                <input type="text" class="filter-value" placeholder="Enter value (comma-separate for multiple)"
+                       value="{{ f.value or '' }}">
+
+                <button type="button" class="btn-remove-filter" onclick="removeFilterRow(this)">&times;</button>
+              </div>
+              {% endfor %}
+            {% endif %}
+            <!-- Empty row template for new filters -->
+            <div class="filter-row" id="newFilterRow">
+              <select class="filter-field">
+                <option value="">-- Select Field --</option>
+                <optgroup label="Order Items">
+                  <option value="item_name">Item Name</option>
+                  <option value="item_options">Item Options (customizations)</option>
+                  <option value="item_sku">Item SKU</option>
+                </optgroup>
+                <optgroup label="Customer">
+                  <option value="customer_name">Customer Name</option>
+                  <option value="customer_email">Customer Email</option>
+                </optgroup>
+                <optgroup label="Shipping Address">
+                  <option value="ship_country">Country</option>
+                  <option value="ship_province">Province/State</option>
+                  <option value="ship_city">City</option>
+                  <option value="ship_address1">Address Line 1</option>
+                  <option value="ship_address2">Address Line 2</option>
+                  <option value="ship_zip">Postal/ZIP Code</option>
+                </optgroup>
+                <optgroup label="Order">
+                  <option value="order_note">Order Notes</option>
+                  <option value="is_international">International (non-Canada)</option>
+                  <option value="weight_over">Weight Over (grams)</option>
+                  <option value="weight_under">Weight Under (grams)</option>
+                </optgroup>
+              </select>
+
+              <select class="filter-condition">
+                <option value="contains">Contains</option>
+                <option value="not_contains">Does not contain</option>
+                <option value="equals">Equals</option>
+                <option value="not_equals">Does not equal</option>
+              </select>
+
+              <input type="text" class="filter-value" placeholder="Enter value (comma-separate for multiple)">
+
+              <button type="button" class="btn-add-filter" onclick="addFilterRow()">+</button>
+            </div>
+          </div>
+
+          <div class="filter-actions" style="margin-top: 12px;">
+            <button type="button" class="btn-apply-filters" onclick="applyFilters()">Apply Filters</button>
+            <button type="button" class="btn-clear-filters" onclick="clearAdvancedFilters()">Clear All</button>
+          </div>
+        </form>
+
+        {% if filters %}
+        <div class="active-filters">
+          {% set field_labels = {
+            'item_name': 'Item Name',
+            'item_options': 'Item Options',
+            'item_sku': 'SKU',
+            'customer_name': 'Customer',
+            'customer_email': 'Email',
+            'ship_country': 'Country',
+            'ship_province': 'Province',
+            'ship_city': 'City',
+            'ship_address1': 'Address 1',
+            'ship_address2': 'Address 2',
+            'ship_zip': 'Postal Code',
+            'order_note': 'Notes',
+            'is_international': 'International',
+            'weight_over': 'Weight >',
+            'weight_under': 'Weight <'
+          } %}
+          {% set cond_labels = {
+            'contains': 'contains',
+            'not_contains': 'not contains',
+            'equals': '=',
+            'not_equals': '≠'
+          } %}
+          {% for f in filters %}
+          <span class="filter-tag">
+            {{ field_labels.get(f.field, f.field) }} {{ cond_labels.get(f.condition, f.condition) }} <strong>{{ f.value }}</strong>
+            <button type="button" class="remove-tag" onclick="removeFilterByIndex({{ loop.index0 }})">&times;</button>
+          </span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Orders Table -->
+    <div class="orders-table-container">
+      {% if orders %}
+        <table class="orders-table">
+          <thead>
+            <tr>
+              <th class="sortable" data-sort="order">Order #</th>
+              <th class="sortable" data-sort="age">Age</th>
+              <th class="sortable" data-sort="customer">Customer</th>
+              <th class="sortable" data-sort="email">Email</th>
+              <th>Tracking #</th>
+              <th class="sortable" data-sort="status">Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for order in orders %}
+              <tr data-order="{{ order.order_number }}"
+                  data-age="{{ order.shopify_created_at.isoformat() if order.shopify_created_at else '' }}"
+                  data-customer="{{ order.customer_name or '' }}"
+                  data-email="{{ order.customer_email or '' }}"
+                  data-status="{{ order.fulfillment_status or 'unfulfilled' }}">
+                <td>
+                  <a href="#" onclick="showOrderDetails('{{ order.order_number }}'); return false;" class="order-number-link">
+                    #{{ order.order_number }}
+                  </a>
+                </td>
+                <td>
+                  <span class="order-age" data-created="{{ order.shopify_created_at.isoformat() if order.shopify_created_at else '' }}"></span>
+                </td>
+                <td>
+                  {% if order.customer_name %}
+                    <a href="#" onclick="showOrderDetails('{{ order.order_number }}'); return false;" style="color: #333; text-decoration: none;">
+                      {{ order.customer_name }}
+                    </a>
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td>{{ order.customer_email or '—' }}</td>
+                <td>
+                  {% if order.tracking_number %}
+                    <span class="tracking-number">{{ order.tracking_number }}</span>
+                  {% else %}
+                    <span style="color: #999;">—</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% set status = order.fulfillment_status or 'unfulfilled' %}
+                  <span class="fulfillment-badge {{ status }}">
+                    {{ status|capitalize }}
+                  </span>
+                </td>
+                <td>
+                  <button type="button" class="btn-cancel"
+                          onclick="openCancelModal('{{ order.order_number }}', '{{ order.customer_name }}', '{{ order.customer_email }}', '{{ order.total_price }}', '{{ order.currency }}')">
+                    Cancel
+                  </button>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <!-- Pagination -->
+        <div class="pagination">
+          <div class="pagination-info">
+            Showing {{ ((page - 1) * per_page) + 1 }} - {{ [page * per_page, total_count]|min }} of {{ total_count }} orders
+          </div>
+          <div class="pagination-controls">
+            {% if page > 1 %}
+              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page-1, filters=filters_json) }}" class="pagination-btn">
+                &larr; Previous
+              </a>
+            {% else %}
+              <span class="pagination-btn disabled">&larr; Previous</span>
+            {% endif %}
+
+            {% if page < total_pages %}
+              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page+1, filters=filters_json) }}" class="pagination-btn">
+                Next &rarr;
+              </a>
+            {% else %}
+              <span class="pagination-btn disabled">Next &rarr;</span>
+            {% endif %}
+          </div>
+        </div>
+      {% else %}
+        <div class="empty-state">
+          {% if search_query %}
+            <h3>No orders found</h3>
+            <p>No orders match your search "{{ search_query }}"</p>
+          {% else %}
+            <h3>No orders yet</h3>
+            <p>Orders will appear here after the first sync from Shopify.</p>
+            <button type="button" class="btn-refresh" onclick="syncOrders(true)" style="margin-top: 16px;">
+              Run Initial Sync (90 days)
+            </button>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Order Details Modal -->
+    <div id="orderModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;">
+      <div style="background: white; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; position: relative; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+        <div style="padding: 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="margin: 0; color: #333;" id="orderModalTitle">Order Details</h3>
+          <button onclick="closeOrderModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #666;">&times;</button>
+        </div>
+        <div id="orderModalContent" style="padding: 20px;">
+          <p style="text-align: center; color: #666;">Loading...</p>
+        </div>
+        <div style="padding: 15px 20px; border-top: 1px solid #eee; display: flex; justify-content: space-between; background: #f9f9f9; flex-wrap: wrap; gap: 8px;">
+          <div style="display: flex; gap: 8px;">
+            <button onclick="printPackingSlip()" style="padding: 8px 16px; background: #534bc4; color: white; border: none; border-radius: 4px; cursor: pointer;">Print Packing Slip</button>
+            <button id="customsFormBtn" onclick="printCustomsForm()" style="padding: 8px 16px; background: #2e7d32; color: white; border: none; border-radius: 4px; cursor: pointer; display: none;">Print Customs Form</button>
+          </div>
+          <button onclick="closeOrderModal()" style="padding: 8px 16px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cancel Order Modal -->
+    <div class="modal-overlay" id="cancelModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Cancel Order <span id="modalOrderNumber"></span></h3>
+          <button type="button" class="modal-close" onclick="closeCancelModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="order-summary" id="orderSummary">
+            <p><strong>Customer:</strong> <span id="modalCustomerName"></span></p>
+            <p><strong>Email:</strong> <span id="modalCustomerEmail"></span></p>
+            <p><strong>Order Total:</strong> <span id="modalOrderTotal"></span></p>
+          </div>
+
+          <div class="form-group">
+            <label for="cancelReason">Reason for cancellation *</label>
+            <select id="cancelReason" required>
+              <option value="">Select a reason...</option>
+              <option value="customer_cancelled">Customer cancelled</option>
+              <option value="duplicate_order">Duplicate order</option>
+              <option value="fraud">Fraud</option>
+              <option value="refund_requested">Refund requested</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="cancelNotes">Additional notes (optional)</label>
+            <textarea id="cancelNotes" placeholder="Enter any additional notes..."></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="cancelledBy">Cancelled by</label>
+            <input type="text" id="cancelledBy" placeholder="Your name (e.g., Jess, Tia)">
+          </div>
+
+          <div style="margin-top: 20px; padding: 16px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0;">
+            <h4 style="margin: 0 0 12px 0; font-size: 0.95rem; color: #333;">Shopify Actions</h4>
+
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; cursor: pointer;">
+              <input type="checkbox" id="cancelInShopify" checked style="width: 18px; height: 18px;">
+              <span>Cancel order in Shopify</span>
+            </label>
+
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; cursor: pointer;">
+              <input type="checkbox" id="issueRefund" checked style="width: 18px; height: 18px;">
+              <span>Issue full refund</span>
+            </label>
+
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; cursor: pointer;">
+              <input type="checkbox" id="emailCustomer" checked style="width: 18px; height: 18px;">
+              <span>Email customer</span>
+            </label>
+
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="restockInventory" checked style="width: 18px; height: 18px;">
+              <span>Restock inventory</span>
+            </label>
+          </div>
+
+          <p style="font-size: 0.85rem; color: #d32f2f; margin-top: 16px;">
+            <strong>Warning:</strong> This will cancel the order in Shopify and issue a refund. This action cannot be undone.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-modal-cancel" onclick="closeCancelModal()">Keep Order</button>
+          <button type="button" class="btn-modal-confirm" id="confirmCancelBtn" onclick="confirmCancel()" style="background: #d32f2f;">
+            Cancel &amp; Refund Order
+          </button>
+        </div>
+      </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // ── Order Details Modal ──
+  let currentViewingOrderNumber = null;
+
+  async function showOrderDetails(orderNumber) {
+    currentViewingOrderNumber = orderNumber;
+    const modal = document.getElementById('orderModal');
+    const modalContent = document.getElementById('orderModalContent');
+    const modalTitle = document.getElementById('orderModalTitle');
+    const customsBtn = document.getElementById('customsFormBtn');
+
+    modal.style.display = 'flex';
+    modalTitle.textContent = `Order #${orderNumber}`;
+    modalContent.innerHTML = '<p style="text-align: center; color: #666;">Loading...</p>';
+    customsBtn.style.display = 'none'; // Hide customs button by default
+
+    try {
+      const response = await fetch(`/api/orders/${orderNumber}/details`);
+      const data = await response.json();
+
+      if (data.success) {
+        const order = data.order;
+        const items = data.line_items;
+
+        // Check if international
+        let isInternational = false;
+        const addr = order.shipping_address;
+        if (addr && addr.country) {
+          const country = addr.country.toUpperCase();
+          if (country !== 'CANADA' && country !== 'CA') {
+            isInternational = true;
+            customsBtn.style.display = 'inline-block';
+          }
+        }
+
+        let addressHtml = '';
+        if (addr && Object.keys(addr).length > 0) {
+          if (addr.raw) {
+            addressHtml = `<p style="margin: 0; line-height: 1.6;">${addr.raw}</p>`;
+          } else {
+            addressHtml = `
+              <p style="margin: 0; line-height: 1.6;">
+                ${addr.name || ''}<br>
+                ${addr.address1 || ''}${addr.address2 ? '<br>' + addr.address2 : ''}<br>
+                ${addr.city || ''}, ${addr.province_code || addr.province || ''} ${addr.zip || ''}<br>
+                ${addr.country || ''}
+                ${addr.phone ? '<br>Phone: ' + addr.phone : ''}
+              </p>
+            `;
+          }
+        } else {
+          addressHtml = '<p style="color: #999;">No shipping address</p>';
+        }
+
+        let itemsHtml = '';
+        if (items && items.length > 0) {
+          itemsHtml = items.map(item => {
+            let propsHtml = '';
+            if (item.properties && item.properties.length > 0) {
+              propsHtml = '<div style="margin-top: 6px; padding: 6px 8px; background: #f8f9fa; border-radius: 4px; font-size: 0.85em;">' +
+                item.properties.map(p => `<div style="color: #555;"><span style="color: #888;">${p.name}:</span> ${p.value}</div>`).join('') +
+                '</div>';
+            }
+            return `
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee;">
+              <div style="flex: 1;">
+                <strong>${item.title}</strong>
+                ${item.variant ? '<br><span style="color: #666; font-size: 0.9em;">' + item.variant + '</span>' : ''}
+                ${item.sku ? '<br><span style="color: #999; font-size: 0.85em;">SKU: ' + item.sku + '</span>' : ''}
+                ${propsHtml}
+              </div>
+              <div style="text-align: right; white-space: nowrap; margin-left: 12px;">
+                <span style="color: #666;">× ${item.quantity}</span>
+                <br><strong>$${item.price.toFixed(2)}</strong>
+              </div>
+            </div>
+          `}).join('');
+        } else {
+          itemsHtml = '<p style="color: #999;">No items found</p>';
+        }
+
+        // International order badge
+        const internationalBadge = isInternational ?
+          '<span style="display: inline-block; background: #1565c0; color: white; padding: 3px 8px; border-radius: 4px; font-size: 0.8em; margin-left: 8px;">INTERNATIONAL</span>' : '';
+
+        modalContent.innerHTML = `
+          <div style="margin-bottom: 20px;">
+            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Customer</h4>
+            <p style="margin: 0;"><strong>${order.customer_name || 'Unknown'}</strong></p>
+            <p style="margin: 4px 0; color: #666;">${order.customer_email || ''}</p>
+            ${order.customer_phone ? '<p style="margin: 4px 0; color: #666;">' + order.customer_phone + '</p>' : ''}
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">
+              Shipping Address ${internationalBadge}
+            </h4>
+            ${addressHtml}
+          </div>
+
+          <div style="margin-bottom: 20px;">
+            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Items Ordered</h4>
+            ${itemsHtml}
+          </div>
+
+          <div style="background: #f5f5f5; padding: 12px; border-radius: 4px;">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+              <span>Subtotal:</span><span>$${order.subtotal_price.toFixed(2)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+              <span>Tax:</span><span>$${order.total_tax.toFixed(2)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.1em; border-top: 1px solid #ddd; padding-top: 8px; margin-top: 8px;">
+              <span>Total:</span><span>$${order.total_price.toFixed(2)}</span>
+            </div>
+          </div>
+
+          ${order.note ? '<div style="margin-top: 15px; padding: 10px; background: #fff8e1; border-radius: 4px;"><strong>Note:</strong> ' + order.note + '</div>' : ''}
+          ${order.cancelled ? '<div style="margin-top: 15px; padding: 10px; background: #ffebee; border-radius: 4px; color: #c62828;"><strong>⚠ This order has been cancelled</strong></div>' : ''}
+          ${isInternational ? '<div style="margin-top: 15px; padding: 10px; background: #e3f2fd; border-radius: 4px; color: #1565c0;"><strong>🌍 International Order</strong> - Requires customs declaration</div>' : ''}
+        `;
+
+      } else {
+        modalContent.innerHTML = `<p style="text-align: center; color: #c62828;">Error: ${data.error || 'Could not load order'}</p>`;
+      }
+    } catch (error) {
+      console.error('Error loading order:', error);
+      modalContent.innerHTML = '<p style="text-align: center; color: #c62828;">Error loading order details</p>';
+    }
+  }
+
+  function closeOrderModal() {
+    document.getElementById('orderModal').style.display = 'none';
+    currentViewingOrderNumber = null;
+  }
+
+  function printPackingSlip() {
+    if (!currentViewingOrderNumber) {
+      alert('No order selected');
+      return;
+    }
+    window.open('/api/orders/' + currentViewingOrderNumber + '/packing-slip', '_blank');
+  }
+
+  function printCustomsForm() {
+    if (!currentViewingOrderNumber) {
+      alert('No order selected');
+      return;
+    }
+    window.open('/api/orders/' + currentViewingOrderNumber + '/customs-form', '_blank');
+  }
+
+  document.getElementById('orderModal').addEventListener('click', function(e) {
+    if (e.target === this) {
+      closeOrderModal();
+    }
+  });
+
+  // ── Cancel Order Modal ──
+  let currentOrderNumber = null;
+
+  function openCancelModal(orderNumber, customerName, customerEmail, totalPrice, currency) {
+    currentOrderNumber = orderNumber;
+    document.getElementById('modalOrderNumber').textContent = '#' + orderNumber;
+    document.getElementById('modalCustomerName').textContent = customerName || '—';
+    document.getElementById('modalCustomerEmail').textContent = customerEmail || '—';
+    document.getElementById('modalOrderTotal').textContent = '$' + (parseFloat(totalPrice) || 0).toFixed(2) + ' ' + (currency || 'CAD');
+    document.getElementById('cancelModal').classList.add('show');
+  }
+
+  function closeCancelModal() {
+    currentOrderNumber = null;
+    document.getElementById('cancelModal').classList.remove('show');
+    document.getElementById('cancelReason').value = '';
+    document.getElementById('cancelNotes').value = '';
+    document.getElementById('cancelledBy').value = '';
+    // Reset checkboxes to default (checked)
+    document.getElementById('cancelInShopify').checked = true;
+    document.getElementById('issueRefund').checked = true;
+    document.getElementById('emailCustomer').checked = true;
+    document.getElementById('restockInventory').checked = true;
+  }
+
+  async function confirmCancel() {
+    const reason = document.getElementById('cancelReason').value;
+    if (!reason) {
+      alert('Please select a reason for cancellation.');
+      return;
+    }
+
+    const cancelInShopify = document.getElementById('cancelInShopify').checked;
+    const issueRefund = document.getElementById('issueRefund').checked;
+
+    // Double-check with user if they're doing Shopify actions
+    if (cancelInShopify || issueRefund) {
+      const confirmMsg = `Are you sure you want to cancel order #${currentOrderNumber}?\n\n` +
+        (cancelInShopify ? '- Cancel order in Shopify\n' : '') +
+        (issueRefund ? '- Issue full refund to customer\n' : '') +
+        '\nThis action cannot be undone.';
+
+      if (!confirm(confirmMsg)) {
+        return;
+      }
+    }
+
+    const btn = document.getElementById('confirmCancelBtn');
+    btn.disabled = true;
+    btn.textContent = issueRefund ? 'Processing refund...' : 'Cancelling...';
+
+    try {
+      const response = await fetch('/api/orders/' + currentOrderNumber + '/cancel', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          reason: reason,
+          reason_notes: document.getElementById('cancelNotes').value,
+          cancelled_by: document.getElementById('cancelledBy').value,
+          cancel_in_shopify: cancelInShopify,
+          issue_refund: issueRefund,
+          email_customer: document.getElementById('emailCustomer').checked,
+          restock_inventory: document.getElementById('restockInventory').checked
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        let message = 'Order #' + currentOrderNumber + ' has been cancelled.';
+
+        if (data.shopify_cancelled) {
+          message += '\n\nShopify: Order cancelled';
+        } else if (data.shopify_error) {
+          message += '\n\nShopify cancellation failed: ' + data.shopify_error;
+        }
+
+        if (data.refund_issued) {
+          message += '\nRefund: $' + (data.refund_amount || 0).toFixed(2) + ' refunded';
+        } else if (data.refund_error) {
+          message += '\nRefund failed: ' + data.refund_error;
+        }
+
+        alert(message);
+        closeCancelModal();
+        location.reload();
+      } else {
+        alert('Error: ' + (data.error || 'Unknown error'));
+      }
+    } catch (error) {
+      alert('Error cancelling order: ' + error.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Cancel & Refund Order';
+    }
+  }
+
+  async function syncOrders(fullSync) {
+    const refreshBtn = document.getElementById('refreshBtn');
+    const fullSyncBtn = document.getElementById('fullSyncBtn');
+
+    refreshBtn.disabled = true;
+    fullSyncBtn.disabled = true;
+    refreshBtn.classList.add('syncing');
+
+    const syncStatus = document.getElementById('syncStatus');
+    syncStatus.textContent = 'Starting sync...';
+    syncStatus.classList.add('syncing');
+
+    try {
+      const url = fullSync ? '/api/orders/sync?full=true' : '/api/orders/sync';
+      const response = await fetch(url, {method: 'POST'});
+
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('Non-JSON response:', text.substring(0, 200));
+        throw new Error('Server returned an error. Please try again or check the logs.');
+      }
+
+      const data = await response.json();
+
+      if (data.success) {
+        if (data.async) {
+          // Async sync started - poll for status
+          syncStatus.textContent = 'Sync running in background... Checking status...';
+          pollSyncStatus();
+        } else {
+          syncStatus.textContent = 'Synced ' + data.synced_count + ' orders. Refreshing...';
+          setTimeout(() => location.reload(), 1000);
+        }
+      } else {
+        if (data.status === 'running') {
+          syncStatus.textContent = 'Sync already in progress. Checking status...';
+          pollSyncStatus();
+        } else {
+          alert('Sync failed: ' + (data.error || 'Unknown error'));
+          syncStatus.textContent = 'Sync failed';
+          resetSyncButtons();
+        }
+      }
+    } catch (error) {
+      console.error('Sync error:', error);
+      alert('Error syncing: ' + error.message);
+      syncStatus.textContent = 'Sync error - please try again';
+      resetSyncButtons();
+    }
+  }
+
+  function resetSyncButtons() {
+    const refreshBtn = document.getElementById('refreshBtn');
+    const fullSyncBtn = document.getElementById('fullSyncBtn');
+    const syncStatus = document.getElementById('syncStatus');
+
+    refreshBtn.disabled = false;
+    fullSyncBtn.disabled = false;
+    refreshBtn.classList.remove('syncing');
+    syncStatus.classList.remove('syncing');
+  }
+
+  async function pollSyncStatus() {
+    const syncStatus = document.getElementById('syncStatus');
+    let attempts = 0;
+    const maxAttempts = 120; // Poll for up to 10 minutes
+
+    const poll = async () => {
+      attempts++;
+      try {
+        const response = await fetch('/api/orders/sync/status');
+        const status = await response.json();
+
+        if (status.status === 'running') {
+          // Check if sync was interrupted (stale running status)
+          if (status.can_resume || status.status_hint === 'interrupted') {
+            syncStatus.innerHTML = `Sync was interrupted at page ${status.current_page || '?'}. ` +
+              `<a href="#" onclick="resumeSync(); return false;" style="color: #534bc4;">Click to resume</a>`;
+            resetSyncButtons();
+            return;
+          }
+
+          // Show progress info if available
+          let progressText = 'Sync in progress...';
+          if (status.progress_message) {
+            progressText = status.progress_message;
+          } else if (status.synced_so_far > 0) {
+            progressText = `Syncing... ${status.synced_so_far} orders processed`;
+          }
+          syncStatus.textContent = progressText;
+
+          if (attempts < maxAttempts) {
+            setTimeout(poll, 3000); // Check every 3 seconds for better feedback
+          } else {
+            syncStatus.textContent = 'Sync still running. Refresh page to check later.';
+            resetSyncButtons();
+          }
+        } else if (status.status === 'idle') {
+          const count = status.last_sync_count || 0;
+          syncStatus.textContent = 'Synced ' + count + ' orders. Refreshing...';
+          setTimeout(() => location.reload(), 1500);
+        } else if (status.status === 'error') {
+          alert('Sync error: ' + (status.error_message || 'Unknown error'));
+          syncStatus.textContent = 'Sync failed: ' + (status.error_message || 'Unknown error');
+          resetSyncButtons();
+        } else {
+          // Unknown status, reload anyway
+          location.reload();
+        }
+      } catch (error) {
+        console.error('Error polling sync status:', error);
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 5000);
+        } else {
+          syncStatus.textContent = 'Could not check sync status. Refresh page.';
+          resetSyncButtons();
+        }
+      }
+    };
+
+    // Start polling after a brief delay
+    setTimeout(poll, 3000);
+  }
+
+  async function resumeSync() {
+    const syncStatus = document.getElementById('syncStatus');
+    syncStatus.textContent = 'Resuming sync...';
+
+    try {
+      const response = await fetch('/api/orders/sync?resume=true', {method: 'POST'});
+      const data = await response.json();
+
+      if (data.success) {
+        syncStatus.textContent = 'Sync resumed. Checking progress...';
+        pollSyncStatus();
+      } else {
+        alert('Failed to resume: ' + (data.error || 'Unknown error'));
+        syncStatus.textContent = 'Resume failed';
+      }
+    } catch (error) {
+      alert('Error resuming sync: ' + error.message);
+      syncStatus.textContent = 'Resume error';
+    }
+  }
+
+  // Check sync status on page load
+  (async function checkInitialStatus() {
+    try {
+      const response = await fetch('/api/orders/sync/status');
+      const status = await response.json();
+
+      if (status.status === 'running') {
+        if (status.can_resume || status.status_hint === 'interrupted') {
+          document.getElementById('syncStatus').innerHTML =
+            `Sync was interrupted at page ${status.current_page || '?'} (${status.synced_so_far || 0} orders). ` +
+            `<a href="#" onclick="resumeSync(); return false;" style="color: #534bc4; font-weight: 500;">Click to resume</a>`;
+        } else {
+          document.getElementById('syncStatus').textContent = status.progress_message || 'Sync in progress...';
+          pollSyncStatus();
+        }
+      }
+    } catch (e) {
+      console.error('Error checking initial sync status:', e);
+    }
+  })();
+
+  // Close modals on escape key
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      closeOrderModal();
+      closeCancelModal();
+    }
+  });
+
+  // Close modal on backdrop click
+  document.getElementById('cancelModal').addEventListener('click', function(e) {
+    if (e.target === this) {
+      closeCancelModal();
+    }
+  });
+
+  // Calculate and display order ages
+  function formatRelativeTime(dateString) {
+    if (!dateString) return '';
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'just now';
+    if (diffMins < 60) return diffMins + ' min' + (diffMins !== 1 ? 's' : '');
+    if (diffHours < 24) return diffHours + ' hr' + (diffHours !== 1 ? 's' : '');
+    if (diffDays < 7) return diffDays + ' day' + (diffDays !== 1 ? 's' : '');
+    if (diffDays < 30) {
+      const weeks = Math.floor(diffDays / 7);
+      return weeks + ' week' + (weeks !== 1 ? 's' : '');
+    }
+    const months = Math.floor(diffDays / 30);
+    return months + ' month' + (months !== 1 ? 's' : '');
+  }
+
+  function updateOrderAges() {
+    document.querySelectorAll('.order-age').forEach(function(el) {
+      const created = el.dataset.created;
+      if (created) {
+        const age = formatRelativeTime(created);
+        el.textContent = age;
+
+        // Add classes for styling
+        const date = new Date(created);
+        const now = new Date();
+        const diffHours = (now - date) / 3600000;
+
+        if (diffHours < 4) {
+          el.classList.add('recent');
+          el.classList.remove('old');
+        } else if (diffHours > 48) {
+          el.classList.add('old');
+          el.classList.remove('recent');
+        } else {
+          el.classList.remove('recent', 'old');
+        }
+      }
+    });
+  }
+
+  // Run on page load and refresh every minute
+  updateOrderAges();
+  setInterval(updateOrderAges, 60000);
+
+  // Table sorting functionality
+  function sortTable(sortBy, direction) {
+    const table = document.querySelector('.orders-table');
+    if (!table) return;
+
+    const tbody = table.querySelector('tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+
+    rows.sort((a, b) => {
+      let aVal = a.dataset[sortBy] || '';
+      let bVal = b.dataset[sortBy] || '';
+
+      // Special handling for different column types
+      if (sortBy === 'order') {
+        aVal = parseInt(aVal) || 0;
+        bVal = parseInt(bVal) || 0;
+        return direction === 'asc' ? aVal - bVal : bVal - aVal;
+      } else if (sortBy === 'age') {
+        // Sort by date (newest first by default)
+        const aDate = aVal ? new Date(aVal).getTime() : 0;
+        const bDate = bVal ? new Date(bVal).getTime() : 0;
+        return direction === 'asc' ? aDate - bDate : bDate - aDate;
+      } else {
+        // String comparison
+        aVal = aVal.toLowerCase();
+        bVal = bVal.toLowerCase();
+        if (aVal < bVal) return direction === 'asc' ? -1 : 1;
+        if (aVal > bVal) return direction === 'asc' ? 1 : -1;
+        return 0;
+      }
+    });
+
+    // Re-append rows in sorted order
+    rows.forEach(row => tbody.appendChild(row));
+  }
+
+  // Add click handlers to sortable headers
+  document.querySelectorAll('.sortable').forEach(function(header) {
+    header.addEventListener('click', function() {
+      const sortBy = this.dataset.sort;
+      const currentDir = this.classList.contains('asc') ? 'asc' :
+                         this.classList.contains('desc') ? 'desc' : null;
+
+      // Remove sort classes from all headers
+      document.querySelectorAll('.sortable').forEach(h => {
+        h.classList.remove('asc', 'desc');
+      });
+
+      // Toggle direction or default to desc for age, asc for others
+      let newDir;
+      if (currentDir === 'asc') {
+        newDir = 'desc';
+      } else if (currentDir === 'desc') {
+        newDir = 'asc';
+      } else {
+        // Default direction
+        newDir = sortBy === 'age' ? 'desc' : 'asc';
+      }
+
+      this.classList.add(newDir);
+      sortTable(sortBy, newDir);
+    });
+  });
+
+  // Advanced filter functions
+  function toggleFilters() {
+    const content = document.getElementById('filterContent');
+    const toggleText = document.getElementById('filterToggleText');
+    if (content.style.display === 'none') {
+      content.style.display = 'block';
+      toggleText.textContent = 'Hide';
+    } else {
+      content.style.display = 'none';
+      toggleText.textContent = 'Show';
+    }
+  }
+
+  function getFiltersFromRows() {
+    const filters = [];
+    const rows = document.querySelectorAll('#filterRowsContainer .filter-row');
+    console.log('Found filter rows:', rows.length);
+    rows.forEach(function(row, index) {
+      console.log('Row', index, 'id:', row.id);
+      if (row.id === 'newFilterRow') {
+        console.log('Skipping newFilterRow in forEach');
+        return; // Skip the empty template row
+      }
+      const field = row.querySelector('.filter-field').value;
+      const condition = row.querySelector('.filter-condition').value;
+      const value = row.querySelector('.filter-value').value.trim();
+      console.log('Row', index, ':', { field, condition, value });
+      if (field && value) {
+        filters.push({ field: field, condition: condition, value: value });
+      }
+    });
+    // Also check the new filter row
+    const newRow = document.getElementById('newFilterRow');
+    if (newRow) {
+      const newField = newRow.querySelector('.filter-field').value;
+      const newCondition = newRow.querySelector('.filter-condition').value;
+      const newValue = newRow.querySelector('.filter-value').value.trim();
+      console.log('newFilterRow:', { newField, newCondition, newValue });
+      if (newField && newValue) {
+        filters.push({ field: newField, condition: newCondition, value: newValue });
+      }
+    }
+    console.log('Collected filters:', filters);
+    return filters;
+  }
+
+  function applyFilters() {
+    const filters = getFiltersFromRows();
+    console.log('Applying filters:', filters);
+    if (filters.length === 0) {
+      alert('Please add at least one filter with a field and value');
+      return;
+    }
+    document.getElementById('filtersJson').value = JSON.stringify(filters);
+    console.log('Submitting filters JSON:', document.getElementById('filtersJson').value);
+    document.getElementById('advancedFilterForm').submit();
+  }
+
+  function addFilterRow() {
+    const newRow = document.getElementById('newFilterRow');
+    const field = newRow.querySelector('.filter-field').value;
+    const condition = newRow.querySelector('.filter-condition').value;
+    const value = newRow.querySelector('.filter-value').value.trim();
+
+    if (!field || !value) {
+      alert('Please select a field and enter a value');
+      return;
+    }
+
+    // Clone the row and add it before newFilterRow
+    const clone = newRow.cloneNode(true);
+    clone.removeAttribute('id');
+    clone.querySelector('.filter-field').value = field;
+    clone.querySelector('.filter-condition').value = condition;
+    clone.querySelector('.filter-value').value = value;
+
+    // Change the + button to an X button
+    const btn = clone.querySelector('button');
+    btn.textContent = '×';
+    btn.className = 'btn-remove-filter';
+    btn.setAttribute('onclick', 'removeFilterRow(this)');
+
+    const container = document.getElementById('filterRowsContainer');
+    container.insertBefore(clone, newRow);
+
+    // Clear the new row for next filter
+    newRow.querySelector('.filter-field').value = '';
+    newRow.querySelector('.filter-condition').value = 'contains';
+    newRow.querySelector('.filter-value').value = '';
+  }
+
+  function removeFilterRow(btn) {
+    const row = btn.closest('.filter-row');
+    row.remove();
+  }
+
+  function removeFilterByIndex(index) {
+    // Parse current filters, remove by index, and resubmit
+    const filtersJson = document.getElementById('filtersJson').value;
+    let filters = [];
+    try {
+      filters = JSON.parse(filtersJson) || [];
+    } catch (e) {}
+    filters.splice(index, 1);
+    document.getElementById('filtersJson').value = JSON.stringify(filters);
+    document.getElementById('advancedFilterForm').submit();
+  }
+
+  function clearAdvancedFilters() {
+    document.getElementById('filtersJson').value = '';
+    // Remove all filter rows except the new row
+    const rows = document.querySelectorAll('#filterRowsContainer .filter-row');
+    rows.forEach(function(row) {
+      if (row.id !== 'newFilterRow') {
+        row.remove();
+      }
+    });
+    // Clear the new row
+    const newRow = document.getElementById('newFilterRow');
+    newRow.querySelector('.filter-field').value = '';
+    newRow.querySelector('.filter-condition').value = 'contains';
+    newRow.querySelector('.filter-value').value = '';
+    // Submit to clear
+    document.getElementById('advancedFilterForm').submit();
+  }
+
+  // Debug: Log filters on page load
+  document.addEventListener('DOMContentLoaded', function() {
+    const filtersJson = document.getElementById('filtersJson').value;
+    console.log('Page loaded with filters JSON:', filtersJson);
+    if (filtersJson) {
+      try {
+        const filters = JSON.parse(filtersJson);
+        console.log('Parsed filters:', filters);
+      } catch (e) {
+        console.error('Failed to parse filters JSON:', e);
+      }
+    }
+  });
+</script>
+{% endblock %}

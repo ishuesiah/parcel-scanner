@@ -55,9 +55,13 @@ class ShopifyAPI:
         max_retries = 5  # Increased from 3 to 5
         retry = 0
 
+        # Debug log for orders.json requests
+        if endpoint == "orders.json" and params:
+            print(f"[Shopify API] GET {endpoint} with params: {params}")
+
         while retry < max_retries:
             try:
-                resp = self.session.request(method, url, params=params, timeout=15)
+                resp = self.session.request(method, url, params=params, timeout=30)
 
                 # Handle rate limiting (429)
                 if resp.status_code == 429:
@@ -392,6 +396,168 @@ class ShopifyAPI:
         except Exception as e:
             print(f"Error fetching order details: {e}")
             return None
+
+    def cancel_order(self, order_id: str, reason: str = "other", email_customer: bool = True, restock: bool = True) -> Dict[str, Any]:
+        """
+        Cancel an order in Shopify.
+
+        Args:
+            order_id: Shopify order ID
+            reason: Reason for cancellation (customer, fraud, inventory, declined, other)
+            email_customer: Whether to send cancellation email to customer
+            restock: Whether to restock inventory
+
+        Returns:
+            Dict with success status and order data or error
+        """
+        try:
+            url = f"https://{self.shop_url}/admin/api/{self.api_version}/orders/{order_id}/cancel.json"
+
+            # Map our reasons to Shopify's accepted values
+            reason_map = {
+                "customer_cancelled": "customer",
+                "duplicate_order": "other",
+                "fraud": "fraud",
+                "refund_requested": "customer",
+                "inventory": "inventory",
+                "declined": "declined",
+                "other": "other"
+            }
+            shopify_reason = reason_map.get(reason, "other")
+
+            payload = {
+                "reason": shopify_reason,
+                "email": email_customer,
+                "restock": restock
+            }
+
+            print(f"[Shopify API] Cancelling order {order_id} with reason: {shopify_reason}")
+
+            resp = self.session.post(url, json=payload, timeout=30)
+
+            if resp.status_code == 200:
+                data = resp.json()
+                print(f"[Shopify API] Order {order_id} cancelled successfully")
+                return {"success": True, "order": data.get("order", {})}
+            else:
+                error_msg = resp.text[:500] if resp.text else f"HTTP {resp.status_code}"
+                print(f"[Shopify API] Failed to cancel order {order_id}: {error_msg}")
+                return {"success": False, "error": error_msg}
+
+        except Exception as e:
+            print(f"[Shopify API] Exception cancelling order {order_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    def calculate_refund(self, order_id: str) -> Dict[str, Any]:
+        """
+        Calculate refund amounts for an order (required before creating refund).
+
+        Args:
+            order_id: Shopify order ID
+
+        Returns:
+            Dict with refund calculation or error
+        """
+        try:
+            url = f"https://{self.shop_url}/admin/api/{self.api_version}/orders/{order_id}/refunds/calculate.json"
+
+            # Get the order first to get line items
+            order = self.get_order(order_id)
+            if not order:
+                return {"success": False, "error": "Order not found"}
+
+            # Build refund line items (full refund of all items)
+            refund_line_items = []
+            for item in order.get("line_items", []):
+                # Only refund items that haven't been fully refunded yet
+                quantity = item.get("quantity", 0) - item.get("fulfillable_quantity", 0)
+                if item.get("quantity", 0) > 0:
+                    refund_line_items.append({
+                        "line_item_id": item["id"],
+                        "quantity": item.get("quantity", 1),
+                        "restock_type": "cancel"  # or "return" if items are being returned
+                    })
+
+            payload = {
+                "refund": {
+                    "refund_line_items": refund_line_items,
+                    "shipping": {"full_refund": True}
+                }
+            }
+
+            resp = self.session.post(url, json=payload, timeout=30)
+
+            if resp.status_code == 200:
+                data = resp.json()
+                return {"success": True, "refund": data.get("refund", {})}
+            else:
+                error_msg = resp.text[:500] if resp.text else f"HTTP {resp.status_code}"
+                return {"success": False, "error": error_msg}
+
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def create_refund(self, order_id: str, notify_customer: bool = True) -> Dict[str, Any]:
+        """
+        Create a full refund for an order in Shopify.
+
+        Args:
+            order_id: Shopify order ID
+            notify_customer: Whether to send refund notification email
+
+        Returns:
+            Dict with success status and refund data or error
+        """
+        try:
+            # First calculate the refund to get the correct amounts
+            calc_result = self.calculate_refund(order_id)
+            if not calc_result.get("success"):
+                return calc_result
+
+            calculated = calc_result.get("refund", {})
+
+            url = f"https://{self.shop_url}/admin/api/{self.api_version}/orders/{order_id}/refunds.json"
+
+            # Build the refund payload using calculated amounts
+            payload = {
+                "refund": {
+                    "notify": notify_customer,
+                    "note": "Order cancelled via Parcel Scanner",
+                    "shipping": {"full_refund": True},
+                    "refund_line_items": calculated.get("refund_line_items", []),
+                    "transactions": calculated.get("transactions", [])
+                }
+            }
+
+            print(f"[Shopify API] Creating refund for order {order_id}")
+
+            resp = self.session.post(url, json=payload, timeout=30)
+
+            if resp.status_code in [200, 201]:
+                data = resp.json()
+                refund = data.get("refund", {})
+
+                # Calculate total refunded
+                total_refunded = 0
+                for transaction in refund.get("transactions", []):
+                    if transaction.get("kind") == "refund":
+                        total_refunded += float(transaction.get("amount", 0))
+
+                print(f"[Shopify API] Refund created for order {order_id}: ${total_refunded:.2f}")
+                return {
+                    "success": True,
+                    "refund": refund,
+                    "refund_id": refund.get("id"),
+                    "total_refunded": total_refunded
+                }
+            else:
+                error_msg = resp.text[:500] if resp.text else f"HTTP {resp.status_code}"
+                print(f"[Shopify API] Failed to create refund for order {order_id}: {error_msg}")
+                return {"success": False, "error": error_msg}
+
+        except Exception as e:
+            print(f"[Shopify API] Exception creating refund for order {order_id}: {e}")
+            return {"success": False, "error": str(e)}
 
     def _format_order_for_verification(self, order: Dict, tracking_number: Optional[str] = None) -> Dict[str, Any]:
         """Format order data for verification page display."""

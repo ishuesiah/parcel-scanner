@@ -38,6 +38,9 @@ import threading
 import csv
 import io
 
+# Google OAuth
+from authlib.integrations.flask_client import OAuth
+
 # Timezone support for Vancouver/PST
 try:
     from zoneinfo import ZoneInfo
@@ -81,18 +84,25 @@ def normalize_carrier(carrier_code):
 
 from shopify_api import ShopifyAPI  # Assumes shopify_api.py is alongside this file
 from klaviyo_events import KlaviyoEvents  # Klaviyo integration for event tracking
+from orders_sync import OrdersSync, update_order_scanned_status, init_orders_tables  # Orders sync from Shopify
 from ups_api import UPSAPI  # UPS tracking integration
 from canadapost_api import CanadaPostAPI  # Canada Post tracking integration
 from tracking_utils import split_concatenated_tracking_numbers  # Tracking number split detection
 from address_utils import is_po_box, check_po_box_compatibility  # PO Box detection
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
+
+# Trust proxy headers (Kinsta/cloud providers terminate SSL at the proxy)
+# This ensures url_for generates https:// URLs
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # ── Secure session cookie settings ──
 app.config.update(
     SESSION_COOKIE_SECURE=True,    # only send cookie over HTTPS
     SESSION_COOKIE_HTTPONLY=True,  # JS can't read the cookie
-    SESSION_COOKIE_SAMESITE='Lax'  # basic CSRF protection on cookies
+    SESSION_COOKIE_SAMESITE='Lax',  # basic CSRF protection on cookies
+    PREFERRED_URL_SCHEME='https'   # Force https in url_for
 )
 
 # Read SECRET_KEY from the environment (and fail loudly if missing)
@@ -100,6 +110,49 @@ app.secret_key = os.environ["FLASK_SECRET_KEY"]
 
 # 30 minutes in seconds
 INACTIVITY_TIMEOUT = 30 * 60
+
+# ── Google OAuth Configuration ──
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+ALLOWED_EMAIL_DOMAIN = "hemlockandoak.com"  # Only allow this domain
+
+oauth = OAuth(app)
+google = oauth.register(
+    name='google',
+    client_id=GOOGLE_CLIENT_ID,
+    client_secret=GOOGLE_CLIENT_SECRET,
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    client_kwargs={
+        'scope': 'openid email profile'
+    }
+)
+
+
+# ── Jinja Template Filters ──
+@app.template_filter('friendly_date')
+def friendly_date_filter(value):
+    """Format datetime as 'Dec 4th 2025 · 2:09pm'"""
+    if not value:
+        return "—"
+
+    # If it's a string, parse it first
+    if isinstance(value, str):
+        try:
+            value = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return value  # Return as-is if can't parse
+
+    day = value.day
+    if 11 <= day <= 13:
+        suffix = 'th'
+    else:
+        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
+
+    month = value.strftime("%b")
+    year = value.strftime("%Y")
+    time = value.strftime("%-I:%M%p").lower()
+
+    return f"{month} {day}{suffix} {year} · {time}"
 
 
 # ── PostgreSQL connection settings (Neon) ──
@@ -373,6 +426,14 @@ def get_canadapost_api():
         _canadapost_api = CanadaPostAPI()
     return _canadapost_api
 
+# ── Orders Sync singleton ──
+_orders_sync = None
+def get_orders_sync():
+    global _orders_sync
+    if _orders_sync is None:
+        _orders_sync = OrdersSync(get_shopify_api(), get_db_connection)
+    return _orders_sync
+
 # ── Stats Cache (5 minute TTL) ──
 _stats_cache = {
     "data": None,
@@ -408,7 +469,7 @@ def init_shipments_cache():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS shipments_cache (
                 id SERIAL PRIMARY KEY,
-                tracking_number VARCHAR(255) NOT NULL UNIQUE,
+                tracking_number VARCHAR(255) NOT NULL,
                 order_number VARCHAR(255),
                 customer_name VARCHAR(255),
                 carrier_code VARCHAR(50),
@@ -418,6 +479,14 @@ def init_shipments_cache():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Ensure unique constraint exists (for ON CONFLICT to work)
+        try:
+            cursor.execute("""
+                ALTER TABLE shipments_cache
+                ADD CONSTRAINT shipments_cache_tracking_unique UNIQUE (tracking_number)
+            """)
+        except Exception:
+            pass  # Constraint already exists
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_tracking ON shipments_cache(tracking_number)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_ship_date ON shipments_cache(ship_date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_order ON shipments_cache(order_number)")
@@ -440,7 +509,7 @@ def init_tracking_status_cache():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tracking_status_cache (
                 id SERIAL PRIMARY KEY,
-                tracking_number VARCHAR(255) NOT NULL UNIQUE,
+                tracking_number VARCHAR(255) NOT NULL,
                 carrier VARCHAR(50) DEFAULT 'UPS',
                 status VARCHAR(50),
                 status_description VARCHAR(500),
@@ -452,6 +521,14 @@ def init_tracking_status_cache():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Ensure unique constraint exists (for ON CONFLICT to work)
+        try:
+            cursor.execute("""
+                ALTER TABLE tracking_status_cache
+                ADD CONSTRAINT tracking_status_cache_tracking_unique UNIQUE (tracking_number)
+            """)
+        except Exception:
+            pass  # Constraint already exists
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_status ON tracking_status_cache(status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_delivered ON tracking_status_cache(is_delivered)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_updated ON tracking_status_cache(updated_at)")
@@ -702,6 +779,7 @@ def update_canadapost_tracking_cache(tracking_numbers, force_refresh=False):
 # Initialize cache tables on startup
 init_shipments_cache()
 init_tracking_status_cache()
+init_orders_tables(get_db_connection)
 normalize_table_collations()
 
 def sync_shipments_from_shipstation():
@@ -1097,6 +1175,7 @@ def start_background_sync():
     Start background thread that syncs shipments every 5 minutes.
     Also runs UPS and Canada Post tracking refresh every 15 minutes.
     Also runs email backfill and split tracking backfill on startup and once per day.
+    Also syncs orders from Shopify every 5 minutes (incremental).
     """
     def sync_loop():
         # Run backfills immediately on startup
@@ -1108,6 +1187,13 @@ def start_background_sync():
 
         while True:
             sync_shipments_from_shipstation()
+
+            # Sync orders from Shopify (incremental sync)
+            try:
+                orders_sync = get_orders_sync()
+                orders_sync.sync_orders(full_sync=False)
+            except Exception as e:
+                print(f"❌ Orders sync error: {e}")
 
             # Run tracking refresh every 15 minutes (every 3rd cycle)
             tracking_refresh_counter += 1
@@ -1122,11 +1208,12 @@ def start_background_sync():
                 backfill_missing_emails()
                 last_backfill = datetime.now()
 
-            time.sleep(300)  # 5 minutes
+            time.sleep(120)  # 2 minutes
 
     thread = threading.Thread(target=sync_loop, daemon=True)
     thread.start()
-    print("✓ Background shipments sync started (every 5 minutes)")
+    print("✓ Background shipments sync started (every 2 minutes)")
+    print("✓ Background orders sync from Shopify started (every 2 minutes)")
     print("✓ Background UPS tracking refresh started (every 15 minutes)")
     print("✓ Split tracking & email backfill will run on startup and once per day")
 
@@ -1240,9 +1327,49 @@ LOGIN_TEMPLATE = r'''
       border: none;
       border-radius: 4px;
       cursor: pointer;
+      text-decoration: none;
     }
     .login-container .btn:hover {
       opacity: 0.92;
+    }
+    .google-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 80%;
+      margin: 0 auto 20px auto;
+      padding: 10px 0;
+      font-size: 1rem;
+      background-color: #fff;
+      color: #333;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background-color 0.2s;
+    }
+    .google-btn:hover {
+      background-color: #f5f5f5;
+    }
+    .google-btn svg {
+      width: 18px;
+      height: 18px;
+    }
+    .divider {
+      display: flex;
+      align-items: center;
+      margin: 20px 0;
+      color: #999;
+      font-size: 0.85rem;
+    }
+    .divider::before, .divider::after {
+      content: "";
+      flex: 1;
+      border-bottom: 1px solid #ddd;
+    }
+    .divider span {
+      padding: 0 10px;
     }
     .flash {
       padding: 10px 14px;
@@ -1253,11 +1380,16 @@ LOGIN_TEMPLATE = r'''
       font-size: 0.95rem;
       border: 1px solid #f5c6cb;
     }
+    .domain-note {
+      font-size: 0.8rem;
+      color: #888;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
   <div class="login-container">
-    <h2>Please Enter Password</h2>
+    <h2>Hemlock &amp; Oak</h2>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% for category, msg in messages %}
@@ -1265,9 +1397,26 @@ LOGIN_TEMPLATE = r'''
       {% endfor %}
     {% endwith %}
 
+    <!-- Google Sign-In Button -->
+    {% if google_enabled %}
+    <a href="{{ url_for('google_login') }}" class="google-btn">
+      <svg viewBox="0 0 24 24">
+        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+      </svg>
+      Sign in with Google
+    </a>
+    <p class="domain-note">Use your @hemlockandoak.com email</p>
+
+    <div class="divider"><span>or</span></div>
+    {% endif %}
+
+    <!-- Password Login -->
     <form action="{{ url_for('login') }}" method="post">
-      <input type="password" name="password" placeholder="Password" required autofocus>
-      <button type="submit" class="btn">Log In</button>
+      <input type="password" name="password" placeholder="Password" required>
+      <button type="submit" class="btn">Log In with Password</button>
     </form>
   </div>
 </body>
@@ -1280,8 +1429,9 @@ LOGIN_TEMPLATE = r'''
 
 @app.before_request
 def require_login():
-    # always allow login & static assets
-    if request.endpoint in ("login", "static", "favicon"):
+    # always allow login, OAuth routes & static assets
+    allowed_endpoints = ("login", "google_login", "google_callback", "static", "favicon")
+    if request.endpoint in allowed_endpoints:
         return
 
     last = session.get("last_active")
@@ -1313,10 +1463,63 @@ def login():
             session.clear()
             session["authenticated"] = True
             session["last_active"]  = time.time()
+            session["auth_method"] = "password"
             return redirect(url_for("index"))
         else:
             flash("Invalid password. Please try again.", "error")
-    return render_template_string(LOGIN_TEMPLATE)
+    # Show Google button only if OAuth is configured
+    google_enabled = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+    return render_template_string(LOGIN_TEMPLATE, google_enabled=google_enabled)
+
+
+@app.route("/auth/google")
+def google_login():
+    """Redirect to Google for authentication."""
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        flash("Google authentication is not configured.", "error")
+        return redirect(url_for("login"))
+
+    # Build the redirect URI
+    redirect_uri = url_for("google_callback", _external=True)
+    return google.authorize_redirect(redirect_uri)
+
+
+@app.route("/auth/google/callback")
+def google_callback():
+    """Handle Google OAuth callback."""
+    try:
+        token = google.authorize_access_token()
+        user_info = token.get('userinfo')
+
+        if not user_info:
+            flash("Could not retrieve user information from Google.", "error")
+            return redirect(url_for("login"))
+
+        email = user_info.get('email', '')
+        name = user_info.get('name', '')
+
+        # Check email domain restriction
+        if not email.endswith(f"@{ALLOWED_EMAIL_DOMAIN}"):
+            flash(f"Access denied. Only @{ALLOWED_EMAIL_DOMAIN} emails are allowed.", "error")
+            print(f"OAuth login denied for email: {email} (not in {ALLOWED_EMAIL_DOMAIN})")
+            return redirect(url_for("login"))
+
+        # Successful authentication
+        session.clear()
+        session["authenticated"] = True
+        session["last_active"] = time.time()
+        session["auth_method"] = "google"
+        session["user_email"] = email
+        session["user_name"] = name
+
+        print(f"✓ Google OAuth login successful: {email}")
+        flash(f"Welcome, {name}!", "success")
+        return redirect(url_for("index"))
+
+    except Exception as e:
+        print(f"Google OAuth error: {e}")
+        flash("Authentication failed. Please try again.", "error")
+        return redirect(url_for("login"))
 
 
 @app.route("/logout")
@@ -1523,9 +1726,57 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
     try:
         conn = get_mysql_connection()
 
-        # ── ShipStation lookup with retry logic ──
+        # ── LOCAL DATABASE LOOKUP FIRST (fastest, no API calls) ──
+        local_found = False
+        try:
+            cursor = conn.cursor()
+
+            # First try orders table (Shopify data - has email)
+            cursor.execute("""
+                SELECT order_number, customer_name, customer_email, shopify_order_id
+                FROM orders
+                WHERE tracking_number = %s
+                LIMIT 1
+            """, (tracking_number,))
+            local_order = cursor.fetchone()
+
+            if local_order and local_order.get('order_number'):
+                local_found = True
+                order_number = local_order.get('order_number', 'N/A')
+                customer_name = local_order.get('customer_name', 'Not Found')
+                customer_email = local_order.get('customer_email', '')
+                order_id = local_order.get('shopify_order_id', '')
+                print(f"✅ LOCAL DB (orders): Found order {order_number} for {tracking_number}")
+
+            # If not found in orders, try shipments_cache (ShipStation data)
+            if not local_found:
+                cursor.execute("""
+                    SELECT order_number, customer_name, carrier_code, shipstation_batch_number
+                    FROM shipments_cache
+                    WHERE tracking_number = %s
+                    LIMIT 1
+                """, (tracking_number,))
+                cached_shipment = cursor.fetchone()
+
+                if cached_shipment and cached_shipment.get('order_number'):
+                    local_found = True
+                    order_number = cached_shipment.get('order_number', 'N/A')
+                    customer_name = cached_shipment.get('customer_name', 'Not Found')
+                    shipstation_batch_number = cached_shipment.get('shipstation_batch_number', '')
+                    carrier_code = cached_shipment.get('carrier_code', '')
+                    if carrier_code:
+                        carrier_map = {"ups": "UPS", "canadapost": "Canada Post", "canada_post": "Canada Post",
+                                       "dhl": "DHL", "dhl_express": "DHL", "purolator": "Purolator"}
+                        scan_carrier = carrier_map.get(carrier_code.lower(), scan_carrier)
+                    print(f"✅ LOCAL DB (shipments_cache): Found order {order_number} for {tracking_number}")
+
+            cursor.close()
+        except Exception as e:
+            print(f"Local DB lookup error for {tracking_number}: {e}")
+
+        # ── ShipStation lookup with retry logic (skip if local found) ──
         shipstation_found = False
-        if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+        if not local_found and SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
             max_retries = 4
             for retry in range(max_retries):
                 try:
@@ -1665,29 +1916,30 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                         print(f"ShipStation failed after {max_retries} retries for {tracking_number}")
                     break
 
-        # ── Shopify lookup ──
+        # ── Shopify lookup (skip if local found) ──
         shopify_found = False
-        try:
-            shopify_api = get_shopify_api()
-            shopify_info = shopify_api.get_order_by_tracking(tracking_number)
+        if not local_found:
+            try:
+                shopify_api = get_shopify_api()
+                shopify_info = shopify_api.get_order_by_tracking(tracking_number)
 
-            if shopify_info and shopify_info.get("order_id"):
-                shopify_found = True
-                order_number = shopify_info.get("order_number", order_number)
-                customer_name = shopify_info.get("customer_name", customer_name)
-                # Only update email if Shopify has one (don't overwrite ShipStation's email)
-                shopify_email = shopify_info.get("customer_email", "")
-                if shopify_email:
-                    customer_email = shopify_email
-                    print(f"📧 Shopify: Found email {customer_email} for {tracking_number}")
-                order_id = shopify_info.get("order_id", order_id)
-                print(f"✅ Shopify lookup successful for {tracking_number}: order {order_number}")
-            else:
-                print(f"Shopify lookup found no order for {tracking_number}")
-        except Exception as e:
-            print(f"Shopify error for {tracking_number}: {e}")
-            import traceback
-            traceback.print_exc()
+                if shopify_info and shopify_info.get("order_id"):
+                    shopify_found = True
+                    order_number = shopify_info.get("order_number", order_number)
+                    customer_name = shopify_info.get("customer_name", customer_name)
+                    # Only update email if Shopify has one (don't overwrite ShipStation's email)
+                    shopify_email = shopify_info.get("customer_email", "")
+                    if shopify_email:
+                        customer_email = shopify_email
+                        print(f"📧 Shopify: Found email {customer_email} for {tracking_number}")
+                    order_id = shopify_info.get("order_id", order_id)
+                    print(f"✅ Shopify lookup successful for {tracking_number}: order {order_number}")
+                else:
+                    print(f"Shopify lookup found no order for {tracking_number}")
+            except Exception as e:
+                print(f"Shopify error for {tracking_number}: {e}")
+                import traceback
+                traceback.print_exc()
 
         # ── Fallback carrier detection ──
         if not scan_carrier or scan_carrier == "":
@@ -1850,9 +2102,14 @@ def _process_single_scan(code, is_ajax):
                 validation_error = f"❌ Not a UPS label! UPS tracking numbers must start with '1Z'. (Scanned: {code[:20]}...)"
 
         elif batch_carrier == "Canada Post":
-            # Canada Post: MUST be exactly 28 chars
-            if len(code) != 28:
-                validation_error = f"❌ Not a Canada Post label! Expected 28 characters. (Scanned: {code[:20]}... - Length: {len(code)})"
+            # Canada Post formats:
+            # - 28 chars: full barcode from label (most common from scanner)
+            # - 22 chars: some label formats
+            # - 16 chars: normalized tracking number
+            # - 13 chars: international (e.g., RR123456789CA)
+            valid_cp_lengths = [28, 22, 16, 13]
+            if len(code) not in valid_cp_lengths:
+                validation_error = f"❌ Not a Canada Post label! Expected 28, 22, 16, or 13 characters. (Scanned: {code[:20]}... - Length: {len(code)})"
 
         elif batch_carrier == "Purolator":
             # Purolator: MUST be 12 digits (after normalization it would be 12 digits)
@@ -1876,10 +2133,21 @@ def _process_single_scan(code, is_ajax):
         # NOW normalize codes for specific carriers (AFTER validation)
         original_code = code
         if batch_carrier == "Canada Post":
-            # Canada Post: 28-character barcode -> extract middle 16 chars
+            # Canada Post normalization based on barcode length
             if len(code) == 28:
+                # Full barcode: extract middle 16 chars
                 code = code[7:-5]
-                print(f"📮 Canada Post: Normalized {original_code} -> {code}")
+                print(f"📮 Canada Post: Normalized 28-char {original_code} -> {code}")
+            elif len(code) == 22:
+                # Some label formats: extract middle 16 chars
+                code = code[3:-3]
+                print(f"📮 Canada Post: Normalized 22-char {original_code} -> {code}")
+            elif len(code) == 16:
+                # Already normalized, use as-is
+                print(f"📮 Canada Post: Already 16-char format {code}")
+            elif len(code) == 13:
+                # International format (RR123456789CA), use as-is
+                print(f"📮 Canada Post: International format {code}")
         elif batch_carrier == "Purolator":
             if len(code) == 34:
                 code = code[11:-11]
@@ -1889,48 +2157,85 @@ def _process_single_scan(code, is_ajax):
         # ─────────────────────────────────────────────────────────────────
         cursor = conn.cursor()
 
-        # First, get the order number for this tracking number (if known)
+        # First, find the order number for this tracking number from multiple sources
+        order_number_for_tracking = None
+
+        # Check orders table (synced from Shopify)
         cursor.execute(
-            """
-            SELECT order_number FROM scans
-            WHERE tracking_number = %s
-            ORDER BY scan_date DESC
-            LIMIT 1
-            """,
+            "SELECT order_number FROM orders WHERE tracking_number = %s LIMIT 1",
             (code,)
         )
-        scan_with_order = cursor.fetchone()
+        order_row = cursor.fetchone()
+        if order_row:
+            order_number_for_tracking = order_row.get('order_number')
 
-        # Check if this order is cancelled
-        order_to_check = scan_with_order.get('order_number') if scan_with_order else None
-        if order_to_check and order_to_check not in ('Processing...', 'N/A', ''):
+        # If not found, check scans table (from previous scans)
+        if not order_number_for_tracking:
             cursor.execute(
                 """
-                SELECT reason FROM cancelled_orders
-                WHERE order_number = %s
+                SELECT order_number FROM scans
+                WHERE tracking_number = %s AND order_number IS NOT NULL
+                  AND order_number NOT IN ('Processing...', 'N/A', '')
+                ORDER BY scan_date DESC LIMIT 1
                 """,
-                (order_to_check,)
+                (code,)
+            )
+            scan_row = cursor.fetchone()
+            if scan_row:
+                order_number_for_tracking = scan_row.get('order_number')
+
+        # Now check if this order is in cancelled_orders table
+        cancelled = None
+        if order_number_for_tracking:
+            cursor.execute(
+                "SELECT order_number, reason FROM cancelled_orders WHERE order_number = %s",
+                (order_number_for_tracking,)
             )
             cancelled = cursor.fetchone()
 
-            if cancelled:
-                cancel_reason = cancelled.get('reason', 'Order cancelled')
-                error_msg = f"🚫 CANCELLED ORDER: {order_to_check} - DO NOT SHIP\nReason: {cancel_reason}"
-                print(f"🚫 CANCELLED: {error_msg}")
+        # Also check by tracking number directly in cancelled_orders (in case it's stored there)
+        if not cancelled:
+            cursor.execute(
+                "SELECT order_number, reason FROM cancelled_orders WHERE tracking_number = %s",
+                (code,)
+            )
+            cancelled = cursor.fetchone()
 
-                cursor.close()
-                conn.close()
+        # Also check orders table for Shopify-cancelled orders
+        if not cancelled and order_number_for_tracking:
+            cursor.execute(
+                """
+                SELECT order_number, cancel_reason FROM orders
+                WHERE order_number = %s AND cancelled_at IS NOT NULL
+                """,
+                (order_number_for_tracking,)
+            )
+            shopify_cancelled = cursor.fetchone()
+            if shopify_cancelled:
+                cancelled = {
+                    'order_number': shopify_cancelled.get('order_number'),
+                    'reason': shopify_cancelled.get('cancel_reason') or 'Cancelled in Shopify'
+                }
 
-                if is_ajax:
-                    return jsonify({
-                        "success": False,
-                        "error": error_msg,
-                        "cancelled_order": True,
-                        "order_number": order_to_check,
-                        "cancel_reason": cancel_reason
-                    }), 400
-                flash(error_msg, "error")
-                return redirect(url_for("index"))
+        if cancelled:
+            cancel_order = cancelled.get('order_number', 'Unknown')
+            cancel_reason = cancelled.get('reason', 'Order cancelled')
+            error_msg = f"🚫 CANCELLED ORDER #{cancel_order} - DO NOT SHIP!\nReason: {cancel_reason}"
+            print(f"🚫 BLOCKED CANCELLED ORDER: {cancel_order} (tracking: {code})")
+
+            cursor.close()
+            conn.close()
+
+            if is_ajax:
+                return jsonify({
+                    "success": False,
+                    "error": error_msg,
+                    "cancelled_order": True,
+                    "order_number": cancel_order,
+                    "cancel_reason": cancel_reason
+                }), 400
+            flash(error_msg, "error")
+            return redirect(url_for("index"))
 
         # ─────────────────────────────────────────────────────────────────
         # ✨ Check for duplicate across ALL BATCHES in the database
@@ -2137,6 +2442,61 @@ def delete_scans():
             pass
 
 
+@app.route("/resolve_duplicate/<int:scan_id>", methods=["POST"])
+def resolve_duplicate(scan_id):
+    """Mark a duplicate scan as resolved (change status to 'Complete')."""
+    try:
+        conn = get_mysql_connection()
+    except psycopg2.OperationalError:
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({"success": False, "error": "Database busy, try again"}), 503
+        flash("Database connection pool busy - please try again", "error")
+        return redirect(url_for("index"))
+    except Exception as e:
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({"success": False, "error": str(e)}), 500
+        flash(f"Database error: {e}", "error")
+        return redirect(url_for("index"))
+
+    try:
+        cursor = conn.cursor()
+        # Update the scan status from "Duplicate (Batch #X)" to "Complete"
+        cursor.execute(
+            """
+            UPDATE scans
+            SET status = 'Complete'
+            WHERE id = %s AND status LIKE 'Duplicate%%'
+            """,
+            (scan_id,)
+        )
+        rows_affected = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        if rows_affected > 0:
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({"success": True, "message": "Duplicate resolved"})
+            flash("Duplicate resolved - scan marked as Complete", "success")
+        else:
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({"success": False, "error": "Scan not found or not a duplicate"})
+            flash("Scan not found or not a duplicate", "error")
+
+        return redirect(url_for("index"))
+
+    except Exception as e:
+        print(f"Error resolving duplicate: {e}")
+        try:
+            conn.close()
+        except:
+            pass
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({"success": False, "error": str(e)}), 500
+        flash(f"Error: {e}", "error")
+        return redirect(url_for("index"))
+
+
 @app.route("/delete_scan", methods=["POST"])
 def delete_scan():
     scan_id = request.form.get("scan_id")
@@ -2175,6 +2535,103 @@ def delete_scan():
             pass
 
     return redirect(url_for("all_scans"))
+
+
+@app.route("/mark_batch_picked_up", methods=["POST"])
+def mark_batch_picked_up():
+    """Mark a batch as picked up from the all_batches page (for old batches without status)."""
+    batch_id = request.form.get("batch_id")
+    if not batch_id:
+        flash("No batch specified.", "error")
+        return redirect(url_for("all_batches"))
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+          SELECT tracking_number
+            FROM scans
+           WHERE batch_id = %s
+        """, (batch_id,))
+        rows = cursor.fetchall()
+        # Filter out NULL tracking numbers
+        tracking_list = [row["tracking_number"] for row in rows if row["tracking_number"]]
+        pkg_count = len(tracking_list)
+        tracking_csv = ",".join(tracking_list) if tracking_list else ""
+
+        cursor.execute("""
+          UPDATE batches
+             SET pkg_count = %s,
+                 tracking_numbers = %s,
+                 status = 'recorded'
+           WHERE id = %s
+        """, (pkg_count, tracking_csv, batch_id))
+        conn.commit()
+
+        flash(f"Batch #{batch_id} marked as picked up.", "success")
+        return redirect(url_for("all_batches"))
+    except psycopg2.Error as e:
+        flash(f"Database Error: {e}", "error")
+        return redirect(url_for("all_batches"))
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@app.route("/bulk_mark_picked_up", methods=["POST"])
+def bulk_mark_picked_up():
+    """Mark multiple batches as picked up at once."""
+    batch_ids = request.form.getlist("batch_ids")
+    if not batch_ids:
+        flash("No batches selected.", "error")
+        return redirect(url_for("all_batches"))
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        marked_count = 0
+
+        for batch_id in batch_ids:
+            try:
+                # Get tracking numbers for this batch
+                cursor.execute("""
+                  SELECT tracking_number
+                    FROM scans
+                   WHERE batch_id = %s
+                """, (batch_id,))
+                rows = cursor.fetchall()
+                # Filter out NULL tracking numbers
+                tracking_list = [row["tracking_number"] for row in rows if row["tracking_number"]]
+                pkg_count = len(tracking_list)
+                tracking_csv = ",".join(tracking_list) if tracking_list else ""
+
+                # Update batch status
+                cursor.execute("""
+                  UPDATE batches
+                     SET pkg_count = %s,
+                         tracking_numbers = %s,
+                         status = 'recorded'
+                   WHERE id = %s
+                """, (pkg_count, tracking_csv, batch_id))
+                marked_count += 1
+            except Exception as e:
+                print(f"Error marking batch {batch_id}: {e}")
+
+        conn.commit()
+        flash(f"Marked {marked_count} batches as picked up.", "success")
+        return redirect(url_for("all_batches"))
+    except psycopg2.Error as e:
+        flash(f"Database Error: {e}", "error")
+        return redirect(url_for("all_batches"))
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
 
 
 @app.route("/record_batch", methods=["POST"])
@@ -2386,17 +2843,42 @@ def notify_customers():
                 skip_count += 1
                 continue
 
-            # Fetch line items from Shopify
+            # Fetch line items - try local DB first, then Shopify
             line_items = []
-            if shopify_api and tracking_number:
+            try:
+                # Try local database first (faster, no API call)
+                cursor.execute("""
+                    SELECT oli.product_title, oli.variant_title, oli.sku, oli.quantity, oli.price
+                    FROM order_line_items oli
+                    JOIN orders o ON oli.order_id = o.id
+                    WHERE o.order_number = %s
+                """, (order_number,))
+                local_items = cursor.fetchall()
+                if local_items:
+                    line_items = [
+                        {
+                            'title': item['product_title'],
+                            'variant_title': item['variant_title'],
+                            'sku': item['sku'],
+                            'quantity': item['quantity'],
+                            'price': str(item['price']) if item['price'] else '0'
+                        }
+                        for item in local_items
+                    ]
+                    print(f"   ✓ Found {len(line_items)} items from local DB")
+            except Exception as e:
+                print(f"   ⚠️ Local DB line items error: {e}")
+
+            # Fallback to Shopify API if local DB didn't have items
+            if not line_items and shopify_api and tracking_number:
                 try:
                     print(f"   📦 Fetching line items from Shopify...")
                     order_data = shopify_api.get_order_by_tracking(tracking_number)
                     line_items = order_data.get('line_items', [])
                     if line_items:
-                        print(f"   ✓ Found {len(line_items)} items")
+                        print(f"   ✓ Found {len(line_items)} items from Shopify")
                 except Exception as e:
-                    print(f"   ⚠️ Could not fetch line items: {e}")
+                    print(f"   ⚠️ Could not fetch line items from Shopify: {e}")
 
             # Send Klaviyo event
             print(f"   📤 Sending email to Klaviyo...")
@@ -2479,18 +2961,34 @@ def all_batches():
     try:
         cursor = conn.cursor()
         # Calculate pkg_count dynamically from scans table (so it updates immediately)
+        # Fetch active batches (in_progress status) separately
         cursor.execute("""
           SELECT b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes,
                  COUNT(s.id) as pkg_count
             FROM batches b
             LEFT JOIN scans s ON s.batch_id = b.id
+           WHERE b.status = 'in_progress' OR b.status IS NULL
            GROUP BY b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes
            ORDER BY b.id DESC
         """)
-        batches = cursor.fetchall()
+        active_batches = cursor.fetchall()
+
+        # Fetch all batches (for "All Batches" section - completed/notified ones)
+        cursor.execute("""
+          SELECT b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes,
+                 COUNT(s.id) as pkg_count
+            FROM batches b
+            LEFT JOIN scans s ON s.batch_id = b.id
+           WHERE b.status IN ('recorded', 'notified')
+           GROUP BY b.id, b.carrier, b.created_at, b.tracking_numbers, b.status, b.notified_at, b.notes
+           ORDER BY b.id DESC
+        """)
+        completed_batches = cursor.fetchall()
+
         return render_template(
             "all_batches.html",
-            batches=batches,
+            active_batches=active_batches,
+            completed_batches=completed_batches,
             shop_url=SHOP_URL,
             version=__version__,
             active_page="all_batches"
@@ -3017,10 +3515,54 @@ def fix_order(scan_id):
             scan_carrier = carrier or scan.get('carrier', '')
             shipstation_batch_number = ""
 
-            # ── ShipStation lookup ──
+            # ── LOCAL DATABASE LOOKUP FIRST ──
+            local_found = False
+            try:
+                # First try orders table (Shopify data - has email)
+                cursor.execute("""
+                    SELECT order_number, customer_name, customer_email, shopify_order_id
+                    FROM orders
+                    WHERE tracking_number = %s
+                    LIMIT 1
+                """, (tracking_number,))
+                local_order = cursor.fetchone()
+
+                if local_order and local_order.get('order_number'):
+                    local_found = True
+                    order_number = local_order.get('order_number', 'N/A')
+                    customer_name = local_order.get('customer_name', 'Not Found')
+                    customer_email = local_order.get('customer_email', '')
+                    order_id = local_order.get('shopify_order_id', '')
+                    print(f"✅ LOCAL DB (orders): Found order {order_number} for {tracking_number}")
+
+                # If not found in orders, try shipments_cache (ShipStation data)
+                if not local_found:
+                    cursor.execute("""
+                        SELECT order_number, customer_name, carrier_code, shipstation_batch_number
+                        FROM shipments_cache
+                        WHERE tracking_number = %s
+                        LIMIT 1
+                    """, (tracking_number,))
+                    cached_shipment = cursor.fetchone()
+
+                    if cached_shipment and cached_shipment.get('order_number'):
+                        local_found = True
+                        order_number = cached_shipment.get('order_number', 'N/A')
+                        customer_name = cached_shipment.get('customer_name', 'Not Found')
+                        shipstation_batch_number = cached_shipment.get('shipstation_batch_number', '')
+                        carrier_code = cached_shipment.get('carrier_code', '')
+                        if carrier_code:
+                            carrier_map = {"ups": "UPS", "canadapost": "Canada Post", "canada_post": "Canada Post",
+                                           "dhl": "DHL", "dhl_express": "DHL", "purolator": "Purolator"}
+                            scan_carrier = carrier_map.get(carrier_code.lower(), scan_carrier)
+                        print(f"✅ LOCAL DB (shipments_cache): Found order {order_number} for {tracking_number}")
+            except Exception as e:
+                print(f"Local DB lookup error: {e}")
+
+            # ── ShipStation lookup (skip if local found) ──
             shopify_found = False
             try:
-                if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+                if not local_found and SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
                     url = f"https://ssapi.shipstation.com/shipments?trackingNumber={tracking_number}"
                     resp = requests.get(
                         url,
@@ -3086,23 +3628,24 @@ def fix_order(scan_id):
             except Exception as e:
                 print(f"ShipStation error for {tracking_number}: {e}")
 
-            # ── Shopify lookup ──
-            try:
-                shopify_api = get_shopify_api()
-                shopify_info = shopify_api.get_order_by_tracking(tracking_number)
+            # ── Shopify lookup (skip if local found) ──
+            if not local_found:
+                try:
+                    shopify_api = get_shopify_api()
+                    shopify_info = shopify_api.get_order_by_tracking(tracking_number)
 
-                if shopify_info and shopify_info.get("order_id"):
-                    shopify_found = True
-                    order_number = shopify_info.get("order_number", order_number)
-                    customer_name = shopify_info.get("customer_name", customer_name)
-                    # Only update email if Shopify has one (don't overwrite ShipStation's email)
-                    shopify_email = shopify_info.get("customer_email", "")
-                    if shopify_email:
-                        customer_email = shopify_email
-                        print(f"📧 Shopify: Found email {customer_email} for {tracking_number}")
-                    order_id = shopify_info.get("order_id", order_id)
-            except Exception as e:
-                print(f"Shopify error for {tracking_number}: {e}")
+                    if shopify_info and shopify_info.get("order_id"):
+                        shopify_found = True
+                        order_number = shopify_info.get("order_number", order_number)
+                        customer_name = shopify_info.get("customer_name", customer_name)
+                        # Only update email if Shopify has one (don't overwrite ShipStation's email)
+                        shopify_email = shopify_info.get("customer_email", "")
+                        if shopify_email:
+                            customer_email = shopify_email
+                            print(f"📧 Shopify: Found email {customer_email} for {tracking_number}")
+                        order_id = shopify_info.get("order_id", order_id)
+                except Exception as e:
+                    print(f"Shopify error for {tracking_number}: {e}")
 
             # ── Update the scan record with results ──
             cursor.execute(
@@ -4007,5 +4550,1399 @@ def debug_tracking(tracking_number):
     return f"<pre>{json.dumps(result, indent=2, default=str)}</pre>"
 
 
+# ============================================================================
+# ALL ORDERS PAGE & ORDERS SYNC API
+# ============================================================================
+
+@app.route("/all_orders", methods=["GET"])
+def all_orders():
+    """
+    Display all orders from local database with search and filtering.
+    Default filter: unfulfilled orders.
+    Supports multiple stacked advanced filters via JSON.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get query parameters
+        search_query = request.args.get('q', '').strip()
+        fulfillment_filter = request.args.get('filter', 'unfulfilled')  # unfulfilled, fulfilled, all
+        page = int(request.args.get('page', 1))
+        per_page = 50
+
+        # Parse multiple filters from JSON
+        filters_json = request.args.get('filters', '').strip()
+        filters = []
+        print(f"[DEBUG] filters_json from request: {repr(filters_json)}")
+        if filters_json:
+            try:
+                filters = json.loads(filters_json)
+                print(f"[DEBUG] parsed filters: {filters}")
+                if not isinstance(filters, list):
+                    filters = []
+            except Exception as e:
+                print(f"[DEBUG] JSON parse error: {e}")
+                filters = []
+
+        # Determine if we need to join with line items or options based on ALL filters
+        need_line_items_join = any(f.get('field') in ('item_name', 'item_sku') for f in filters)
+        need_options_join = any(f.get('field') == 'item_options' for f in filters)
+
+        # Build base query
+        if need_line_items_join or need_options_join:
+            base_query = """
+                SELECT DISTINCT o.id, o.shopify_order_id, o.order_number, o.customer_name, o.customer_email,
+                       o.tracking_number, o.fulfillment_status, o.financial_status, o.total_price,
+                       o.currency, o.shopify_created_at, o.scanned_status, o.cancelled_at, o.shipping_address, o.note
+                FROM orders o
+                INNER JOIN order_line_items li ON li.order_id = o.id
+            """
+            if need_options_join:
+                base_query += " LEFT JOIN order_line_item_options lio ON lio.line_item_id = li.id"
+            base_query += " WHERE o.cancelled_at IS NULL"
+            col_prefix = "o."
+        else:
+            base_query = """
+                SELECT id, shopify_order_id, order_number, customer_name, customer_email,
+                       tracking_number, fulfillment_status, financial_status, total_price,
+                       currency, shopify_created_at, scanned_status, cancelled_at, shipping_address, note
+                FROM orders
+                WHERE cancelled_at IS NULL
+            """
+            col_prefix = ""
+        params = []
+
+        # Add search filter
+        if search_query:
+            base_query += f""" AND (
+                {col_prefix}order_number ILIKE %s OR
+                {col_prefix}customer_name ILIKE %s OR
+                {col_prefix}customer_email ILIKE %s OR
+                {col_prefix}tracking_number ILIKE %s
+            )"""
+            search_term = f"%{search_query}%"
+            params.extend([search_term, search_term, search_term, search_term])
+
+        # Add fulfillment filter
+        if fulfillment_filter == 'fulfilled':
+            base_query += f" AND {col_prefix}fulfillment_status = 'fulfilled'"
+        elif fulfillment_filter == 'unfulfilled':
+            base_query += f" AND ({col_prefix}fulfillment_status IS NULL OR {col_prefix}fulfillment_status = '' OR {col_prefix}fulfillment_status = 'unfulfilled' OR {col_prefix}fulfillment_status = 'partial')"
+
+        # Apply each advanced filter (combined with AND)
+        for flt in filters:
+            adv_field = flt.get('field', '')
+            adv_condition = flt.get('condition', 'contains')
+            adv_value = flt.get('value', '')
+
+            if not adv_field or not adv_value:
+                continue
+
+            keywords = [kw.strip() for kw in adv_value.split(',') if kw.strip()]
+            is_contains = adv_condition in ('contains', 'equals')
+            is_exact = adv_condition in ('equals', 'not_equals')
+
+            if adv_field == 'item_name':
+                if is_contains:
+                    conds = ["li.product_title ILIKE %s" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f"%{kw}%" if not is_exact else kw)
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += " AND NOT EXISTS (SELECT 1 FROM order_line_items li2 WHERE li2.order_id = " + (col_prefix + "id" if col_prefix else "orders.id") + " AND li2.product_title ILIKE %s)"
+                        params.append(f"%{kw}%")
+
+            elif adv_field == 'item_options':
+                if is_contains:
+                    conds = ["(lio.name ILIKE %s OR lio.value ILIKE %s)" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f"%{kw}%")
+                        params.append(f"%{kw}%")
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += " AND NOT EXISTS (SELECT 1 FROM order_line_items li2 JOIN order_line_item_options lio2 ON lio2.line_item_id = li2.id WHERE li2.order_id = " + (col_prefix + "id" if col_prefix else "orders.id") + " AND (lio2.name ILIKE %s OR lio2.value ILIKE %s))"
+                        params.append(f"%{kw}%")
+                        params.append(f"%{kw}%")
+
+            elif adv_field == 'item_sku':
+                if is_contains:
+                    conds = ["li.sku ILIKE %s" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f"%{kw}%" if not is_exact else kw)
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += " AND NOT EXISTS (SELECT 1 FROM order_line_items li2 WHERE li2.order_id = " + (col_prefix + "id" if col_prefix else "orders.id") + " AND li2.sku ILIKE %s)"
+                        params.append(f"%{kw}%")
+
+            elif adv_field == 'customer_name':
+                if is_contains:
+                    conds = [f"{col_prefix}customer_name ILIKE %s" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f"%{kw}%")
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += f" AND ({col_prefix}customer_name IS NULL OR {col_prefix}customer_name NOT ILIKE %s)"
+                        params.append(f"%{kw}%")
+
+            elif adv_field == 'customer_email':
+                if is_contains:
+                    conds = [f"{col_prefix}customer_email ILIKE %s" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f"%{kw}%")
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += f" AND ({col_prefix}customer_email IS NULL OR {col_prefix}customer_email NOT ILIKE %s)"
+                        params.append(f"%{kw}%")
+
+            elif adv_field == 'order_note':
+                if is_contains:
+                    conds = [f"{col_prefix}note ILIKE %s" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f"%{kw}%")
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += f" AND ({col_prefix}note IS NULL OR {col_prefix}note NOT ILIKE %s)"
+                        params.append(f"%{kw}%")
+
+            elif adv_field.startswith('ship_'):
+                json_field_map = {
+                    'ship_country': 'country',
+                    'ship_province': 'province',
+                    'ship_city': 'city',
+                    'ship_address1': 'address1',
+                    'ship_address2': 'address2',
+                    'ship_zip': 'zip'
+                }
+                json_key = json_field_map.get(adv_field, 'country')
+                if is_contains:
+                    conds = [f"{col_prefix}shipping_address::text ILIKE %s" for _ in keywords]
+                    for kw in keywords:
+                        params.append(f'%"{json_key}"%{kw}%')
+                    base_query += f" AND ({' OR '.join(conds)})"
+                else:
+                    for kw in keywords:
+                        base_query += f" AND ({col_prefix}shipping_address IS NULL OR {col_prefix}shipping_address::text NOT ILIKE %s)"
+                        params.append(f'%"{json_key}"%{kw}%')
+
+            elif adv_field == 'is_international':
+                if adv_condition in ('contains', 'equals'):
+                    base_query += f" AND ({col_prefix}shipping_address IS NULL OR {col_prefix}shipping_address::text NOT ILIKE %s)"
+                    params.append('%"country"%Canada%')
+                else:
+                    base_query += f" AND {col_prefix}shipping_address::text ILIKE %s"
+                    params.append('%"country"%Canada%')
+
+            elif adv_field == 'weight_over':
+                # Filter orders with total weight over X grams
+                try:
+                    weight_threshold = int(adv_value)
+                    base_query += f" AND COALESCE({col_prefix}total_weight_grams, 0) > %s"
+                    params.append(weight_threshold)
+                except ValueError:
+                    pass  # Invalid weight value, skip filter
+
+            elif adv_field == 'weight_under':
+                # Filter orders with total weight under X grams
+                try:
+                    weight_threshold = int(adv_value)
+                    base_query += f" AND COALESCE({col_prefix}total_weight_grams, 0) < %s"
+                    params.append(weight_threshold)
+                except ValueError:
+                    pass  # Invalid weight value, skip filter
+
+        # Get total count for pagination
+        count_query = f"SELECT COUNT(*) as count FROM ({base_query}) as subquery"
+        cursor.execute(count_query, params)
+        total_count = cursor.fetchone()['count']
+
+        # Add ordering and pagination
+        base_query += f" ORDER BY {col_prefix}shopify_created_at DESC"
+        offset = (page - 1) * per_page
+        base_query += f" LIMIT {per_page} OFFSET {offset}"
+
+        cursor.execute(base_query, params)
+        orders = cursor.fetchall()
+
+        # Calculate pagination info
+        total_pages = (total_count + per_page - 1) // per_page
+
+        # Get sync status
+        sync_status = get_orders_sync().get_sync_status()
+
+        return render_template(
+            "all_orders.html",
+            orders=orders,
+            search_query=search_query,
+            fulfillment_filter=fulfillment_filter,
+            page=page,
+            per_page=per_page,
+            total_count=total_count,
+            total_pages=total_pages,
+            sync_status=sync_status,
+            shop_url=SHOP_URL,
+            version=__version__,
+            active_page="all_orders",
+            # Multiple filters for template
+            filters=filters,
+            filters_json=filters_json
+        )
+    except Exception as e:
+        print(f"Error loading all orders: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error loading orders: {e}", "error")
+        return render_template(
+            "all_orders.html",
+            orders=[],
+            search_query='',
+            fulfillment_filter='unfulfilled',
+            page=1,
+            per_page=50,
+            total_count=0,
+            total_pages=0,
+            sync_status={},
+            shop_url=SHOP_URL,
+            version=__version__,
+            active_page="all_orders",
+            filters=[],
+            filters_json=''
+        )
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@app.route("/api/orders/sync", methods=["POST"])
+def api_orders_sync():
+    """
+    Trigger a manual orders sync from Shopify.
+    Query params:
+        - full: If 'true', do full 90-day sync. Otherwise incremental.
+        - async: If 'true', run in background (default for full sync)
+        - resume: If 'true', try to resume an interrupted sync
+    """
+    full_sync = request.args.get('full', 'false').lower() == 'true'
+    run_async = request.args.get('async', 'true' if full_sync else 'false').lower() == 'true'
+    resume = request.args.get('resume', 'false').lower() == 'true'
+
+    try:
+        orders_sync = get_orders_sync()
+
+        # Check if sync is already running
+        status = orders_sync.get_sync_status()
+        if status.get('status') == 'running':
+            # If resume requested and sync is stale, allow it
+            if resume and (status.get('can_resume') or status.get('status_hint') == 'interrupted'):
+                print("Resuming interrupted sync...")
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": "Sync already in progress. Please wait for it to complete.",
+                    "status": "running",
+                    "can_resume": status.get('can_resume', False)
+                }), 409
+
+        if run_async:
+            # Run sync in background thread
+            def run_sync():
+                try:
+                    orders_sync.sync_orders(full_sync=full_sync, days_back=90, resume=resume)
+                except Exception as e:
+                    print(f"Background orders sync error: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+            import threading
+            sync_thread = threading.Thread(target=run_sync, daemon=True)
+            sync_thread.start()
+
+            return jsonify({
+                "success": True,
+                "synced_count": 0,
+                "message": "Sync started in background. Check status for progress.",
+                "async": True,
+                "resume": resume
+            })
+        else:
+            # Synchronous sync (for small incremental syncs)
+            count, message = orders_sync.sync_orders(full_sync=full_sync, days_back=90, resume=resume)
+            return jsonify({
+                "success": True,
+                "synced_count": count,
+                "message": message
+            })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route("/api/orders/sync/status", methods=["GET"])
+def api_orders_sync_status():
+    """Get current orders sync status."""
+    try:
+        status = get_orders_sync().get_sync_status()
+        return jsonify(status)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/orders/<order_number>/details", methods=["GET"])
+def api_get_order_details(order_number):
+    """
+    Get order details including line items and shipping address.
+    Used for the order popup modal.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get the order
+        cursor.execute("""
+            SELECT id, shopify_order_id, order_number, customer_name, customer_email,
+                   customer_phone, shipping_address, total_price, subtotal_price,
+                   total_tax, financial_status, fulfillment_status, tracking_number,
+                   note, shopify_created_at, cancelled_at
+            FROM orders
+            WHERE order_number = %s
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Order not found"}), 404
+
+        # Get line items
+        cursor.execute("""
+            SELECT id, product_title, variant_title, sku, quantity, price
+            FROM order_line_items
+            WHERE order_id = %s
+            ORDER BY id
+        """, (order['id'],))
+        line_items = cursor.fetchall()
+
+        # Get properties for each line item
+        line_items_with_props = []
+        for item in line_items:
+            cursor.execute("""
+                SELECT name, value
+                FROM order_line_item_options
+                WHERE line_item_id = %s
+                ORDER BY id
+            """, (item['id'],))
+            properties = cursor.fetchall()
+
+            line_items_with_props.append({
+                "title": item['product_title'] or '',
+                "variant": item['variant_title'] or '',
+                "sku": item['sku'] or '',
+                "quantity": item['quantity'] or 1,
+                "price": float(item['price']) if item.get('price') else 0,
+                "properties": [{"name": p['name'], "value": p['value']} for p in properties]
+            })
+
+        cursor.close()
+        conn.close()
+
+        # Parse shipping address (stored as JSON string)
+        shipping_address = {}
+        if order.get('shipping_address'):
+            try:
+                import json
+                shipping_address = json.loads(order['shipping_address'])
+            except:
+                shipping_address = {"raw": order['shipping_address']}
+
+        return jsonify({
+            "success": True,
+            "order": {
+                "order_number": order['order_number'],
+                "customer_name": order['customer_name'],
+                "customer_email": order['customer_email'],
+                "customer_phone": order.get('customer_phone') or '',
+                "shipping_address": shipping_address,
+                "total_price": float(order['total_price']) if order.get('total_price') else 0,
+                "subtotal_price": float(order['subtotal_price']) if order.get('subtotal_price') else 0,
+                "total_tax": float(order['total_tax']) if order.get('total_tax') else 0,
+                "financial_status": order.get('financial_status') or '',
+                "fulfillment_status": order.get('fulfillment_status') or 'unfulfilled',
+                "tracking_number": order.get('tracking_number') or '',
+                "note": order.get('note') or '',
+                "created_at": order['shopify_created_at'].isoformat() if order.get('shopify_created_at') else '',
+                "cancelled": order.get('cancelled_at') is not None
+            },
+            "line_items": line_items_with_props
+        })
+
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/orders/<order_number>/packing-slip", methods=["GET"])
+def api_get_packing_slip(order_number):
+    """
+    Generate a printable packing slip for an order.
+    Returns HTML that can be printed in a new window.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get the order
+        cursor.execute("""
+            SELECT id, shopify_order_id, order_number, customer_name, customer_email,
+                   customer_phone, shipping_address, total_price, subtotal_price,
+                   total_tax, financial_status, fulfillment_status, tracking_number,
+                   note, shopify_created_at, currency
+            FROM orders
+            WHERE order_number = %s
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            cursor.close()
+            conn.close()
+            return "<html><body><h1>Order not found</h1></body></html>", 404
+
+        # Get line items
+        cursor.execute("""
+            SELECT id, product_title, variant_title, sku, quantity, price
+            FROM order_line_items
+            WHERE order_id = %s
+            ORDER BY id
+        """, (order['id'],))
+        line_items = cursor.fetchall()
+
+        # Get properties for each line item
+        line_items_with_props = []
+        for item in line_items:
+            cursor.execute("""
+                SELECT name, value
+                FROM order_line_item_options
+                WHERE line_item_id = %s
+                ORDER BY id
+            """, (item['id'],))
+            properties = cursor.fetchall()
+
+            line_items_with_props.append({
+                "title": item['product_title'] or '',
+                "variant": item['variant_title'] or '',
+                "sku": item['sku'] or '',
+                "quantity": item['quantity'] or 1,
+                "price": float(item['price']) if item.get('price') else 0,
+                "properties": [{"name": p['name'], "value": p['value']} for p in properties]
+            })
+
+        cursor.close()
+        conn.close()
+
+        # Parse shipping address
+        shipping_address = {}
+        if order.get('shipping_address'):
+            try:
+                import json
+                shipping_address = json.loads(order['shipping_address'])
+            except:
+                shipping_address = {"raw": order['shipping_address']}
+
+        # Format the address for display
+        address_lines = []
+        if shipping_address:
+            if shipping_address.get('raw'):
+                address_lines = [shipping_address['raw']]
+            else:
+                if shipping_address.get('name'):
+                    address_lines.append(shipping_address['name'])
+                if shipping_address.get('address1'):
+                    address_lines.append(shipping_address['address1'])
+                if shipping_address.get('address2'):
+                    address_lines.append(shipping_address['address2'])
+                city_line = []
+                if shipping_address.get('city'):
+                    city_line.append(shipping_address['city'])
+                if shipping_address.get('province_code') or shipping_address.get('province'):
+                    city_line.append(shipping_address.get('province_code') or shipping_address.get('province'))
+                if shipping_address.get('zip'):
+                    city_line.append(shipping_address['zip'])
+                if city_line:
+                    address_lines.append(', '.join(city_line))
+                if shipping_address.get('country'):
+                    address_lines.append(shipping_address['country'])
+
+        # Format order date
+        order_date = ''
+        if order.get('shopify_created_at'):
+            order_date = order['shopify_created_at'].strftime('%B %d, %Y at %I:%M %p')
+
+        # Build line items HTML
+        items_html = ''
+        for item in line_items_with_props:
+            props_html = ''
+            if item['properties']:
+                props_html = '<div class="item-props">'
+                for p in item['properties']:
+                    props_html += f'<div class="prop"><span class="prop-name">{p["name"]}:</span> {p["value"]}</div>'
+                props_html += '</div>'
+
+            # Highlight quantities > 1 with a circle
+            qty = item["quantity"]
+            qty_class = "item-qty highlight-qty" if qty > 1 else "item-qty"
+
+            items_html += f'''
+            <tr>
+                <td class="{qty_class}"><span class="qty-number">{qty}</span></td>
+                <td class="item-details">
+                    <div class="item-title">{item["title"]}</div>
+                    {f'<div class="item-variant">{item["variant"]}</div>' if item["variant"] else ''}
+                    {f'<div class="item-sku">SKU: {item["sku"]}</div>' if item["sku"] else ''}
+                    {props_html}
+                </td>
+            </tr>
+            '''
+
+        # Generate the packing slip HTML
+        html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Packing Slip - Order #{order['order_number']}</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 12pt;
+            line-height: 1.4;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }}
+        @media print {{
+            body {{
+                padding: 0;
+            }}
+            .no-print {{
+                display: none !important;
+            }}
+        }}
+        .header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            border-bottom: 2px solid #333;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }}
+        .company-name {{
+            font-size: 24pt;
+            font-weight: bold;
+            color: #333;
+        }}
+        .order-info {{
+            text-align: right;
+        }}
+        .order-number {{
+            font-size: 18pt;
+            font-weight: bold;
+            color: #534bc4;
+        }}
+        .order-date {{
+            color: #666;
+            margin-top: 4px;
+        }}
+        .addresses {{
+            display: flex;
+            gap: 40px;
+            margin-bottom: 25px;
+        }}
+        .address-block {{
+            flex: 1;
+        }}
+        .address-label {{
+            font-weight: bold;
+            color: #666;
+            text-transform: uppercase;
+            font-size: 10pt;
+            margin-bottom: 8px;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 4px;
+        }}
+        .address-content {{
+            line-height: 1.6;
+        }}
+        .items-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }}
+        .items-table th {{
+            background: #f5f5f5;
+            padding: 10px 12px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid #ddd;
+        }}
+        .items-table td {{
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+            vertical-align: top;
+        }}
+        .item-qty {{
+            width: 60px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 14pt;
+        }}
+        .item-qty .qty-number {{
+            display: inline-block;
+            min-width: 28px;
+            padding: 4px 8px;
+        }}
+        .highlight-qty .qty-number {{
+            border: 3px solid #c62828;
+            border-radius: 50%;
+            background: #ffebee;
+            color: #c62828;
+            font-size: 16pt;
+            min-width: 36px;
+            padding: 6px 10px;
+        }}
+        .item-title {{
+            font-weight: 600;
+            margin-bottom: 2px;
+        }}
+        .item-variant {{
+            color: #666;
+            font-size: 11pt;
+        }}
+        .item-sku {{
+            color: #999;
+            font-size: 10pt;
+            margin-top: 2px;
+        }}
+        .item-props {{
+            margin-top: 8px;
+            padding: 8px;
+            background: #f9f9f9;
+            border-radius: 4px;
+            font-size: 10pt;
+        }}
+        .prop {{
+            margin-bottom: 3px;
+        }}
+        .prop-name {{
+            color: #888;
+        }}
+        .notes {{
+            background: #fffbeb;
+            border: 1px solid #fcd34d;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 20px;
+        }}
+        .notes-label {{
+            font-weight: bold;
+            margin-bottom: 4px;
+        }}
+        .footer {{
+            margin-top: 30px;
+            padding-top: 15px;
+            border-top: 1px solid #ddd;
+            text-align: center;
+            color: #666;
+            font-size: 10pt;
+        }}
+        .print-btn {{
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 24px;
+            background: #534bc4;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+        }}
+        .print-btn:hover {{
+            background: #4338b8;
+        }}
+    </style>
+</head>
+<body>
+    <button class="print-btn no-print" onclick="window.print()">Print Packing Slip</button>
+
+    <div class="header">
+        <div class="company-name">H&O Sportswear</div>
+        <div class="order-info">
+            <div class="order-number">Order #{order['order_number']}</div>
+            <div class="order-date">{order_date}</div>
+        </div>
+    </div>
+
+    <div class="addresses">
+        <div class="address-block">
+            <div class="address-label">Ship To</div>
+            <div class="address-content">
+                {'<br>'.join(address_lines) if address_lines else 'No address provided'}
+            </div>
+        </div>
+        <div class="address-block">
+            <div class="address-label">Contact</div>
+            <div class="address-content">
+                {order['customer_name'] or 'Customer'}<br>
+                {order['customer_email'] or ''}<br>
+                {order.get('customer_phone') or ''}
+            </div>
+        </div>
+    </div>
+
+    {f'<div class="notes"><div class="notes-label">Order Notes:</div>{order["note"]}</div>' if order.get('note') else ''}
+
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th style="width: 60px; text-align: center;">Qty</th>
+                <th>Item</th>
+            </tr>
+        </thead>
+        <tbody>
+            {items_html}
+        </tbody>
+    </table>
+
+    <div class="footer">
+        Thank you for your order!<br>
+        {order.get('tracking_number') or ''}
+    </div>
+</body>
+</html>'''
+
+        return html, 200, {'Content-Type': 'text/html'}
+
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return f"<html><body><h1>Error</h1><p>{str(e)}</p></body></html>", 500
+
+
+@app.route("/api/orders/<order_number>/customs-info", methods=["GET"])
+def api_get_customs_info(order_number):
+    """
+    Get customs information for an order's line items.
+    Returns whether the order is international and customs details for each item.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get the order
+        cursor.execute("""
+            SELECT id, shipping_address, total_weight_grams
+            FROM orders
+            WHERE order_number = %s
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Order not found"}), 404
+
+        # Check if international
+        is_international = False
+        destination_country = "Canada"
+        shipping_address = {}
+        if order.get('shipping_address'):
+            try:
+                shipping_address = json.loads(order['shipping_address'])
+                country = shipping_address.get('country', '').upper()
+                destination_country = shipping_address.get('country', 'Canada')
+                if country and country not in ['CANADA', 'CA']:
+                    is_international = True
+            except:
+                pass
+
+        # Get line items with customs info
+        cursor.execute("""
+            SELECT id, product_title, variant_title, sku, quantity, price, grams,
+                   hs_code, country_of_origin, customs_description
+            FROM order_line_items
+            WHERE order_id = %s
+            ORDER BY id
+        """, (order['id'],))
+        line_items = cursor.fetchall()
+
+        items_data = []
+        for item in line_items:
+            items_data.append({
+                "id": item['id'],
+                "title": item['product_title'] or '',
+                "variant": item['variant_title'] or '',
+                "sku": item['sku'] or '',
+                "quantity": item['quantity'] or 1,
+                "price": float(item['price']) if item.get('price') else 0,
+                "weight_grams": item.get('grams') or 0,
+                "hs_code": item.get('hs_code') or '',
+                "country_of_origin": item.get('country_of_origin') or 'CA',
+                "customs_description": item.get('customs_description') or item['product_title'] or ''
+            })
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "is_international": is_international,
+            "destination_country": destination_country,
+            "total_weight_grams": order.get('total_weight_grams') or 0,
+            "items": items_data
+        })
+
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/orders/<order_number>/customs-info", methods=["POST"])
+def api_update_customs_info(order_number):
+    """
+    Update customs information for order line items.
+
+    Request body:
+    {
+        "items": [
+            {
+                "id": 123,
+                "hs_code": "4901.99",
+                "country_of_origin": "CA",
+                "customs_description": "Printed paper planner"
+            }
+        ]
+    }
+    """
+    data = request.get_json()
+    if not data or 'items' not in data:
+        return jsonify({"success": False, "error": "Missing items data"}), 400
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Verify order exists
+        cursor.execute("SELECT id FROM orders WHERE order_number = %s", (order_number,))
+        order = cursor.fetchone()
+        if not order:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Order not found"}), 404
+
+        # Update each line item
+        updated_count = 0
+        for item in data['items']:
+            if 'id' not in item:
+                continue
+
+            cursor.execute("""
+                UPDATE order_line_items
+                SET hs_code = %s,
+                    country_of_origin = %s,
+                    customs_description = %s
+                WHERE id = %s AND order_id = %s
+            """, (
+                item.get('hs_code') or None,
+                item.get('country_of_origin') or 'CA',
+                item.get('customs_description') or None,
+                item['id'],
+                order['id']
+            ))
+            updated_count += cursor.rowcount
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"success": True, "updated_count": updated_count})
+
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/orders/<order_number>/customs-form", methods=["GET"])
+def api_get_customs_form(order_number):
+    """
+    Generate a printable customs declaration form for an international order.
+    Returns HTML that can be printed.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get the order
+        cursor.execute("""
+            SELECT id, order_number, customer_name, customer_email,
+                   shipping_address, total_price, total_weight_grams, currency
+            FROM orders
+            WHERE order_number = %s
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            cursor.close()
+            conn.close()
+            return "<html><body><h1>Order not found</h1></body></html>", 404
+
+        # Parse shipping address
+        shipping_address = {}
+        if order.get('shipping_address'):
+            try:
+                shipping_address = json.loads(order['shipping_address'])
+            except:
+                pass
+
+        # Get line items with customs info
+        cursor.execute("""
+            SELECT id, product_title, variant_title, sku, quantity, price, grams,
+                   hs_code, country_of_origin, customs_description
+            FROM order_line_items
+            WHERE order_id = %s
+            ORDER BY id
+        """, (order['id'],))
+        line_items = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        # Calculate totals
+        total_items = sum(item.get('quantity', 1) for item in line_items)
+        total_value = sum(float(item.get('price', 0)) * (item.get('quantity', 1)) for item in line_items)
+        total_weight = order.get('total_weight_grams') or 0
+
+        # Build items HTML
+        items_html = ""
+        for i, item in enumerate(line_items, 1):
+            qty = item.get('quantity', 1)
+            price = float(item.get('price', 0))
+            weight_g = item.get('grams') or 0
+            description = item.get('customs_description') or item.get('product_title') or 'Goods'
+            hs_code = item.get('hs_code') or ''
+            origin = item.get('country_of_origin') or 'CA'
+
+            items_html += f'''
+            <tr>
+                <td style="text-align: center;">{i}</td>
+                <td>{description}</td>
+                <td style="text-align: center;">{qty}</td>
+                <td style="text-align: right;">{weight_g}g</td>
+                <td style="text-align: right;">${price:.2f} {order.get('currency', 'CAD')}</td>
+                <td style="text-align: center;">{origin}</td>
+                <td style="text-align: center;">{hs_code}</td>
+            </tr>'''
+
+        # Sender info - you can customize this
+        sender_name = "Your Company Name"
+        sender_address = "123 Your Street, City, Province, Postal Code, Canada"
+
+        # Recipient info
+        recipient_name = shipping_address.get('name', order.get('customer_name', ''))
+        recipient_addr_parts = []
+        if shipping_address.get('address1'):
+            recipient_addr_parts.append(shipping_address['address1'])
+        if shipping_address.get('address2'):
+            recipient_addr_parts.append(shipping_address['address2'])
+        city_line = ', '.join(filter(None, [
+            shipping_address.get('city'),
+            shipping_address.get('province') or shipping_address.get('province_code'),
+            shipping_address.get('zip')
+        ]))
+        if city_line:
+            recipient_addr_parts.append(city_line)
+        if shipping_address.get('country'):
+            recipient_addr_parts.append(shipping_address['country'])
+        recipient_address = '<br>'.join(recipient_addr_parts)
+
+        html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Customs Declaration - Order #{order_number}</title>
+    <style>
+        @media print {{
+            body {{ margin: 0; }}
+            .no-print {{ display: none; }}
+        }}
+        body {{
+            font-family: Arial, sans-serif;
+            font-size: 11pt;
+            max-width: 8.5in;
+            margin: 0 auto;
+            padding: 20px;
+            color: #000;
+        }}
+        .header {{
+            text-align: center;
+            border-bottom: 2px solid #000;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 18pt;
+            text-transform: uppercase;
+        }}
+        .header h2 {{
+            margin: 5px 0 0 0;
+            font-size: 12pt;
+            font-weight: normal;
+        }}
+        .address-section {{
+            display: flex;
+            gap: 40px;
+            margin-bottom: 20px;
+        }}
+        .address-box {{
+            flex: 1;
+            border: 1px solid #000;
+            padding: 10px;
+        }}
+        .address-box h3 {{
+            margin: 0 0 8px 0;
+            font-size: 10pt;
+            text-transform: uppercase;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 4px;
+        }}
+        .address-box p {{
+            margin: 0;
+            line-height: 1.4;
+        }}
+        .contents-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }}
+        .contents-table th {{
+            background: #f0f0f0;
+            border: 1px solid #000;
+            padding: 6px 8px;
+            text-align: left;
+            font-size: 9pt;
+            text-transform: uppercase;
+        }}
+        .contents-table td {{
+            border: 1px solid #000;
+            padding: 6px 8px;
+            font-size: 10pt;
+        }}
+        .totals {{
+            display: flex;
+            justify-content: flex-end;
+            gap: 30px;
+            margin-bottom: 20px;
+            font-size: 11pt;
+        }}
+        .totals div {{
+            padding: 8px 12px;
+            border: 1px solid #000;
+        }}
+        .totals strong {{
+            margin-right: 10px;
+        }}
+        .declaration {{
+            border: 1px solid #000;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 10pt;
+        }}
+        .declaration h3 {{
+            margin: 0 0 10px 0;
+            font-size: 11pt;
+        }}
+        .signature-section {{
+            display: flex;
+            gap: 40px;
+            margin-top: 30px;
+        }}
+        .signature-box {{
+            flex: 1;
+        }}
+        .signature-line {{
+            border-bottom: 1px solid #000;
+            height: 40px;
+            margin-bottom: 5px;
+        }}
+        .signature-label {{
+            font-size: 9pt;
+            color: #666;
+        }}
+        .print-btn {{
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 10px 20px;
+            background: #534bc4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12pt;
+        }}
+        .print-btn:hover {{
+            background: #3f3a99;
+        }}
+    </style>
+</head>
+<body>
+    <button class="print-btn no-print" onclick="window.print()">Print Form</button>
+
+    <div class="header">
+        <h1>Customs Declaration</h1>
+        <h2>CN 22 / Commercial Invoice</h2>
+        <p style="margin-top: 8px;">Order #{order_number}</p>
+    </div>
+
+    <div class="address-section">
+        <div class="address-box">
+            <h3>From (Sender)</h3>
+            <p>{sender_name}<br>{sender_address}</p>
+        </div>
+        <div class="address-box">
+            <h3>To (Recipient)</h3>
+            <p>{recipient_name}<br>{recipient_address}</p>
+        </div>
+    </div>
+
+    <h3 style="margin-bottom: 10px;">Contents Description</h3>
+    <table class="contents-table">
+        <thead>
+            <tr>
+                <th style="width: 30px;">#</th>
+                <th>Description of Contents</th>
+                <th style="width: 50px; text-align: center;">Qty</th>
+                <th style="width: 70px; text-align: right;">Weight</th>
+                <th style="width: 90px; text-align: right;">Value</th>
+                <th style="width: 60px; text-align: center;">Origin</th>
+                <th style="width: 80px; text-align: center;">HS Code</th>
+            </tr>
+        </thead>
+        <tbody>
+            {items_html}
+        </tbody>
+    </table>
+
+    <div class="totals">
+        <div><strong>Total Items:</strong> {total_items}</div>
+        <div><strong>Total Weight:</strong> {total_weight}g ({total_weight / 1000:.2f}kg)</div>
+        <div><strong>Total Value:</strong> ${total_value:.2f} {order.get('currency', 'CAD')}</div>
+    </div>
+
+    <div class="declaration">
+        <h3>Customs Declaration</h3>
+        <p>I, the undersigned, certify that the information given in this customs declaration is true and correct and that this parcel does not contain any dangerous article or articles prohibited by legislation or by postal or customs regulations.</p>
+        <p style="margin-top: 10px;"><strong>Category of Item:</strong> ☑ Sale of Goods &nbsp;&nbsp; ☐ Gift &nbsp;&nbsp; ☐ Documents &nbsp;&nbsp; ☐ Commercial Sample &nbsp;&nbsp; ☐ Return</p>
+    </div>
+
+    <div class="signature-section">
+        <div class="signature-box">
+            <div class="signature-line"></div>
+            <div class="signature-label">Signature of Sender</div>
+        </div>
+        <div class="signature-box">
+            <div class="signature-line"></div>
+            <div class="signature-label">Date</div>
+        </div>
+    </div>
+
+</body>
+</html>'''
+
+        return html, 200, {'Content-Type': 'text/html'}
+
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return f"<html><body><h1>Error</h1><p>{str(e)}</p></body></html>", 500
+
+
+@app.route("/api/orders/<order_number>/cancel", methods=["POST"])
+def api_cancel_order(order_number):
+    """
+    Cancel an order - locally and optionally in Shopify with refund.
+
+    Request body:
+    {
+        "reason": "customer_cancelled",  # customer_cancelled, duplicate_order, fraud, refund_requested, other
+        "reason_notes": "Optional notes",
+        "cancelled_by": "Jess",
+        "cancel_in_shopify": true,      # Whether to cancel in Shopify
+        "issue_refund": true,           # Whether to issue refund
+        "email_customer": true,         # Whether to email customer
+        "restock_inventory": true       # Whether to restock inventory
+    }
+    """
+    conn = get_mysql_connection()
+    try:
+        data = request.json or {}
+        cursor = conn.cursor()
+
+        # Get the order
+        cursor.execute("""
+            SELECT id, shopify_order_id, order_number, customer_name, customer_email,
+                   tracking_number, total_price
+            FROM orders
+            WHERE order_number = %s AND cancelled_at IS NULL
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            return jsonify({"success": False, "error": "Order not found or already cancelled"}), 404
+
+        reason = data.get('reason', 'other')
+        reason_notes = data.get('reason_notes', '')
+        cancelled_by = data.get('cancelled_by', '')
+        cancel_in_shopify = data.get('cancel_in_shopify', False)
+        issue_refund = data.get('issue_refund', False)
+        email_customer = data.get('email_customer', True)
+        restock_inventory = data.get('restock_inventory', True)
+
+        shopify_order_id = order.get('shopify_order_id')
+        shopify_cancel_result = None
+        shopify_refund_result = None
+        refund_amount = None
+
+        # Cancel in Shopify if requested and we have a Shopify order ID
+        if cancel_in_shopify and shopify_order_id:
+            try:
+                shopify_api = get_shopify_api()
+
+                # If refund requested, do refund first (before cancelling)
+                if issue_refund:
+                    print(f"[Cancel] Creating refund for Shopify order {shopify_order_id}")
+                    shopify_refund_result = shopify_api.create_refund(shopify_order_id, notify_customer=email_customer)
+                    if shopify_refund_result.get('success'):
+                        refund_amount = shopify_refund_result.get('total_refunded', 0)
+                        print(f"[Cancel] Refund successful: ${refund_amount:.2f}")
+                    else:
+                        print(f"[Cancel] Refund failed: {shopify_refund_result.get('error')}")
+
+                # Cancel the order in Shopify
+                print(f"[Cancel] Cancelling Shopify order {shopify_order_id}")
+                shopify_cancel_result = shopify_api.cancel_order(
+                    shopify_order_id,
+                    reason=reason,
+                    email_customer=email_customer,
+                    restock=restock_inventory
+                )
+
+                if not shopify_cancel_result.get('success'):
+                    # If Shopify cancellation failed, return error but still record locally
+                    print(f"[Cancel] Shopify cancellation failed: {shopify_cancel_result.get('error')}")
+
+            except Exception as e:
+                print(f"[Cancel] Shopify API error: {e}")
+                shopify_cancel_result = {"success": False, "error": str(e)}
+
+        # Insert into cancelled_orders table
+        cursor.execute("""
+            INSERT INTO cancelled_orders (
+                order_id, shopify_order_id, order_number, tracking_number,
+                customer_name, customer_email, reason, reason_notes, cancelled_by,
+                refund_amount, refund_issued, shopify_refund_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            order['id'],
+            order['shopify_order_id'],
+            order['order_number'],
+            order.get('tracking_number'),
+            order['customer_name'],
+            order['customer_email'],
+            reason,
+            reason_notes,
+            cancelled_by,
+            refund_amount,
+            1 if (shopify_refund_result and shopify_refund_result.get('success')) else 0,
+            shopify_refund_result.get('refund_id') if shopify_refund_result else None
+        ))
+
+        # Update the orders table to mark as cancelled
+        cursor.execute("""
+            UPDATE orders
+            SET cancelled_at = CURRENT_TIMESTAMP,
+                cancel_reason = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (reason, order['id']))
+
+        conn.commit()
+
+        # Build response
+        response_data = {
+            "success": True,
+            "message": f"Order #{order_number} cancelled successfully",
+            "order_number": order_number,
+            "cancelled_locally": True
+        }
+
+        if cancel_in_shopify:
+            response_data["shopify_cancelled"] = shopify_cancel_result.get('success', False) if shopify_cancel_result else False
+            if shopify_cancel_result and not shopify_cancel_result.get('success'):
+                response_data["shopify_error"] = shopify_cancel_result.get('error')
+
+        if issue_refund:
+            response_data["refund_issued"] = shopify_refund_result.get('success', False) if shopify_refund_result else False
+            if shopify_refund_result and shopify_refund_result.get('success'):
+                response_data["refund_amount"] = refund_amount
+            elif shopify_refund_result:
+                response_data["refund_error"] = shopify_refund_result.get('error')
+
+        return jsonify(response_data)
+
+    except Exception as e:
+        print(f"Error cancelling order {order_number}: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+    # Debug mode disabled by default to prevent auto-reloader from killing long-running syncs
+    # Set FLASK_DEBUG=true in environment to enable debug mode for local development
+    debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=debug_mode)

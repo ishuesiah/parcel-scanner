@@ -188,6 +188,7 @@
       <ul>
         <li><a href="{{ url_for('new_batch') }}" {% if active_page == 'new_batch' %}class="active"{% endif %}>New Batch</a></li>
         <li><a href="{{ url_for('all_batches') }}" {% if active_page == 'all_batches' %}class="active"{% endif %}>Batches</a></li>
+        <li><a href="{{ url_for('all_orders') }}" {% if active_page == 'all_orders' %}class="active"{% endif %}>All Orders</a></li>
         <li><a href="{{ url_for('all_scans') }}" {% if active_page == 'all_scans' %}class="active"{% endif %}>All Scans</a></li>
         <li><a href="{{ url_for('stuck_orders') }}" {% if active_page == 'stuck_orders' %}class="active"{% endif %}>Fix Stuck Orders</a></li>
         <li><a href="{{ url_for('pick_and_pack') }}" {% if active_page == 'pick_and_pack' %}class="active"{% endif %}>Pick and Pack</a></li>
