@@ -1730,6 +1730,8 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
         local_found = False
         try:
             cursor = conn.cursor()
+
+            # First try orders table (Shopify data - has email)
             cursor.execute("""
                 SELECT order_number, customer_name, customer_email, shopify_order_id
                 FROM orders
@@ -1737,7 +1739,6 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 LIMIT 1
             """, (tracking_number,))
             local_order = cursor.fetchone()
-            cursor.close()
 
             if local_order and local_order.get('order_number'):
                 local_found = True
@@ -1745,7 +1746,31 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 customer_name = local_order.get('customer_name', 'Not Found')
                 customer_email = local_order.get('customer_email', '')
                 order_id = local_order.get('shopify_order_id', '')
-                print(f"✅ LOCAL DB: Found order {order_number} for {tracking_number} (skipping API calls)")
+                print(f"✅ LOCAL DB (orders): Found order {order_number} for {tracking_number}")
+
+            # If not found in orders, try shipments_cache (ShipStation data)
+            if not local_found:
+                cursor.execute("""
+                    SELECT order_number, customer_name, carrier_code, shipstation_batch_number
+                    FROM shipments_cache
+                    WHERE tracking_number = %s
+                    LIMIT 1
+                """, (tracking_number,))
+                cached_shipment = cursor.fetchone()
+
+                if cached_shipment and cached_shipment.get('order_number'):
+                    local_found = True
+                    order_number = cached_shipment.get('order_number', 'N/A')
+                    customer_name = cached_shipment.get('customer_name', 'Not Found')
+                    shipstation_batch_number = cached_shipment.get('shipstation_batch_number', '')
+                    carrier_code = cached_shipment.get('carrier_code', '')
+                    if carrier_code:
+                        carrier_map = {"ups": "UPS", "canadapost": "Canada Post", "canada_post": "Canada Post",
+                                       "dhl": "DHL", "dhl_express": "DHL", "purolator": "Purolator"}
+                        scan_carrier = carrier_map.get(carrier_code.lower(), scan_carrier)
+                    print(f"✅ LOCAL DB (shipments_cache): Found order {order_number} for {tracking_number}")
+
+            cursor.close()
         except Exception as e:
             print(f"Local DB lookup error for {tracking_number}: {e}")
 
@@ -3493,6 +3518,7 @@ def fix_order(scan_id):
             # ── LOCAL DATABASE LOOKUP FIRST ──
             local_found = False
             try:
+                # First try orders table (Shopify data - has email)
                 cursor.execute("""
                     SELECT order_number, customer_name, customer_email, shopify_order_id
                     FROM orders
@@ -3507,7 +3533,29 @@ def fix_order(scan_id):
                     customer_name = local_order.get('customer_name', 'Not Found')
                     customer_email = local_order.get('customer_email', '')
                     order_id = local_order.get('shopify_order_id', '')
-                    print(f"✅ LOCAL DB: Found order {order_number} for {tracking_number}")
+                    print(f"✅ LOCAL DB (orders): Found order {order_number} for {tracking_number}")
+
+                # If not found in orders, try shipments_cache (ShipStation data)
+                if not local_found:
+                    cursor.execute("""
+                        SELECT order_number, customer_name, carrier_code, shipstation_batch_number
+                        FROM shipments_cache
+                        WHERE tracking_number = %s
+                        LIMIT 1
+                    """, (tracking_number,))
+                    cached_shipment = cursor.fetchone()
+
+                    if cached_shipment and cached_shipment.get('order_number'):
+                        local_found = True
+                        order_number = cached_shipment.get('order_number', 'N/A')
+                        customer_name = cached_shipment.get('customer_name', 'Not Found')
+                        shipstation_batch_number = cached_shipment.get('shipstation_batch_number', '')
+                        carrier_code = cached_shipment.get('carrier_code', '')
+                        if carrier_code:
+                            carrier_map = {"ups": "UPS", "canadapost": "Canada Post", "canada_post": "Canada Post",
+                                           "dhl": "DHL", "dhl_express": "DHL", "purolator": "Purolator"}
+                            scan_carrier = carrier_map.get(carrier_code.lower(), scan_carrier)
+                        print(f"✅ LOCAL DB (shipments_cache): Found order {order_number} for {tracking_number}")
             except Exception as e:
                 print(f"Local DB lookup error: {e}")
 
