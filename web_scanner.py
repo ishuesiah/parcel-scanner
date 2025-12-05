@@ -4506,9 +4506,11 @@ def api_orders_sync():
     Query params:
         - full: If 'true', do full 90-day sync. Otherwise incremental.
         - async: If 'true', run in background (default for full sync)
+        - resume: If 'true', try to resume an interrupted sync
     """
     full_sync = request.args.get('full', 'false').lower() == 'true'
     run_async = request.args.get('async', 'true' if full_sync else 'false').lower() == 'true'
+    resume = request.args.get('resume', 'false').lower() == 'true'
 
     try:
         orders_sync = get_orders_sync()
@@ -4516,19 +4518,26 @@ def api_orders_sync():
         # Check if sync is already running
         status = orders_sync.get_sync_status()
         if status.get('status') == 'running':
-            return jsonify({
-                "success": False,
-                "error": "Sync already in progress. Please wait for it to complete.",
-                "status": "running"
-            }), 409
+            # If resume requested and sync is stale, allow it
+            if resume and (status.get('can_resume') or status.get('status_hint') == 'interrupted'):
+                print("Resuming interrupted sync...")
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": "Sync already in progress. Please wait for it to complete.",
+                    "status": "running",
+                    "can_resume": status.get('can_resume', False)
+                }), 409
 
         if run_async:
             # Run sync in background thread
             def run_sync():
                 try:
-                    orders_sync.sync_orders(full_sync=full_sync, days_back=90)
+                    orders_sync.sync_orders(full_sync=full_sync, days_back=90, resume=resume)
                 except Exception as e:
                     print(f"Background orders sync error: {e}")
+                    import traceback
+                    traceback.print_exc()
 
             import threading
             sync_thread = threading.Thread(target=run_sync, daemon=True)
@@ -4538,11 +4547,12 @@ def api_orders_sync():
                 "success": True,
                 "synced_count": 0,
                 "message": "Sync started in background. Check status for progress.",
-                "async": True
+                "async": True,
+                "resume": resume
             })
         else:
             # Synchronous sync (for small incremental syncs)
-            count, message = orders_sync.sync_orders(full_sync=full_sync, days_back=90)
+            count, message = orders_sync.sync_orders(full_sync=full_sync, days_back=90, resume=resume)
             return jsonify({
                 "success": True,
                 "synced_count": count,

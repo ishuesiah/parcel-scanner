@@ -805,7 +805,7 @@
   async function pollSyncStatus() {
     const syncStatus = document.getElementById('syncStatus');
     let attempts = 0;
-    const maxAttempts = 120; // Poll for up to 10 minutes (5s interval)
+    const maxAttempts = 120; // Poll for up to 10 minutes
 
     const poll = async () => {
       attempts++;
@@ -814,9 +814,25 @@
         const status = await response.json();
 
         if (status.status === 'running') {
-          syncStatus.textContent = 'Sync in progress... (checked ' + attempts + ' times)';
+          // Check if sync was interrupted (stale running status)
+          if (status.can_resume || status.status_hint === 'interrupted') {
+            syncStatus.innerHTML = `Sync was interrupted at page ${status.current_page || '?'}. ` +
+              `<a href="#" onclick="resumeSync(); return false;" style="color: #534bc4;">Click to resume</a>`;
+            resetSyncButtons();
+            return;
+          }
+
+          // Show progress info if available
+          let progressText = 'Sync in progress...';
+          if (status.progress_message) {
+            progressText = status.progress_message;
+          } else if (status.synced_so_far > 0) {
+            progressText = `Syncing... ${status.synced_so_far} orders processed`;
+          }
+          syncStatus.textContent = progressText;
+
           if (attempts < maxAttempts) {
-            setTimeout(poll, 5000); // Check every 5 seconds
+            setTimeout(poll, 3000); // Check every 3 seconds for better feedback
           } else {
             syncStatus.textContent = 'Sync still running. Refresh page to check later.';
             resetSyncButtons();
@@ -847,6 +863,48 @@
     // Start polling after a brief delay
     setTimeout(poll, 3000);
   }
+
+  async function resumeSync() {
+    const syncStatus = document.getElementById('syncStatus');
+    syncStatus.textContent = 'Resuming sync...';
+
+    try {
+      const response = await fetch('/api/orders/sync?resume=true', {method: 'POST'});
+      const data = await response.json();
+
+      if (data.success) {
+        syncStatus.textContent = 'Sync resumed. Checking progress...';
+        pollSyncStatus();
+      } else {
+        alert('Failed to resume: ' + (data.error || 'Unknown error'));
+        syncStatus.textContent = 'Resume failed';
+      }
+    } catch (error) {
+      alert('Error resuming sync: ' + error.message);
+      syncStatus.textContent = 'Resume error';
+    }
+  }
+
+  // Check sync status on page load
+  (async function checkInitialStatus() {
+    try {
+      const response = await fetch('/api/orders/sync/status');
+      const status = await response.json();
+
+      if (status.status === 'running') {
+        if (status.can_resume || status.status_hint === 'interrupted') {
+          document.getElementById('syncStatus').innerHTML =
+            `Sync was interrupted at page ${status.current_page || '?'} (${status.synced_so_far || 0} orders). ` +
+            `<a href="#" onclick="resumeSync(); return false;" style="color: #534bc4; font-weight: 500;">Click to resume</a>`;
+        } else {
+          document.getElementById('syncStatus').textContent = status.progress_message || 'Sync in progress...';
+          pollSyncStatus();
+        }
+      }
+    } catch (e) {
+      console.error('Error checking initial sync status:', e);
+    }
+  })();
 
   // Close modals on escape key
   document.addEventListener('keydown', function(e) {

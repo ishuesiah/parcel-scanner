@@ -26,6 +26,12 @@ def now_pst():
     return datetime.now(PST)
 
 
+def sync_log(message: str):
+    """Log a sync message with timestamp."""
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    print(f"[orders_sync {timestamp}] {message}")
+
+
 def init_orders_tables(get_db_connection):
     """
     Initialize the orders tables if they don't exist.
@@ -123,10 +129,23 @@ def init_orders_tables(get_db_connection):
                 last_sync_count INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'idle',
                 error_message TEXT,
+                current_page INTEGER DEFAULT 0,
+                synced_so_far INTEGER DEFAULT 0,
+                progress_message TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Add progress columns if they don't exist (migration for existing installs)
+        try:
+            cursor.execute("ALTER TABLE order_sync_status ADD COLUMN IF NOT EXISTS current_page INTEGER DEFAULT 0")
+            cursor.execute("ALTER TABLE order_sync_status ADD COLUMN IF NOT EXISTS synced_so_far INTEGER DEFAULT 0")
+            cursor.execute("ALTER TABLE order_sync_status ADD COLUMN IF NOT EXISTS progress_message TEXT")
+            cursor.execute("ALTER TABLE order_sync_status ADD COLUMN IF NOT EXISTS page_cursor TEXT")
+            cursor.execute("ALTER TABLE order_sync_status ADD COLUMN IF NOT EXISTS sync_params TEXT")
+        except:
+            pass  # Columns might already exist
 
         # Insert initial sync status record if it doesn't exist
         cursor.execute("""
@@ -240,6 +259,9 @@ class OrdersSync:
                         last_sync_at = CURRENT_TIMESTAMP,
                         last_sync_count = %s,
                         error_message = NULL,
+                        current_page = 0,
+                        synced_so_far = 0,
+                        progress_message = 'Completed',
                         updated_at = CURRENT_TIMESTAMP
                     WHERE sync_type = 'shopify_orders'
                 """, (count,))
@@ -248,6 +270,9 @@ class OrdersSync:
                     UPDATE order_sync_status
                     SET status = 'running',
                         error_message = NULL,
+                        current_page = 0,
+                        synced_so_far = 0,
+                        progress_message = 'Starting sync...',
                         updated_at = CURRENT_TIMESTAMP
                     WHERE sync_type = 'shopify_orders'
                 """)
@@ -256,9 +281,10 @@ class OrdersSync:
                     UPDATE order_sync_status
                     SET status = 'error',
                         error_message = %s,
+                        progress_message = %s,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE sync_type = 'shopify_orders'
-                """, (error,))
+                """, (error, f"Error: {error}"))
 
             conn.commit()
             cursor.close()
@@ -266,7 +292,62 @@ class OrdersSync:
         except Exception as e:
             print(f"Error updating sync status: {e}")
 
-    def sync_orders(self, full_sync: bool = False, days_back: int = 90) -> Tuple[int, str]:
+    def update_sync_progress(self, page: int, synced: int, message: str, page_cursor: str = None):
+        """Update sync progress in database (called after each page)."""
+        try:
+            conn = self.get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE order_sync_status
+                SET current_page = %s,
+                    synced_so_far = %s,
+                    progress_message = %s,
+                    page_cursor = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE sync_type = 'shopify_orders'
+            """, (page, synced, message, page_cursor))
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error updating sync progress: {e}")
+
+    def get_interrupted_sync(self) -> Optional[Dict]:
+        """Check if there's an interrupted sync that can be resumed."""
+        try:
+            conn = self.get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT status, current_page, synced_so_far, page_cursor, sync_params, updated_at
+                FROM order_sync_status
+                WHERE sync_type = 'shopify_orders'
+            """)
+            row = cursor.fetchone()
+            cursor.close()
+            conn.close()
+
+            if row and row.get('status') == 'running':
+                # Check if the sync was updated recently (within 5 minutes)
+                # If not, it was likely interrupted
+                updated_at = row.get('updated_at')
+                if updated_at:
+                    if updated_at.tzinfo is None:
+                        updated_at = updated_at.replace(tzinfo=timezone.utc)
+                    age_minutes = (datetime.now(timezone.utc) - updated_at).total_seconds() / 60
+                    if age_minutes > 2 and row.get('page_cursor'):
+                        # Sync was interrupted, return resume info
+                        return {
+                            'page': row.get('current_page', 1),
+                            'synced_so_far': row.get('synced_so_far', 0),
+                            'page_cursor': row.get('page_cursor'),
+                            'sync_params': json.loads(row.get('sync_params', '{}')) if row.get('sync_params') else {}
+                        }
+            return None
+        except Exception as e:
+            print(f"Error checking interrupted sync: {e}")
+            return None
+
+    def sync_orders(self, full_sync: bool = False, days_back: int = 90, resume: bool = True) -> Tuple[int, str]:
         """
         Sync orders from Shopify API to local database.
 
@@ -276,44 +357,85 @@ class OrdersSync:
         Args:
             full_sync: If True, sync last `days_back` days. If False, incremental sync.
             days_back: Number of days to look back for full sync (default 90)
+            resume: If True, try to resume an interrupted sync
 
         Returns:
             Tuple of (orders_synced, status_message)
         """
-        print(f"Starting orders sync (full_sync={full_sync}, days_back={days_back})...")
-        self.update_sync_status('running')
+        # Check for interrupted sync that can be resumed
+        interrupted = None
+        if resume:
+            interrupted = self.get_interrupted_sync()
+            if interrupted and interrupted.get('page_cursor'):
+                sync_log(f"Found interrupted sync at page {interrupted.get('page')}, will resume...")
 
-        conn = None
-        try:
+        if interrupted and interrupted.get('page_cursor'):
+            # Resume from interrupted sync
+            synced_count = interrupted.get('synced_so_far', 0)
+            page = interrupted.get('page', 1)
+            page_info = interrupted.get('page_cursor')
+            sync_params = interrupted.get('sync_params', {})
+            updated_at_min_str = sync_params.get('updated_at_min')
+
+            sync_log(f"RESUMING sync from page {page}, already synced {synced_count} orders")
+            self.update_sync_progress(page, synced_count, f"Resuming from page {page}...")
+        else:
+            # Start fresh sync
+            sync_log(f"STARTING orders sync (full_sync={full_sync}, days_back={days_back})")
+            self.update_sync_status('running')
+            synced_count = 0
+            page = 1
+            page_info = None
+
             # Determine time range
             if full_sync:
                 updated_at_min = datetime.now(timezone.utc) - timedelta(days=days_back)
-                print(f"Full sync: fetching orders from last {days_back} days")
+                sync_log(f"Full sync: fetching orders from last {days_back} days")
             else:
                 last_sync = self.get_last_sync_time()
                 if last_sync:
                     if last_sync.tzinfo is None:
                         last_sync = last_sync.replace(tzinfo=timezone.utc)
                     updated_at_min = last_sync
-                    print(f"Incremental sync: fetching orders updated since {last_sync}")
+                    sync_log(f"Incremental sync: orders updated since {last_sync.strftime('%Y-%m-%d %H:%M')}")
                 else:
                     updated_at_min = datetime.now(timezone.utc) - timedelta(days=30)
-                    print(f"First sync: fetching orders from last 30 days")
+                    sync_log(f"First sync: fetching orders from last 30 days")
 
+            updated_at_min_str = updated_at_min.isoformat()
+
+            # Save sync params for potential resume
+            sync_params = {
+                'full_sync': full_sync,
+                'days_back': days_back,
+                'updated_at_min': updated_at_min_str
+            }
+            try:
+                conn_tmp = self.get_db_connection()
+                cursor_tmp = conn_tmp.cursor()
+                cursor_tmp.execute("""
+                    UPDATE order_sync_status
+                    SET sync_params = %s
+                    WHERE sync_type = 'shopify_orders'
+                """, (json.dumps(sync_params),))
+                conn_tmp.commit()
+                cursor_tmp.close()
+                conn_tmp.close()
+            except Exception as e:
+                sync_log(f"Warning: Error saving sync params: {e}")
+
+        conn = None
+        error_count = 0
+
+        try:
             # Get a single connection for all upserts
             conn = self.get_db_connection()
             conn.autocommit = False
 
-            # Stream orders page-by-page to avoid memory exhaustion
-            synced_count = 0
-            error_count = 0
-            page = 1
-            page_info = None
-
             # Build initial params
             params = {
                 "status": "any",
-                "updated_at_min": updated_at_min.isoformat(),
+                "updated_at_min": updated_at_min_str,
                 "limit": 250,
                 "fields": "id,name,email,phone,total_price,subtotal_price,total_tax,"
                           "shipping_lines,financial_status,fulfillment_status,fulfillments,"
@@ -322,7 +444,7 @@ class OrdersSync:
             }
 
             while True:
-                print(f"Fetching orders page {page}...")
+                sync_log(f"Fetching page {page}...")
                 time.sleep(0.5)  # Rate limiting
 
                 if page_info:
@@ -339,20 +461,20 @@ class OrdersSync:
                         if response:
                             break
                     except Exception as e:
-                        print(f"Page {page} fetch error (attempt {retry + 1}/3): {e}")
+                        sync_log(f"Page {page} fetch error (attempt {retry + 1}/3): {e}")
                         if retry < 2:
                             time.sleep(min(2 ** retry, 8))
 
                 if not response or "orders" not in response:
-                    print(f"No more orders on page {page}")
+                    sync_log(f"End of orders reached at page {page}")
                     break
 
                 batch = response.get("orders", [])
                 if not batch:
-                    print(f"Page {page}: no orders found")
+                    sync_log(f"Page {page}: no orders found, done")
                     break
 
-                print(f"Page {page}: fetched {len(batch)} orders, processing...")
+                sync_log(f"Page {page}: processing {len(batch)} orders...")
 
                 # Process this page immediately (don't accumulate)
                 for order in batch:
@@ -361,7 +483,7 @@ class OrdersSync:
                         synced_count += 1
                     except Exception as e:
                         error_count += 1
-                        print(f"Error upserting order {order.get('id')}: {e}")
+                        sync_log(f"Error upserting order {order.get('id')}: {e}")
                         try:
                             conn.rollback()
                         except:
@@ -369,7 +491,11 @@ class OrdersSync:
 
                 # Commit after each page
                 conn.commit()
-                print(f"Page {page}: committed {len(batch)} orders (total synced: {synced_count})")
+                sync_log(f"Page {page}: committed (total: {synced_count} orders)")
+
+                # Update progress in database (so frontend can see it, and for resume)
+                # Save next_token as cursor for resume capability
+                self.update_sync_progress(page, synced_count, f"Page {page}: synced {synced_count} orders...", next_token)
 
                 # Clear batch from memory
                 del batch
@@ -381,16 +507,16 @@ class OrdersSync:
                     break
 
             if error_count > 0:
-                print(f"Warning: {error_count} orders failed to sync")
+                sync_log(f"Warning: {error_count} orders failed to sync")
 
             self.update_sync_status('completed', synced_count)
             message = f"Synced {synced_count} orders successfully"
-            print(message)
+            sync_log(f"COMPLETED: {message}")
             return synced_count, message
 
         except Exception as e:
             error_msg = str(e)
-            print(f"Orders sync error: {error_msg}")
+            sync_log(f"ERROR: Orders sync failed: {error_msg}")
             import traceback
             traceback.print_exc()
             self.update_sync_status('error', error=error_msg)
@@ -720,12 +846,13 @@ class OrdersSync:
         return "Unknown Customer"
 
     def get_sync_status(self) -> Dict:
-        """Get current sync status."""
+        """Get current sync status including progress info."""
         try:
             conn = self.get_db_connection()
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT sync_type, last_sync_at, last_sync_count, status, error_message, updated_at
+                SELECT sync_type, last_sync_at, last_sync_count, status, error_message,
+                       current_page, synced_so_far, progress_message, page_cursor, updated_at
                 FROM order_sync_status
                 WHERE sync_type = 'shopify_orders'
             """)
@@ -734,7 +861,18 @@ class OrdersSync:
             conn.close()
 
             if row:
-                return dict(row)
+                result = dict(row)
+                # Check if there's a stale "running" sync that can be resumed
+                if result.get('status') == 'running' and result.get('page_cursor'):
+                    updated_at = result.get('updated_at')
+                    if updated_at:
+                        if updated_at.tzinfo is None:
+                            updated_at = updated_at.replace(tzinfo=timezone.utc)
+                        age_minutes = (datetime.now(timezone.utc) - updated_at).total_seconds() / 60
+                        if age_minutes > 2:
+                            result['can_resume'] = True
+                            result['status_hint'] = 'interrupted'
+                return result
             return {"sync_type": "shopify_orders", "status": "unknown"}
         except Exception as e:
             return {"sync_type": "shopify_orders", "status": "error", "error_message": str(e)}
