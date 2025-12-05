@@ -1726,9 +1726,32 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
     try:
         conn = get_mysql_connection()
 
-        # ── ShipStation lookup with retry logic ──
+        # ── LOCAL DATABASE LOOKUP FIRST (fastest, no API calls) ──
+        local_found = False
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT order_number, customer_name, customer_email, shopify_order_id
+                FROM orders
+                WHERE tracking_number = %s
+                LIMIT 1
+            """, (tracking_number,))
+            local_order = cursor.fetchone()
+            cursor.close()
+
+            if local_order and local_order.get('order_number'):
+                local_found = True
+                order_number = local_order.get('order_number', 'N/A')
+                customer_name = local_order.get('customer_name', 'Not Found')
+                customer_email = local_order.get('customer_email', '')
+                order_id = local_order.get('shopify_order_id', '')
+                print(f"✅ LOCAL DB: Found order {order_number} for {tracking_number} (skipping API calls)")
+        except Exception as e:
+            print(f"Local DB lookup error for {tracking_number}: {e}")
+
+        # ── ShipStation lookup with retry logic (skip if local found) ──
         shipstation_found = False
-        if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+        if not local_found and SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
             max_retries = 4
             for retry in range(max_retries):
                 try:
@@ -1868,29 +1891,30 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                         print(f"ShipStation failed after {max_retries} retries for {tracking_number}")
                     break
 
-        # ── Shopify lookup ──
+        # ── Shopify lookup (skip if local found) ──
         shopify_found = False
-        try:
-            shopify_api = get_shopify_api()
-            shopify_info = shopify_api.get_order_by_tracking(tracking_number)
+        if not local_found:
+            try:
+                shopify_api = get_shopify_api()
+                shopify_info = shopify_api.get_order_by_tracking(tracking_number)
 
-            if shopify_info and shopify_info.get("order_id"):
-                shopify_found = True
-                order_number = shopify_info.get("order_number", order_number)
-                customer_name = shopify_info.get("customer_name", customer_name)
-                # Only update email if Shopify has one (don't overwrite ShipStation's email)
-                shopify_email = shopify_info.get("customer_email", "")
-                if shopify_email:
-                    customer_email = shopify_email
-                    print(f"📧 Shopify: Found email {customer_email} for {tracking_number}")
-                order_id = shopify_info.get("order_id", order_id)
-                print(f"✅ Shopify lookup successful for {tracking_number}: order {order_number}")
-            else:
-                print(f"Shopify lookup found no order for {tracking_number}")
-        except Exception as e:
-            print(f"Shopify error for {tracking_number}: {e}")
-            import traceback
-            traceback.print_exc()
+                if shopify_info and shopify_info.get("order_id"):
+                    shopify_found = True
+                    order_number = shopify_info.get("order_number", order_number)
+                    customer_name = shopify_info.get("customer_name", customer_name)
+                    # Only update email if Shopify has one (don't overwrite ShipStation's email)
+                    shopify_email = shopify_info.get("customer_email", "")
+                    if shopify_email:
+                        customer_email = shopify_email
+                        print(f"📧 Shopify: Found email {customer_email} for {tracking_number}")
+                    order_id = shopify_info.get("order_id", order_id)
+                    print(f"✅ Shopify lookup successful for {tracking_number}: order {order_number}")
+                else:
+                    print(f"Shopify lookup found no order for {tracking_number}")
+            except Exception as e:
+                print(f"Shopify error for {tracking_number}: {e}")
+                import traceback
+                traceback.print_exc()
 
         # ── Fallback carrier detection ──
         if not scan_carrier or scan_carrier == "":
@@ -2794,17 +2818,42 @@ def notify_customers():
                 skip_count += 1
                 continue
 
-            # Fetch line items from Shopify
+            # Fetch line items - try local DB first, then Shopify
             line_items = []
-            if shopify_api and tracking_number:
+            try:
+                # Try local database first (faster, no API call)
+                cursor.execute("""
+                    SELECT oli.product_title, oli.variant_title, oli.sku, oli.quantity, oli.price
+                    FROM order_line_items oli
+                    JOIN orders o ON oli.order_id = o.id
+                    WHERE o.order_number = %s
+                """, (order_number,))
+                local_items = cursor.fetchall()
+                if local_items:
+                    line_items = [
+                        {
+                            'title': item['product_title'],
+                            'variant_title': item['variant_title'],
+                            'sku': item['sku'],
+                            'quantity': item['quantity'],
+                            'price': str(item['price']) if item['price'] else '0'
+                        }
+                        for item in local_items
+                    ]
+                    print(f"   ✓ Found {len(line_items)} items from local DB")
+            except Exception as e:
+                print(f"   ⚠️ Local DB line items error: {e}")
+
+            # Fallback to Shopify API if local DB didn't have items
+            if not line_items and shopify_api and tracking_number:
                 try:
                     print(f"   📦 Fetching line items from Shopify...")
                     order_data = shopify_api.get_order_by_tracking(tracking_number)
                     line_items = order_data.get('line_items', [])
                     if line_items:
-                        print(f"   ✓ Found {len(line_items)} items")
+                        print(f"   ✓ Found {len(line_items)} items from Shopify")
                 except Exception as e:
-                    print(f"   ⚠️ Could not fetch line items: {e}")
+                    print(f"   ⚠️ Could not fetch line items from Shopify: {e}")
 
             # Send Klaviyo event
             print(f"   📤 Sending email to Klaviyo...")
@@ -3441,10 +3490,31 @@ def fix_order(scan_id):
             scan_carrier = carrier or scan.get('carrier', '')
             shipstation_batch_number = ""
 
-            # ── ShipStation lookup ──
+            # ── LOCAL DATABASE LOOKUP FIRST ──
+            local_found = False
+            try:
+                cursor.execute("""
+                    SELECT order_number, customer_name, customer_email, shopify_order_id
+                    FROM orders
+                    WHERE tracking_number = %s
+                    LIMIT 1
+                """, (tracking_number,))
+                local_order = cursor.fetchone()
+
+                if local_order and local_order.get('order_number'):
+                    local_found = True
+                    order_number = local_order.get('order_number', 'N/A')
+                    customer_name = local_order.get('customer_name', 'Not Found')
+                    customer_email = local_order.get('customer_email', '')
+                    order_id = local_order.get('shopify_order_id', '')
+                    print(f"✅ LOCAL DB: Found order {order_number} for {tracking_number}")
+            except Exception as e:
+                print(f"Local DB lookup error: {e}")
+
+            # ── ShipStation lookup (skip if local found) ──
             shopify_found = False
             try:
-                if SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
+                if not local_found and SHIPSTATION_API_KEY and SHIPSTATION_API_SECRET:
                     url = f"https://ssapi.shipstation.com/shipments?trackingNumber={tracking_number}"
                     resp = requests.get(
                         url,
@@ -3510,23 +3580,24 @@ def fix_order(scan_id):
             except Exception as e:
                 print(f"ShipStation error for {tracking_number}: {e}")
 
-            # ── Shopify lookup ──
-            try:
-                shopify_api = get_shopify_api()
-                shopify_info = shopify_api.get_order_by_tracking(tracking_number)
+            # ── Shopify lookup (skip if local found) ──
+            if not local_found:
+                try:
+                    shopify_api = get_shopify_api()
+                    shopify_info = shopify_api.get_order_by_tracking(tracking_number)
 
-                if shopify_info and shopify_info.get("order_id"):
-                    shopify_found = True
-                    order_number = shopify_info.get("order_number", order_number)
-                    customer_name = shopify_info.get("customer_name", customer_name)
-                    # Only update email if Shopify has one (don't overwrite ShipStation's email)
-                    shopify_email = shopify_info.get("customer_email", "")
-                    if shopify_email:
-                        customer_email = shopify_email
-                        print(f"📧 Shopify: Found email {customer_email} for {tracking_number}")
-                    order_id = shopify_info.get("order_id", order_id)
-            except Exception as e:
-                print(f"Shopify error for {tracking_number}: {e}")
+                    if shopify_info and shopify_info.get("order_id"):
+                        shopify_found = True
+                        order_number = shopify_info.get("order_number", order_number)
+                        customer_name = shopify_info.get("customer_name", customer_name)
+                        # Only update email if Shopify has one (don't overwrite ShipStation's email)
+                        shopify_email = shopify_info.get("customer_email", "")
+                        if shopify_email:
+                            customer_email = shopify_email
+                            print(f"📧 Shopify: Found email {customer_email} for {tracking_number}")
+                        order_id = shopify_info.get("order_id", order_id)
+                except Exception as e:
+                    print(f"Shopify error for {tracking_number}: {e}")
 
             # ── Update the scan record with results ──
             cursor.execute(
