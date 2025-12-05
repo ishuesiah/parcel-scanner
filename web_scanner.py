@@ -509,7 +509,7 @@ def init_tracking_status_cache():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS tracking_status_cache (
                 id SERIAL PRIMARY KEY,
-                tracking_number VARCHAR(255) NOT NULL UNIQUE,
+                tracking_number VARCHAR(255) NOT NULL,
                 carrier VARCHAR(50) DEFAULT 'UPS',
                 status VARCHAR(50),
                 status_description VARCHAR(500),
@@ -521,6 +521,14 @@ def init_tracking_status_cache():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Ensure unique constraint exists (for ON CONFLICT to work)
+        try:
+            cursor.execute("""
+                ALTER TABLE tracking_status_cache
+                ADD CONSTRAINT tracking_status_cache_tracking_unique UNIQUE (tracking_number)
+            """)
+        except Exception:
+            pass  # Constraint already exists
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_status ON tracking_status_cache(status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_delivered ON tracking_status_cache(is_delivered)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_updated ON tracking_status_cache(updated_at)")
