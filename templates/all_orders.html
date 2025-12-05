@@ -1461,29 +1461,45 @@
   function getFiltersFromRows() {
     const filters = [];
     const rows = document.querySelectorAll('#filterRowsContainer .filter-row');
-    rows.forEach(function(row) {
-      if (row.id === 'newFilterRow') return; // Skip the empty template row
+    console.log('Found filter rows:', rows.length);
+    rows.forEach(function(row, index) {
+      console.log('Row', index, 'id:', row.id);
+      if (row.id === 'newFilterRow') {
+        console.log('Skipping newFilterRow in forEach');
+        return; // Skip the empty template row
+      }
       const field = row.querySelector('.filter-field').value;
       const condition = row.querySelector('.filter-condition').value;
       const value = row.querySelector('.filter-value').value.trim();
+      console.log('Row', index, ':', { field, condition, value });
       if (field && value) {
         filters.push({ field: field, condition: condition, value: value });
       }
     });
     // Also check the new filter row
     const newRow = document.getElementById('newFilterRow');
-    const newField = newRow.querySelector('.filter-field').value;
-    const newCondition = newRow.querySelector('.filter-condition').value;
-    const newValue = newRow.querySelector('.filter-value').value.trim();
-    if (newField && newValue) {
-      filters.push({ field: newField, condition: newCondition, value: newValue });
+    if (newRow) {
+      const newField = newRow.querySelector('.filter-field').value;
+      const newCondition = newRow.querySelector('.filter-condition').value;
+      const newValue = newRow.querySelector('.filter-value').value.trim();
+      console.log('newFilterRow:', { newField, newCondition, newValue });
+      if (newField && newValue) {
+        filters.push({ field: newField, condition: newCondition, value: newValue });
+      }
     }
+    console.log('Collected filters:', filters);
     return filters;
   }
 
   function applyFilters() {
     const filters = getFiltersFromRows();
+    console.log('Applying filters:', filters);
+    if (filters.length === 0) {
+      alert('Please add at least one filter with a field and value');
+      return;
+    }
     document.getElementById('filtersJson').value = JSON.stringify(filters);
+    console.log('Submitting filters JSON:', document.getElementById('filtersJson').value);
     document.getElementById('advancedFilterForm').submit();
   }
 
@@ -1554,5 +1570,19 @@
     // Submit to clear
     document.getElementById('advancedFilterForm').submit();
   }
+
+  // Debug: Log filters on page load
+  document.addEventListener('DOMContentLoaded', function() {
+    const filtersJson = document.getElementById('filtersJson').value;
+    console.log('Page loaded with filters JSON:', filtersJson);
+    if (filtersJson) {
+      try {
+        const filters = JSON.parse(filtersJson);
+        console.log('Parsed filters:', filters);
+      } catch (e) {
+        console.error('Failed to parse filters JSON:', e);
+      }
+    }
+  });
 </script>
 {% endblock %}

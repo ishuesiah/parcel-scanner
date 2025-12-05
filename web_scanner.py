@@ -4574,12 +4574,15 @@ def all_orders():
         # Parse multiple filters from JSON
         filters_json = request.args.get('filters', '').strip()
         filters = []
+        print(f"[DEBUG] filters_json from request: {repr(filters_json)}")
         if filters_json:
             try:
                 filters = json.loads(filters_json)
+                print(f"[DEBUG] parsed filters: {filters}")
                 if not isinstance(filters, list):
                     filters = []
-            except:
+            except Exception as e:
+                print(f"[DEBUG] JSON parse error: {e}")
                 filters = []
 
         # Determine if we need to join with line items or options based on ALL filters
