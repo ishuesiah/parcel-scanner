@@ -469,7 +469,7 @@ def init_shipments_cache():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS shipments_cache (
                 id SERIAL PRIMARY KEY,
-                tracking_number VARCHAR(255) NOT NULL UNIQUE,
+                tracking_number VARCHAR(255) NOT NULL,
                 order_number VARCHAR(255),
                 customer_name VARCHAR(255),
                 carrier_code VARCHAR(50),
@@ -479,6 +479,14 @@ def init_shipments_cache():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Ensure unique constraint exists (for ON CONFLICT to work)
+        try:
+            cursor.execute("""
+                ALTER TABLE shipments_cache
+                ADD CONSTRAINT shipments_cache_tracking_unique UNIQUE (tracking_number)
+            """)
+        except Exception:
+            pass  # Constraint already exists
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_tracking ON shipments_cache(tracking_number)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_ship_date ON shipments_cache(ship_date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipments_order ON shipments_cache(order_number)")

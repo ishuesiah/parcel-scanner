@@ -349,6 +349,7 @@ class OrdersSync:
 
                 batch = response.get("orders", [])
                 if not batch:
+                    print(f"Page {page}: no orders found")
                     break
 
                 print(f"Page {page}: fetched {len(batch)} orders, processing...")
