@@ -4557,6 +4557,91 @@ def api_orders_sync_status():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/orders/<order_number>/details", methods=["GET"])
+def api_get_order_details(order_number):
+    """
+    Get order details including line items and shipping address.
+    Used for the order popup modal.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get the order
+        cursor.execute("""
+            SELECT id, shopify_order_id, order_number, customer_name, customer_email,
+                   customer_phone, shipping_address, total_price, subtotal_price,
+                   total_tax, financial_status, fulfillment_status, tracking_number,
+                   note, shopify_created_at, cancelled_at
+            FROM orders
+            WHERE order_number = %s
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Order not found"}), 404
+
+        # Get line items
+        cursor.execute("""
+            SELECT product_title, variant_title, sku, quantity, price
+            FROM order_line_items
+            WHERE order_id = %s
+            ORDER BY id
+        """, (order['id'],))
+        line_items = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        # Parse shipping address (stored as JSON string)
+        shipping_address = {}
+        if order.get('shipping_address'):
+            try:
+                import json
+                shipping_address = json.loads(order['shipping_address'])
+            except:
+                shipping_address = {"raw": order['shipping_address']}
+
+        return jsonify({
+            "success": True,
+            "order": {
+                "order_number": order['order_number'],
+                "customer_name": order['customer_name'],
+                "customer_email": order['customer_email'],
+                "customer_phone": order.get('customer_phone') or '',
+                "shipping_address": shipping_address,
+                "total_price": float(order['total_price']) if order.get('total_price') else 0,
+                "subtotal_price": float(order['subtotal_price']) if order.get('subtotal_price') else 0,
+                "total_tax": float(order['total_tax']) if order.get('total_tax') else 0,
+                "financial_status": order.get('financial_status') or '',
+                "fulfillment_status": order.get('fulfillment_status') or 'unfulfilled',
+                "tracking_number": order.get('tracking_number') or '',
+                "note": order.get('note') or '',
+                "created_at": order['shopify_created_at'].isoformat() if order.get('shopify_created_at') else '',
+                "cancelled": order.get('cancelled_at') is not None
+            },
+            "line_items": [
+                {
+                    "title": item['product_title'] or '',
+                    "variant": item['variant_title'] or '',
+                    "sku": item['sku'] or '',
+                    "quantity": item['quantity'] or 1,
+                    "price": float(item['price']) if item.get('price') else 0
+                }
+                for item in line_items
+            ]
+        })
+
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/orders/<order_number>/cancel", methods=["POST"])
 def api_cancel_order(order_number):
     """
