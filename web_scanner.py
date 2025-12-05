@@ -4559,7 +4559,7 @@ def all_orders():
     """
     Display all orders from local database with search and filtering.
     Default filter: unfulfilled orders.
-    Supports flexible advanced filtering by multiple fields.
+    Supports multiple stacked advanced filters via JSON.
     """
     conn = get_mysql_connection()
     try:
@@ -4571,14 +4571,20 @@ def all_orders():
         page = int(request.args.get('page', 1))
         per_page = 50
 
-        # Advanced filter parameters (new flexible system)
-        adv_field = request.args.get('adv_field', '').strip()
-        adv_condition = request.args.get('adv_condition', 'contains')
-        adv_value = request.args.get('adv_value', '').strip()
+        # Parse multiple filters from JSON
+        filters_json = request.args.get('filters', '').strip()
+        filters = []
+        if filters_json:
+            try:
+                filters = json.loads(filters_json)
+                if not isinstance(filters, list):
+                    filters = []
+            except:
+                filters = []
 
-        # Determine if we need to join with line items or options
-        need_line_items_join = adv_field in ('item_name', 'item_sku')
-        need_options_join = adv_field == 'item_options'
+        # Determine if we need to join with line items or options based on ALL filters
+        need_line_items_join = any(f.get('field') in ('item_name', 'item_sku') for f in filters)
+        need_options_join = any(f.get('field') == 'item_options' for f in filters)
 
         # Build base query
         if need_line_items_join or need_options_join:
@@ -4621,14 +4627,20 @@ def all_orders():
         elif fulfillment_filter == 'unfulfilled':
             base_query += f" AND ({col_prefix}fulfillment_status IS NULL OR {col_prefix}fulfillment_status = '' OR {col_prefix}fulfillment_status = 'unfulfilled' OR {col_prefix}fulfillment_status = 'partial')"
 
-        # Add advanced filter
-        if adv_field and adv_value:
+        # Apply each advanced filter (combined with AND)
+        for flt in filters:
+            adv_field = flt.get('field', '')
+            adv_condition = flt.get('condition', 'contains')
+            adv_value = flt.get('value', '')
+
+            if not adv_field or not adv_value:
+                continue
+
             keywords = [kw.strip() for kw in adv_value.split(',') if kw.strip()]
             is_contains = adv_condition in ('contains', 'equals')
             is_exact = adv_condition in ('equals', 'not_equals')
 
             if adv_field == 'item_name':
-                # Filter by line item product_title
                 if is_contains:
                     conds = ["li.product_title ILIKE %s" for _ in keywords]
                     for kw in keywords:
@@ -4636,11 +4648,10 @@ def all_orders():
                     base_query += f" AND ({' OR '.join(conds)})"
                 else:
                     for kw in keywords:
-                        base_query += " AND (li.product_title IS NULL OR li.product_title NOT ILIKE %s)"
-                        params.append(f"%{kw}%" if not is_exact else kw)
+                        base_query += " AND NOT EXISTS (SELECT 1 FROM order_line_items li2 WHERE li2.order_id = " + (col_prefix + "id" if col_prefix else "orders.id") + " AND li2.product_title ILIKE %s)"
+                        params.append(f"%{kw}%")
 
             elif adv_field == 'item_options':
-                # Filter by line item options (customizations)
                 if is_contains:
                     conds = ["(lio.name ILIKE %s OR lio.value ILIKE %s)" for _ in keywords]
                     for kw in keywords:
@@ -4648,14 +4659,12 @@ def all_orders():
                         params.append(f"%{kw}%")
                     base_query += f" AND ({' OR '.join(conds)})"
                 else:
-                    # Not contains - exclude orders with matching options
                     for kw in keywords:
-                        base_query += " AND (lio.value IS NULL OR (lio.name NOT ILIKE %s AND lio.value NOT ILIKE %s))"
+                        base_query += " AND NOT EXISTS (SELECT 1 FROM order_line_items li2 JOIN order_line_item_options lio2 ON lio2.line_item_id = li2.id WHERE li2.order_id = " + (col_prefix + "id" if col_prefix else "orders.id") + " AND (lio2.name ILIKE %s OR lio2.value ILIKE %s))"
                         params.append(f"%{kw}%")
                         params.append(f"%{kw}%")
 
             elif adv_field == 'item_sku':
-                # Filter by SKU
                 if is_contains:
                     conds = ["li.sku ILIKE %s" for _ in keywords]
                     for kw in keywords:
@@ -4663,8 +4672,8 @@ def all_orders():
                     base_query += f" AND ({' OR '.join(conds)})"
                 else:
                     for kw in keywords:
-                        base_query += " AND (li.sku IS NULL OR li.sku NOT ILIKE %s)"
-                        params.append(f"%{kw}%" if not is_exact else kw)
+                        base_query += " AND NOT EXISTS (SELECT 1 FROM order_line_items li2 WHERE li2.order_id = " + (col_prefix + "id" if col_prefix else "orders.id") + " AND li2.sku ILIKE %s)"
+                        params.append(f"%{kw}%")
 
             elif adv_field == 'customer_name':
                 if is_contains:
@@ -4700,7 +4709,6 @@ def all_orders():
                         params.append(f"%{kw}%")
 
             elif adv_field.startswith('ship_'):
-                # Shipping address fields (stored as JSON)
                 json_field_map = {
                     'ship_country': 'country',
                     'ship_province': 'province',
@@ -4710,8 +4718,6 @@ def all_orders():
                     'ship_zip': 'zip'
                 }
                 json_key = json_field_map.get(adv_field, 'country')
-
-                # Use JSON extraction for PostgreSQL
                 if is_contains:
                     conds = [f"{col_prefix}shipping_address::text ILIKE %s" for _ in keywords]
                     for kw in keywords:
@@ -4723,13 +4729,10 @@ def all_orders():
                         params.append(f'%"{json_key}"%{kw}%')
 
             elif adv_field == 'is_international':
-                # Filter for non-Canada orders (international)
                 if adv_condition in ('contains', 'equals'):
-                    # Show international orders (country NOT Canada)
                     base_query += f" AND ({col_prefix}shipping_address IS NULL OR {col_prefix}shipping_address::text NOT ILIKE %s)"
                     params.append('%"country"%Canada%')
                 else:
-                    # Show domestic orders (country IS Canada)
                     base_query += f" AND {col_prefix}shipping_address::text ILIKE %s"
                     params.append('%"country"%Canada%')
 
@@ -4765,10 +4768,9 @@ def all_orders():
             shop_url=SHOP_URL,
             version=__version__,
             active_page="all_orders",
-            # Advanced filter values for template
-            adv_field=adv_field,
-            adv_condition=adv_condition,
-            adv_value=adv_value
+            # Multiple filters for template
+            filters=filters,
+            filters_json=filters_json
         )
     except Exception as e:
         print(f"Error loading all orders: {e}")
@@ -4788,9 +4790,8 @@ def all_orders():
             shop_url=SHOP_URL,
             version=__version__,
             active_page="all_orders",
-            adv_field='',
-            adv_condition='contains',
-            adv_value=''
+            filters=[],
+            filters_json=''
         )
     finally:
         try:
