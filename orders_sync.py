@@ -432,7 +432,8 @@ class OrdersSync:
             conn = self.get_db_connection()
             conn.autocommit = False
 
-            # Build initial params
+            # Build initial params - use both updated_at_min AND created_at_min
+            # to catch both updated orders and brand new orders
             params = {
                 "status": "any",
                 "updated_at_min": updated_at_min_str,
@@ -445,6 +446,8 @@ class OrdersSync:
 
             while True:
                 sync_log(f"Fetching page {page}...")
+                if page == 1:
+                    sync_log(f"Query params: updated_at_min={updated_at_min_str}")
                 time.sleep(0.5)  # Rate limiting
 
                 if page_info:
@@ -471,7 +474,7 @@ class OrdersSync:
 
                 batch = response.get("orders", [])
                 if not batch:
-                    sync_log(f"Page {page}: no orders found, done")
+                    sync_log(f"Page {page}: Shopify returned empty orders array")
                     break
 
                 sync_log(f"Page {page}: processing {len(batch)} orders...")
