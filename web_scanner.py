@@ -4827,6 +4827,341 @@ def api_get_order_details(order_number):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/orders/<order_number>/packing-slip", methods=["GET"])
+def api_get_packing_slip(order_number):
+    """
+    Generate a printable packing slip for an order.
+    Returns HTML that can be printed in a new window.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get the order
+        cursor.execute("""
+            SELECT id, shopify_order_id, order_number, customer_name, customer_email,
+                   customer_phone, shipping_address, total_price, subtotal_price,
+                   total_tax, financial_status, fulfillment_status, tracking_number,
+                   note, shopify_created_at, currency
+            FROM orders
+            WHERE order_number = %s
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            cursor.close()
+            conn.close()
+            return "<html><body><h1>Order not found</h1></body></html>", 404
+
+        # Get line items
+        cursor.execute("""
+            SELECT id, product_title, variant_title, sku, quantity, price
+            FROM order_line_items
+            WHERE order_id = %s
+            ORDER BY id
+        """, (order['id'],))
+        line_items = cursor.fetchall()
+
+        # Get properties for each line item
+        line_items_with_props = []
+        for item in line_items:
+            cursor.execute("""
+                SELECT name, value
+                FROM order_line_item_options
+                WHERE line_item_id = %s
+                ORDER BY id
+            """, (item['id'],))
+            properties = cursor.fetchall()
+
+            line_items_with_props.append({
+                "title": item['product_title'] or '',
+                "variant": item['variant_title'] or '',
+                "sku": item['sku'] or '',
+                "quantity": item['quantity'] or 1,
+                "price": float(item['price']) if item.get('price') else 0,
+                "properties": [{"name": p['name'], "value": p['value']} for p in properties]
+            })
+
+        cursor.close()
+        conn.close()
+
+        # Parse shipping address
+        shipping_address = {}
+        if order.get('shipping_address'):
+            try:
+                import json
+                shipping_address = json.loads(order['shipping_address'])
+            except:
+                shipping_address = {"raw": order['shipping_address']}
+
+        # Format the address for display
+        address_lines = []
+        if shipping_address:
+            if shipping_address.get('raw'):
+                address_lines = [shipping_address['raw']]
+            else:
+                if shipping_address.get('name'):
+                    address_lines.append(shipping_address['name'])
+                if shipping_address.get('address1'):
+                    address_lines.append(shipping_address['address1'])
+                if shipping_address.get('address2'):
+                    address_lines.append(shipping_address['address2'])
+                city_line = []
+                if shipping_address.get('city'):
+                    city_line.append(shipping_address['city'])
+                if shipping_address.get('province_code') or shipping_address.get('province'):
+                    city_line.append(shipping_address.get('province_code') or shipping_address.get('province'))
+                if shipping_address.get('zip'):
+                    city_line.append(shipping_address['zip'])
+                if city_line:
+                    address_lines.append(', '.join(city_line))
+                if shipping_address.get('country'):
+                    address_lines.append(shipping_address['country'])
+
+        # Format order date
+        order_date = ''
+        if order.get('shopify_created_at'):
+            order_date = order['shopify_created_at'].strftime('%B %d, %Y at %I:%M %p')
+
+        # Build line items HTML
+        items_html = ''
+        for item in line_items_with_props:
+            props_html = ''
+            if item['properties']:
+                props_html = '<div class="item-props">'
+                for p in item['properties']:
+                    props_html += f'<div class="prop"><span class="prop-name">{p["name"]}:</span> {p["value"]}</div>'
+                props_html += '</div>'
+
+            items_html += f'''
+            <tr>
+                <td class="item-qty">{item["quantity"]}</td>
+                <td class="item-details">
+                    <div class="item-title">{item["title"]}</div>
+                    {f'<div class="item-variant">{item["variant"]}</div>' if item["variant"] else ''}
+                    {f'<div class="item-sku">SKU: {item["sku"]}</div>' if item["sku"] else ''}
+                    {props_html}
+                </td>
+            </tr>
+            '''
+
+        # Generate the packing slip HTML
+        html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Packing Slip - Order #{order['order_number']}</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 12pt;
+            line-height: 1.4;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }}
+        @media print {{
+            body {{
+                padding: 0;
+            }}
+            .no-print {{
+                display: none !important;
+            }}
+        }}
+        .header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            border-bottom: 2px solid #333;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }}
+        .company-name {{
+            font-size: 24pt;
+            font-weight: bold;
+            color: #333;
+        }}
+        .order-info {{
+            text-align: right;
+        }}
+        .order-number {{
+            font-size: 18pt;
+            font-weight: bold;
+            color: #534bc4;
+        }}
+        .order-date {{
+            color: #666;
+            margin-top: 4px;
+        }}
+        .addresses {{
+            display: flex;
+            gap: 40px;
+            margin-bottom: 25px;
+        }}
+        .address-block {{
+            flex: 1;
+        }}
+        .address-label {{
+            font-weight: bold;
+            color: #666;
+            text-transform: uppercase;
+            font-size: 10pt;
+            margin-bottom: 8px;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 4px;
+        }}
+        .address-content {{
+            line-height: 1.6;
+        }}
+        .items-table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }}
+        .items-table th {{
+            background: #f5f5f5;
+            padding: 10px 12px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid #ddd;
+        }}
+        .items-table td {{
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+            vertical-align: top;
+        }}
+        .item-qty {{
+            width: 60px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 14pt;
+        }}
+        .item-title {{
+            font-weight: 600;
+            margin-bottom: 2px;
+        }}
+        .item-variant {{
+            color: #666;
+            font-size: 11pt;
+        }}
+        .item-sku {{
+            color: #999;
+            font-size: 10pt;
+            margin-top: 2px;
+        }}
+        .item-props {{
+            margin-top: 8px;
+            padding: 8px;
+            background: #f9f9f9;
+            border-radius: 4px;
+            font-size: 10pt;
+        }}
+        .prop {{
+            margin-bottom: 3px;
+        }}
+        .prop-name {{
+            color: #888;
+        }}
+        .notes {{
+            background: #fffbeb;
+            border: 1px solid #fcd34d;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 20px;
+        }}
+        .notes-label {{
+            font-weight: bold;
+            margin-bottom: 4px;
+        }}
+        .footer {{
+            margin-top: 30px;
+            padding-top: 15px;
+            border-top: 1px solid #ddd;
+            text-align: center;
+            color: #666;
+            font-size: 10pt;
+        }}
+        .print-btn {{
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 24px;
+            background: #534bc4;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+        }}
+        .print-btn:hover {{
+            background: #4338b8;
+        }}
+    </style>
+</head>
+<body>
+    <button class="print-btn no-print" onclick="window.print()">Print Packing Slip</button>
+
+    <div class="header">
+        <div class="company-name">H&O Sportswear</div>
+        <div class="order-info">
+            <div class="order-number">Order #{order['order_number']}</div>
+            <div class="order-date">{order_date}</div>
+        </div>
+    </div>
+
+    <div class="addresses">
+        <div class="address-block">
+            <div class="address-label">Ship To</div>
+            <div class="address-content">
+                {'<br>'.join(address_lines) if address_lines else 'No address provided'}
+            </div>
+        </div>
+        <div class="address-block">
+            <div class="address-label">Contact</div>
+            <div class="address-content">
+                {order['customer_name'] or 'Customer'}<br>
+                {order['customer_email'] or ''}<br>
+                {order.get('customer_phone') or ''}
+            </div>
+        </div>
+    </div>
+
+    {f'<div class="notes"><div class="notes-label">Order Notes:</div>{order["note"]}</div>' if order.get('note') else ''}
+
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th style="width: 60px; text-align: center;">Qty</th>
+                <th>Item</th>
+            </tr>
+        </thead>
+        <tbody>
+            {items_html}
+        </tbody>
+    </table>
+
+    <div class="footer">
+        Thank you for your order!<br>
+        {order.get('tracking_number') or ''}
+    </div>
+</body>
+</html>'''
+
+        return html, 200, {'Content-Type': 'text/html'}
+
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return f"<html><body><h1>Error</h1><p>{str(e)}</p></body></html>", 500
+
+
 @app.route("/api/orders/<order_number>/cancel", methods=["POST"])
 def api_cancel_order(order_number):
     """

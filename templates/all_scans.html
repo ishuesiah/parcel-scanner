@@ -145,7 +145,8 @@
         <div id="modalContent" style="padding: 20px;">
           <p style="text-align: center; color: #666;">Loading...</p>
         </div>
-        <div style="padding: 15px 20px; border-top: 1px solid #eee; text-align: right; background: #f9f9f9;">
+        <div style="padding: 15px 20px; border-top: 1px solid #eee; display: flex; justify-content: space-between; background: #f9f9f9;">
+          <button onclick="printPackingSlip()" style="padding: 8px 16px; background: #534bc4; color: white; border: none; border-radius: 4px; cursor: pointer;">Print Packing Slip</button>
           <button onclick="closeOrderModal()" style="padding: 8px 16px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
         </div>
       </div>
@@ -155,7 +156,10 @@
 {% block scripts %}
 <script>
   // ── Order Details Modal ──
+  let currentViewingOrderNumber = null;
+
   async function showOrderDetails(orderNumber) {
+    currentViewingOrderNumber = orderNumber;
     const modal = document.getElementById('orderModal');
     const modalContent = document.getElementById('modalContent');
     const modalTitle = document.getElementById('modalTitle');
@@ -264,6 +268,15 @@
 
   function closeOrderModal() {
     document.getElementById('orderModal').style.display = 'none';
+    currentViewingOrderNumber = null;
+  }
+
+  function printPackingSlip() {
+    if (!currentViewingOrderNumber) {
+      alert('No order selected');
+      return;
+    }
+    window.open('/api/orders/' + currentViewingOrderNumber + '/packing-slip', '_blank');
   }
 
   document.addEventListener('keydown', function(e) {
