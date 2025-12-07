@@ -243,6 +243,37 @@ def init_orders_tables(get_db_connection):
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_cancelled_order_number ON cancelled_orders(order_number)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_cancelled_shopify_id ON cancelled_orders(shopify_order_id)")
 
+        # Create order_batches table for grouping orders for fulfillment
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS order_batches (
+                id SERIAL PRIMARY KEY,
+                name TEXT,
+                status TEXT DEFAULT 'pending',
+                notes TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Create order_batch_items table (links orders to batches)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS order_batch_items (
+                id SERIAL PRIMARY KEY,
+                batch_id INTEGER NOT NULL,
+                order_id INTEGER NOT NULL,
+                order_number TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                notes TEXT,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (batch_id) REFERENCES order_batches(id) ON DELETE CASCADE,
+                FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+                UNIQUE(batch_id, order_id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_batch_items_batch ON order_batch_items(batch_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_batch_items_order ON order_batch_items(order_id)")
+
         conn.commit()
         cursor.close()
         conn.close()

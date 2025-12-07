@@ -196,12 +196,28 @@
       </div>
     </div>
 
+    <!-- Selection Action Bar (hidden by default) -->
+    <div id="selectionBar" class="selection-bar" style="display: none;">
+      <div class="selection-info">
+        <span id="selectedCount">0</span> orders selected
+      </div>
+      <div class="selection-actions">
+        <button type="button" class="btn-clear-selection" onclick="clearSelection()">Clear</button>
+        <button type="button" class="btn-create-batch" onclick="createBatchFromSelected()">
+          Create Batch
+        </button>
+      </div>
+    </div>
+
     <!-- Orders Table -->
     <div class="orders-table-container">
       {% if orders %}
         <table class="orders-table">
           <thead>
             <tr>
+              <th style="width: 40px;">
+                <input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" title="Select all on this page">
+              </th>
               <th class="sortable" data-sort="order">Order #</th>
               <th class="sortable" data-sort="age">Age</th>
               <th class="sortable" data-sort="customer">Customer</th>
@@ -214,10 +230,15 @@
           <tbody>
             {% for order in orders %}
               <tr data-order="{{ order.order_number }}"
+                  data-order-id="{{ order.id }}"
                   data-age="{{ order.shopify_created_at.isoformat() if order.shopify_created_at else '' }}"
                   data-customer="{{ order.customer_name or '' }}"
                   data-email="{{ order.customer_email or '' }}"
                   data-status="{{ order.fulfillment_status or 'unfulfilled' }}">
+                <td>
+                  <input type="checkbox" class="order-checkbox" value="{{ order.order_number }}"
+                         data-order-id="{{ order.id }}" onchange="updateSelection()">
+                </td>
                 <td>
                   <a href="#" onclick="showOrderDetails('{{ order.order_number }}'); return false;" class="order-number-link">
                     #{{ order.order_number }}
@@ -1090,5 +1111,82 @@
       }
     }
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Order Selection & Batch Creation
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  function toggleSelectAll(checkbox) {
+    const checkboxes = document.querySelectorAll('.order-checkbox');
+    checkboxes.forEach(cb => cb.checked = checkbox.checked);
+    updateSelection();
+  }
+
+  function updateSelection() {
+    const checkboxes = document.querySelectorAll('.order-checkbox:checked');
+    const count = checkboxes.length;
+    const selectionBar = document.getElementById('selectionBar');
+    const selectedCount = document.getElementById('selectedCount');
+    const selectAllCheckbox = document.getElementById('selectAll');
+    const allCheckboxes = document.querySelectorAll('.order-checkbox');
+
+    selectedCount.textContent = count;
+    selectionBar.style.display = count > 0 ? 'flex' : 'none';
+
+    // Update "select all" checkbox state
+    if (count === 0) {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = false;
+    } else if (count === allCheckboxes.length) {
+      selectAllCheckbox.checked = true;
+      selectAllCheckbox.indeterminate = false;
+    } else {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = true;
+    }
+  }
+
+  function clearSelection() {
+    document.querySelectorAll('.order-checkbox').forEach(cb => cb.checked = false);
+    document.getElementById('selectAll').checked = false;
+    updateSelection();
+  }
+
+  function getSelectedOrders() {
+    const checkboxes = document.querySelectorAll('.order-checkbox:checked');
+    return Array.from(checkboxes).map(cb => ({
+      order_number: cb.value,
+      order_id: cb.dataset.orderId
+    }));
+  }
+
+  function createBatchFromSelected() {
+    const selected = getSelectedOrders();
+    if (selected.length === 0) {
+      alert('Please select at least one order');
+      return;
+    }
+
+    // Create a form and submit to the new batch creation endpoint
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '{{ url_for("create_order_batch") }}';
+
+    // Add CSRF token if you have one (for Flask-WTF)
+    // const csrfInput = document.createElement('input');
+    // csrfInput.type = 'hidden';
+    // csrfInput.name = 'csrf_token';
+    // csrfInput.value = '...';
+    // form.appendChild(csrfInput);
+
+    const ordersInput = document.createElement('input');
+    ordersInput.type = 'hidden';
+    ordersInput.name = 'order_numbers';
+    ordersInput.value = JSON.stringify(selected.map(o => o.order_number));
+    form.appendChild(ordersInput);
+
+    document.body.appendChild(form);
+    form.submit();
+  }
 </script>
 {% endblock %}

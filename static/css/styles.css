@@ -738,6 +738,85 @@ td input[type="checkbox"] {
   text-decoration: underline;
 }
 
+/* Selection Action Bar (for multi-select orders) */
+.selection-bar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: linear-gradient(135deg, var(--secondary) 0%, #7b8eef 100%);
+  color: white;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 12px rgba(81, 106, 236, 0.3);
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.selection-info {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.selection-info span {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.selection-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-clear-selection {
+  padding: 8px 16px;
+  background: rgba(255,255,255,0.2);
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 8px;
+  color: white;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-clear-selection:hover {
+  background: rgba(255,255,255,0.3);
+}
+
+.btn-create-batch {
+  padding: 8px 20px;
+  background: white;
+  border: none;
+  border-radius: 8px;
+  color: var(--secondary);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-create-batch:hover {
+  background: #f0f0f0;
+  transform: translateY(-1px);
+}
+
+/* Checkbox styling in tables */
+.orders-table input[type="checkbox"],
+.order-checkbox {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: var(--secondary);
+}
+
 /* Table container with shadow */
 .scans-table-container,
 .orders-table-container {

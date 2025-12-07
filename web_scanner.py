@@ -13,6 +13,7 @@ import requests
 import bcrypt
 import time
 import atexit
+import json
 
 # Load environment variables from .env file if it exists (for local development)
 try:
@@ -4950,6 +4951,188 @@ def all_orders():
         except Exception:
             pass
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Order Batches - Group orders for fulfillment prep
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/create_order_batch", methods=["POST"])
+def create_order_batch():
+    """
+    Create a new order batch from selected orders.
+    Expects JSON array of order numbers in 'order_numbers' field.
+    """
+    try:
+        order_numbers_json = request.form.get('order_numbers', '[]')
+        order_numbers = json.loads(order_numbers_json)
+
+        if not order_numbers:
+            flash("No orders selected", "error")
+            return redirect(url_for('all_orders'))
+
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Create the batch
+        batch_name = f"Batch {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        cursor.execute("""
+            INSERT INTO order_batches (name, status, created_by)
+            VALUES (%s, 'pending', %s)
+            RETURNING id
+        """, (batch_name, session.get('user_email', 'unknown')))
+        batch_id = cursor.fetchone()['id']
+
+        # Add orders to the batch
+        added_count = 0
+        for order_num in order_numbers:
+            # Get order ID from order number
+            cursor.execute("SELECT id FROM orders WHERE order_number = %s", (order_num,))
+            order_row = cursor.fetchone()
+            if order_row:
+                try:
+                    cursor.execute("""
+                        INSERT INTO order_batch_items (batch_id, order_id, order_number)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (batch_id, order_id) DO NOTHING
+                    """, (batch_id, order_row['id'], order_num))
+                    added_count += 1
+                except Exception as e:
+                    print(f"Error adding order {order_num} to batch: {e}")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        flash(f"Created batch with {added_count} orders", "success")
+        return redirect(url_for('view_order_batch', batch_id=batch_id))
+
+    except Exception as e:
+        print(f"Error creating order batch: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error creating batch: {str(e)}", "error")
+        return redirect(url_for('all_orders'))
+
+
+@app.route("/order_batches")
+def order_batches():
+    """List all order batches."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT ob.*,
+                   COUNT(obi.id) as order_count,
+                   SUM(CASE WHEN obi.status = 'completed' THEN 1 ELSE 0 END) as completed_count
+            FROM order_batches ob
+            LEFT JOIN order_batch_items obi ON ob.id = obi.batch_id
+            GROUP BY ob.id
+            ORDER BY ob.created_at DESC
+        """)
+        batches = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        return render_template(
+            'order_batches.html',
+            batches=batches,
+            version=__version__,
+            active_page='order_batches'
+        )
+
+    except Exception as e:
+        print(f"Error loading order batches: {e}")
+        flash(f"Error loading batches: {str(e)}", "error")
+        return redirect(url_for('all_orders'))
+
+
+@app.route("/order_batch/<int:batch_id>")
+def view_order_batch(batch_id):
+    """View a single order batch with all its orders and line items."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Get batch info
+        cursor.execute("SELECT * FROM order_batches WHERE id = %s", (batch_id,))
+        batch = cursor.fetchone()
+        if not batch:
+            flash("Batch not found", "error")
+            return redirect(url_for('order_batches'))
+
+        # Get all orders in this batch with their line items
+        cursor.execute("""
+            SELECT obi.*, o.customer_name, o.customer_email, o.shipping_address,
+                   o.fulfillment_status, o.total_price, o.currency, o.note,
+                   o.shopify_created_at, o.tracking_number
+            FROM order_batch_items obi
+            JOIN orders o ON obi.order_id = o.id
+            WHERE obi.batch_id = %s
+            ORDER BY o.shopify_created_at DESC
+        """, (batch_id,))
+        batch_orders = cursor.fetchall()
+
+        # Get line items for each order
+        orders_with_items = []
+        for order in batch_orders:
+            cursor.execute("""
+                SELECT li.*, array_agg(CONCAT(lio.name, ': ', lio.value)) as options
+                FROM order_line_items li
+                LEFT JOIN order_line_item_options lio ON li.id = lio.line_item_id
+                WHERE li.order_id = %s
+                GROUP BY li.id
+                ORDER BY li.id
+            """, (order['order_id'],))
+            line_items = cursor.fetchall()
+
+            order_dict = dict(order)
+            order_dict['line_items'] = line_items
+
+            # Parse shipping address JSON
+            if order_dict.get('shipping_address'):
+                try:
+                    order_dict['shipping_address'] = json.loads(order_dict['shipping_address'])
+                except:
+                    pass
+
+            orders_with_items.append(order_dict)
+
+        cursor.close()
+        conn.close()
+
+        return render_template(
+            'order_batch_detail.html',
+            batch=batch,
+            orders=orders_with_items,
+            version=__version__,
+            active_page='order_batches'
+        )
+
+    except Exception as e:
+        print(f"Error viewing order batch: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error loading batch: {str(e)}", "error")
+        return redirect(url_for('order_batches'))
+
+
+@app.route("/order_batch/<int:batch_id>/delete", methods=["POST"])
+def delete_order_batch(batch_id):
+    """Delete an order batch."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM order_batches WHERE id = %s", (batch_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        flash("Batch deleted", "success")
+    except Exception as e:
+        flash(f"Error deleting batch: {str(e)}", "error")
+    return redirect(url_for('order_batches'))
 
 
 @app.route("/api/orders/sync", methods=["POST"])

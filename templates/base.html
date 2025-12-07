@@ -97,6 +97,15 @@
               </a>
             </li>
             <li>
+              <a href="{{ url_for('order_batches') }}"
+                 class="sidebar-item flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group {% if active_page == 'order_batches' %}bg-accent/15 text-accent{% else %}text-text-muted hover:bg-bg-main{% endif %}">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-[18px] h-[18px] {% if active_page == 'order_batches' %}text-accent{% endif %}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M8 12h8" /><path d="M12 8v8" />
+                </svg>
+                <span class="text-sm tracking-wide">Order Batches</span>
+              </a>
+            </li>
+            <li>
               <a href="{{ url_for('all_scans') }}"
                  class="sidebar-item flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group {% if active_page == 'all_scans' %}bg-accent/15 text-accent{% else %}text-text-muted hover:bg-bg-main{% endif %}">
                 <svg xmlns="http://www.w3.org/2000/svg" class="w-[18px] h-[18px] {% if active_page == 'all_scans' %}text-accent{% endif %}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
