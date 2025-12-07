@@ -234,7 +234,12 @@
                 </a>
               </th>
               <th class="draggable" data-col="items" draggable="true" title="Click to expand items">
-                Items
+                <span style="display: flex; align-items: center; gap: 6px;">
+                  <button type="button" class="btn-expand-all" onclick="toggleAllItems(this)" title="Expand/Collapse all items">
+                    <span class="expand-all-icon">▶</span>
+                  </button>
+                  Items
+                </span>
               </th>
               <th class="draggable" data-col="qty" draggable="true">
                 Qty
@@ -1341,6 +1346,24 @@
   }
 
   // Bulk expand/collapse all items
+  let allExpanded = false;
+
+  function toggleAllItems(headerBtn) {
+    const icon = headerBtn.querySelector('.expand-all-icon');
+
+    if (allExpanded) {
+      // Collapse all
+      collapseAllItems();
+      icon.textContent = '▶';
+      allExpanded = false;
+    } else {
+      // Expand all
+      expandAllItems();
+      icon.textContent = '▼';
+      allExpanded = true;
+    }
+  }
+
   function expandAllItems() {
     document.querySelectorAll('.btn-expand-items').forEach(btn => {
       const orderNumber = btn.closest('tr').dataset.order;
@@ -1527,6 +1550,27 @@
   th.drag-over {
     background: #bbdefb !important;
     border-left: 3px solid #1976d2;
+  }
+
+  /* Expand all button in header */
+  .btn-expand-all {
+    background: none;
+    border: 1px solid #bbb;
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-size: 0.75em;
+    cursor: pointer;
+    color: #555;
+    transition: all 0.2s;
+    line-height: 1;
+  }
+  .btn-expand-all:hover {
+    background: #e3f2fd;
+    border-color: #1976d2;
+    color: #1976d2;
+  }
+  .expand-all-icon {
+    font-size: 0.9em;
   }
 
   /* Expand items button styles */
