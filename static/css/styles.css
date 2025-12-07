@@ -891,6 +891,42 @@ td input[type="checkbox"] {
   background: rgba(249, 127, 103, 0.05);
 }
 
+/* Sortable column headers */
+.orders-table th.sortable a {
+  color: var(--text-muted);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.orders-table th.sortable:hover {
+  background: var(--border-color);
+}
+
+.orders-table th.sortable a:hover {
+  color: var(--secondary);
+}
+
+.orders-table th.sortable .sort-icon::after {
+  content: '↕';
+  opacity: 0.3;
+  font-size: 0.7rem;
+}
+
+.orders-table th.sortable.sorted .sort-icon::after {
+  opacity: 1;
+  color: var(--secondary);
+}
+
+.orders-table th.sortable.sorted.asc .sort-icon::after {
+  content: '↑';
+}
+
+.orders-table th.sortable.sorted.desc .sort-icon::after {
+  content: '↓';
+}
+
 /* Rules table (item locations) */
 .rules-table {
   width: 100%;

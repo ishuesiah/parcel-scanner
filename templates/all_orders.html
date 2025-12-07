@@ -218,12 +218,32 @@
               <th style="width: 40px;">
                 <input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" title="Select all on this page">
               </th>
-              <th class="sortable" data-sort="order">Order #</th>
-              <th class="sortable" data-sort="age">Age</th>
-              <th class="sortable" data-sort="customer">Customer</th>
-              <th class="sortable" data-sort="email">Email</th>
+              <th class="sortable {% if sort_by == 'order' %}sorted {{ sort_dir }}{% endif %}">
+                <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, sort='order', dir='asc' if sort_by == 'order' and sort_dir == 'desc' else 'desc', filters=filters_json) }}">
+                  Order # <span class="sort-icon"></span>
+                </a>
+              </th>
+              <th class="sortable {% if sort_by == 'age' %}sorted {{ sort_dir }}{% endif %}">
+                <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, sort='age', dir='asc' if sort_by == 'age' and sort_dir == 'desc' else 'desc', filters=filters_json) }}">
+                  Scanned <span class="sort-icon"></span>
+                </a>
+              </th>
+              <th class="sortable {% if sort_by == 'customer' %}sorted {{ sort_dir }}{% endif %}">
+                <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, sort='customer', dir='asc' if sort_by == 'customer' and sort_dir == 'desc' else 'desc', filters=filters_json) }}">
+                  Customer <span class="sort-icon"></span>
+                </a>
+              </th>
+              <th class="sortable {% if sort_by == 'email' %}sorted {{ sort_dir }}{% endif %}">
+                <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, sort='email', dir='asc' if sort_by == 'email' and sort_dir == 'desc' else 'desc', filters=filters_json) }}">
+                  Email <span class="sort-icon"></span>
+                </a>
+              </th>
               <th>Tracking #</th>
-              <th class="sortable" data-sort="status">Status</th>
+              <th class="sortable {% if sort_by == 'status' %}sorted {{ sort_dir }}{% endif %}">
+                <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, sort='status', dir='asc' if sort_by == 'status' and sort_dir == 'desc' else 'desc', filters=filters_json) }}">
+                  Status <span class="sort-icon"></span>
+                </a>
+              </th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -288,7 +308,7 @@
           </div>
           <div class="pagination-controls">
             {% if page > 1 %}
-              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page-1, filters=filters_json) }}" class="pagination-btn">
+              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page-1, filters=filters_json, sort=sort_by, dir=sort_dir) }}" class="pagination-btn">
                 &larr; Previous
               </a>
             {% else %}
@@ -296,7 +316,7 @@
             {% endif %}
 
             {% if page < total_pages %}
-              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page+1, filters=filters_json) }}" class="pagination-btn">
+              <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, page=page+1, filters=filters_json, sort=sort_by, dir=sort_dir) }}" class="pagination-btn">
                 Next &rarr;
               </a>
             {% else %}
@@ -908,69 +928,8 @@
   updateOrderAges();
   setInterval(updateOrderAges, 60000);
 
-  // Table sorting functionality
-  function sortTable(sortBy, direction) {
-    const table = document.querySelector('.orders-table');
-    if (!table) return;
-
-    const tbody = table.querySelector('tbody');
-    const rows = Array.from(tbody.querySelectorAll('tr'));
-
-    rows.sort((a, b) => {
-      let aVal = a.dataset[sortBy] || '';
-      let bVal = b.dataset[sortBy] || '';
-
-      // Special handling for different column types
-      if (sortBy === 'order') {
-        aVal = parseInt(aVal) || 0;
-        bVal = parseInt(bVal) || 0;
-        return direction === 'asc' ? aVal - bVal : bVal - aVal;
-      } else if (sortBy === 'age') {
-        // Sort by date (newest first by default)
-        const aDate = aVal ? new Date(aVal).getTime() : 0;
-        const bDate = bVal ? new Date(bVal).getTime() : 0;
-        return direction === 'asc' ? aDate - bDate : bDate - aDate;
-      } else {
-        // String comparison
-        aVal = aVal.toLowerCase();
-        bVal = bVal.toLowerCase();
-        if (aVal < bVal) return direction === 'asc' ? -1 : 1;
-        if (aVal > bVal) return direction === 'asc' ? 1 : -1;
-        return 0;
-      }
-    });
-
-    // Re-append rows in sorted order
-    rows.forEach(row => tbody.appendChild(row));
-  }
-
-  // Add click handlers to sortable headers
-  document.querySelectorAll('.sortable').forEach(function(header) {
-    header.addEventListener('click', function() {
-      const sortBy = this.dataset.sort;
-      const currentDir = this.classList.contains('asc') ? 'asc' :
-                         this.classList.contains('desc') ? 'desc' : null;
-
-      // Remove sort classes from all headers
-      document.querySelectorAll('.sortable').forEach(h => {
-        h.classList.remove('asc', 'desc');
-      });
-
-      // Toggle direction or default to desc for age, asc for others
-      let newDir;
-      if (currentDir === 'asc') {
-        newDir = 'desc';
-      } else if (currentDir === 'desc') {
-        newDir = 'asc';
-      } else {
-        // Default direction
-        newDir = sortBy === 'age' ? 'desc' : 'asc';
-      }
-
-      this.classList.add(newDir);
-      sortTable(sortBy, newDir);
-    });
-  });
+  // NOTE: Client-side sorting removed - now using server-side sorting via URL parameters
+  // Sort links in table headers handle sorting across all pages
 
   // Advanced filter functions
   function toggleFilters() {

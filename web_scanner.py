@@ -4702,6 +4702,21 @@ def all_orders():
         page = int(request.args.get('page', 1))
         per_page = 50
 
+        # Get sort parameters for server-side sorting
+        sort_by = request.args.get('sort', 'age')  # default sort by age (created date)
+        sort_dir = request.args.get('dir', 'desc')  # default newest first
+
+        # Validate sort parameters to prevent SQL injection
+        allowed_sorts = {
+            'order': 'order_number',
+            'age': 'shopify_created_at',
+            'customer': 'customer_name',
+            'email': 'customer_email',
+            'status': 'fulfillment_status'
+        }
+        sort_column = allowed_sorts.get(sort_by, 'shopify_created_at')
+        sort_direction = 'ASC' if sort_dir.lower() == 'asc' else 'DESC'
+
         # Parse multiple filters from JSON
         filters_json = request.args.get('filters', '').strip()
         filters = []
@@ -4893,8 +4908,8 @@ def all_orders():
         cursor.execute(count_query, params)
         total_count = cursor.fetchone()['count']
 
-        # Add ordering and pagination
-        base_query += f" ORDER BY {col_prefix}shopify_created_at DESC"
+        # Add ordering and pagination (server-side sorting)
+        base_query += f" ORDER BY {col_prefix}{sort_column} {sort_direction}"
         offset = (page - 1) * per_page
         base_query += f" LIMIT {per_page} OFFSET {offset}"
 
@@ -4922,7 +4937,10 @@ def all_orders():
             active_page="all_orders",
             # Multiple filters for template
             filters=filters,
-            filters_json=filters_json
+            filters_json=filters_json,
+            # Sort parameters for server-side sorting
+            sort_by=sort_by,
+            sort_dir=sort_dir
         )
     except Exception as e:
         print(f"Error loading all orders: {e}")
@@ -4943,7 +4961,9 @@ def all_orders():
             version=__version__,
             active_page="all_orders",
             filters=[],
-            filters_json=''
+            filters_json='',
+            sort_by='age',
+            sort_dir='desc'
         )
     finally:
         try:
