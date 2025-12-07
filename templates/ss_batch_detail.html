@@ -2,60 +2,7 @@
 
 {% block title %}Batch {{ batch_id }} - H&O Parcel Scans{% endblock %}
 
-{% block extra_styles %}
-    .back-link { color: #534bc4; text-decoration: none; margin-bottom: 16px; display: inline-block; }
-    .back-link:hover { text-decoration: underline; }
-
-    .batch-info-box {
-      background: white; padding: 16px; border-radius: 8px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px;
-    }
-    .batch-info-box p { margin: 4px 0; color: #666; }
-    .batch-info-box strong { color: #333; }
-
-    .tracking-link { color: #534bc4; text-decoration: none; }
-    .tracking-link:hover { text-decoration: underline; }
-
-    .status-badge {
-      display: inline-block; padding: 4px 8px; border-radius: 4px;
-      font-size: 0.85rem; font-weight: 500;
-    }
-    .status-label_created { background-color: #e3f2fd; color: #1976d2; }
-    .status-in_transit { background-color: #fff4e5; color: #8a6100; }
-    .status-delivered { background-color: #e0f7e9; color: #199b76; }
-    .status-almost_there { background-color: #d4edda; color: #155724; font-weight: 600; }
-    .status-exception { background-color: #fdecea; color: #952746; }
-    .status-unknown { background-color: #f5f5f5; color: #666; }
-
-    /* Progress bar */
-    .progress-bar {
-      width: 60px; height: 6px; background: #e0e0e0; border-radius: 3px;
-      overflow: hidden; display: inline-block; vertical-align: middle;
-      margin-left: 8px;
-    }
-    .progress-bar-fill { height: 100%; border-radius: 3px; }
-    .progress-0 { width: 0%; background: #ccc; }
-    .progress-10 { width: 10%; background: #1976d2; }
-    .progress-25 { width: 25%; background: #f57c00; }
-    .progress-50 { width: 50%; background: #ffa726; }
-    .progress-90 { width: 90%; background: #43a047; }
-    .progress-100 { width: 100%; background: #199b76; }
-    .progress-exception { width: 100%; background: #952746; }
-
-    /* Customer link */
-    .customer-link { color: #534bc4; text-decoration: none; }
-    .customer-link:hover { text-decoration: underline; }
-
-    .summary-stats {
-      display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;
-    }
-    .stat-box {
-      background: white; padding: 12px 20px; border-radius: 8px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    .stat-box .label { font-size: 0.85rem; color: #666; }
-    .stat-box .value { font-size: 1.5rem; font-weight: 600; color: #2c3e50; }
-{% endblock %}
+{% block extra_styles %}{% endblock %}
 
 {% block content %}
     <a href="{{ url_for('check_shipments', tab='batches') }}" class="back-link">&larr; Back to Live Tracking</a>

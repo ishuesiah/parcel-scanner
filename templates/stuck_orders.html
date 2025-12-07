@@ -2,29 +2,7 @@
 
 {% block title %}Fix Stuck Orders - H&O Parcel Scans{% endblock %}
 
-{% block extra_styles %}
-    .info-box { background: #e3f2fd; padding: 12px 16px; border-radius: 6px; margin-bottom: 20px; border-left: 4px solid #2196f3; }
-    .info-box p { margin: 4px 0; font-size: 0.95rem; color: #1565c0; }
-
-    .stuck-row { background-color: #fff3cd !important; }
-
-    .btn-fix {
-      padding: 6px 14px; font-size: 0.85rem; background-color: #28a745; color: #fff;
-      border: none; border-radius: 4px; cursor: pointer; font-weight: 500;
-    }
-    .btn-fix:hover { opacity: 0.92; }
-    .btn-fix:disabled { background-color: #ccc; cursor: not-allowed; }
-
-    .fixing { opacity: 0.6; }
-    .status-processing { color: #ff6b6b; font-weight: 600; }
-    .status-error { color: #dc3545; font-weight: 600; }
-
-    .empty-state {
-      text-align: center; padding: 60px 20px; background: white; border-radius: 8px; margin-top: 20px;
-    }
-    .empty-state h3 { color: #28a745; font-size: 1.3rem; margin-bottom: 10px; }
-    .empty-state p { color: #666; font-size: 1rem; }
-{% endblock %}
+{% block extra_styles %}{% endblock %}
 
 {% block content %}
     <h2>Fix Stuck Orders</h2>
