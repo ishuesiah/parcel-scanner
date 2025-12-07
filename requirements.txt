@@ -6,3 +6,4 @@ bcrypt
 klaviyo-api
 cryptography
 Authlib
+APScheduler

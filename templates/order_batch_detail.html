@@ -1,0 +1,351 @@
+{% extends "base.html" %}
+
+{% block title %}{{ batch.name }} - Order Batch{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="header-left">
+    <a href="{{ url_for('order_batches') }}" class="back-link">&larr; All Batches</a>
+    <h2>{{ batch.name or 'Order Batch' }}</h2>
+    <span class="status-badge status-{{ batch.status }}">{{ batch.status|capitalize }}</span>
+  </div>
+  <div class="header-right">
+    <span class="batch-count">{{ orders|length }} orders</span>
+  </div>
+</div>
+
+{% if batch.notes %}
+  <div class="batch-notes">
+    <strong>Notes:</strong> {{ batch.notes }}
+  </div>
+{% endif %}
+
+<div class="orders-list">
+  {% for order in orders %}
+    <div class="order-card" data-order="{{ order.order_number }}">
+      <div class="order-header">
+        <div class="order-info">
+          <span class="order-number">#{{ order.order_number }}</span>
+          <span class="customer-name">{{ order.customer_name or 'Unknown' }}</span>
+          {% if order.note %}
+            <span class="order-note-indicator" title="{{ order.note }}">Notes</span>
+          {% endif %}
+        </div>
+        <div class="order-status">
+          <span class="fulfillment-badge {{ order.fulfillment_status or 'unfulfilled' }}">
+            {{ (order.fulfillment_status or 'unfulfilled')|capitalize }}
+          </span>
+          {% if order.tracking_number %}
+            <span class="tracking-badge">{{ order.tracking_number }}</span>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if order.shipping_address %}
+        <div class="shipping-address">
+          <strong>Ship to:</strong>
+          {{ order.shipping_address.name or order.customer_name }},
+          {{ order.shipping_address.address1 }}{% if order.shipping_address.address2 %}, {{ order.shipping_address.address2 }}{% endif %},
+          {{ order.shipping_address.city }}, {{ order.shipping_address.province_code or order.shipping_address.province }}
+          {{ order.shipping_address.zip }}, {{ order.shipping_address.country_code or order.shipping_address.country }}
+        </div>
+      {% endif %}
+
+      {% if order.note %}
+        <div class="order-notes">
+          <strong>Customer Notes:</strong> {{ order.note }}
+        </div>
+      {% endif %}
+
+      <div class="line-items">
+        <table class="items-table">
+          <thead>
+            <tr>
+              <th style="width: 50px;">Qty</th>
+              <th>Item</th>
+              <th>SKU</th>
+              <th>Options</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in order.line_items %}
+              <tr>
+                <td class="qty">
+                  <span class="qty-badge">{{ item.quantity }}</span>
+                </td>
+                <td class="item-name">
+                  {{ item.product_title }}
+                  {% if item.variant_title and item.variant_title != 'Default Title' %}
+                    <span class="variant">{{ item.variant_title }}</span>
+                  {% endif %}
+                </td>
+                <td class="item-sku">{{ item.sku or '-' }}</td>
+                <td class="item-options">
+                  {% if item.options and item.options[0] %}
+                    {% for opt in item.options %}
+                      {% if opt and opt != ': ' %}
+                        <span class="option-tag">{{ opt }}</span>
+                      {% endif %}
+                    {% endfor %}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="order-footer">
+        <span class="order-date">
+          Ordered: {{ order.shopify_created_at.strftime('%b %d, %Y %H:%M') if order.shopify_created_at else '-' }}
+        </span>
+        <span class="order-total">
+          {{ order.currency or 'CAD' }} ${{ "%.2f"|format(order.total_price or 0) }}
+        </span>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+<style>
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 24px;
+  }
+
+  .header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .back-link {
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.9rem;
+  }
+
+  .back-link:hover {
+    color: var(--secondary);
+  }
+
+  .header-left h2 {
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .batch-count {
+    font-size: 1.1rem;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .batch-notes {
+    background: #fff9e6;
+    border: 1px solid #ffe066;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    font-size: 0.9rem;
+  }
+
+  .orders-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .order-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+    transition: all 0.2s ease;
+  }
+
+  .order-card:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  }
+
+  .order-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    background: var(--bg-main);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .order-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .order-number {
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--secondary);
+  }
+
+  .customer-name {
+    color: var(--text-main);
+    font-weight: 500;
+  }
+
+  .order-note-indicator {
+    background: #fff3cd;
+    color: #856404;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: help;
+  }
+
+  .order-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .tracking-badge {
+    background: #e3f2fd;
+    color: #1976d2;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-family: monospace;
+  }
+
+  .shipping-address {
+    padding: 12px 20px;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .order-notes {
+    padding: 12px 20px;
+    font-size: 0.9rem;
+    background: #fffbeb;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .line-items {
+    padding: 0;
+  }
+
+  .items-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .items-table th {
+    padding: 10px 20px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: var(--bg-main);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .items-table td {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: top;
+  }
+
+  .items-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .qty-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: var(--secondary);
+    color: white;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 0.9rem;
+  }
+
+  .item-name {
+    font-weight: 500;
+    color: var(--text-main);
+  }
+
+  .item-name .variant {
+    display: block;
+    font-weight: 400;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .item-sku {
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .option-tag {
+    display: inline-block;
+    background: #f3e5f5;
+    color: #7b1fa2;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    margin: 2px 4px 2px 0;
+  }
+
+  .order-footer {
+    display: flex;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--bg-main);
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .order-total {
+    font-weight: 600;
+    color: var(--text-main);
+  }
+
+  /* Fulfillment badges */
+  .fulfillment-badge {
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+
+  .fulfillment-badge.fulfilled {
+    background: #e0f7e9;
+    color: #199b76;
+  }
+
+  .fulfillment-badge.unfulfilled {
+    background: #fff3cd;
+    color: #856404;
+  }
+
+  .fulfillment-badge.partial {
+    background: #e3f2fd;
+    color: #1976d2;
+  }
+</style>
+{% endblock %}

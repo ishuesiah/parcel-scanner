@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+
+{% block title %}Order Batches - H&O Parcel Scans{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Order Batches</h2>
+  <a href="{{ url_for('all_orders') }}" class="btn-primary">
+    + Create New Batch
+  </a>
+</div>
+
+<div class="batches-container">
+  {% if batches %}
+    <div class="batches-grid">
+      {% for batch in batches %}
+        <div class="batch-card">
+          <div class="batch-header">
+            <h3>{{ batch.name or 'Unnamed Batch' }}</h3>
+            <span class="status-badge status-{{ batch.status }}">{{ batch.status|capitalize }}</span>
+          </div>
+
+          <div class="batch-stats">
+            <div class="stat">
+              <span class="stat-value">{{ batch.order_count or 0 }}</span>
+              <span class="stat-label">Orders</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">{{ batch.completed_count or 0 }}</span>
+              <span class="stat-label">Completed</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">{{ ((batch.completed_count or 0) / (batch.order_count or 1) * 100)|int }}%</span>
+              <span class="stat-label">Progress</span>
+            </div>
+          </div>
+
+          <div class="batch-progress">
+            <div class="progress-bar">
+              <div class="progress-bar-fill" style="width: {{ ((batch.completed_count or 0) / (batch.order_count or 1) * 100)|int }}%"></div>
+            </div>
+          </div>
+
+          <div class="batch-meta">
+            <span>Created {{ batch.created_at.strftime('%b %d, %Y %H:%M') if batch.created_at else 'Unknown' }}</span>
+            {% if batch.created_by %}
+              <span>by {{ batch.created_by }}</span>
+            {% endif %}
+          </div>
+
+          <div class="batch-actions">
+            <a href="{{ url_for('view_order_batch', batch_id=batch.id) }}" class="btn-view">
+              View Batch
+            </a>
+            <form method="post" action="{{ url_for('delete_order_batch', batch_id=batch.id) }}"
+                  style="display: inline;" onsubmit="return confirm('Delete this batch?');">
+              <button type="submit" class="btn-delete">Delete</button>
+            </form>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <h3>No batches yet</h3>
+      <p>Create a batch by selecting orders from the <a href="{{ url_for('all_orders') }}">All Orders</a> page.</p>
+    </div>
+  {% endif %}
+</div>
+
+<style>
+  .batches-container {
+    padding: 0;
+  }
+
+  .batches-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 20px;
+  }
+
+  .batch-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 20px;
+    transition: all 0.2s ease;
+  }
+
+  .batch-card:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    transform: translateY(-2px);
+  }
+
+  .batch-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 16px;
+  }
+
+  .batch-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: var(--text-main);
+  }
+
+  .batch-stats {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 16px;
+  }
+
+  .stat {
+    text-align: center;
+  }
+
+  .stat-value {
+    display: block;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--secondary);
+  }
+
+  .stat-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .batch-progress {
+    margin-bottom: 16px;
+  }
+
+  .batch-progress .progress-bar {
+    height: 6px;
+    background: var(--bg-main);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .batch-progress .progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--secondary), var(--accent));
+    border-radius: 3px;
+    transition: width 0.3s ease;
+  }
+
+  .batch-meta {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+  }
+
+  .batch-meta span {
+    margin-right: 8px;
+  }
+
+  .batch-actions {
+    display: flex;
+    gap: 10px;
+  }
+
+  .btn-view {
+    flex: 1;
+    padding: 10px 16px;
+    background: var(--secondary);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .btn-view:hover {
+    background: #4158d0;
+    transform: translateY(-1px);
+  }
+
+  .btn-delete {
+    padding: 10px 16px;
+    background: transparent;
+    color: var(--cancel-btn);
+    border: 1px solid var(--cancel-btn);
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .btn-delete:hover {
+    background: var(--cancel-btn);
+    color: white;
+  }
+</style>
+{% endblock %}

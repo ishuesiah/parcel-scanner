@@ -12,6 +12,8 @@ import os
 import requests
 import bcrypt
 import time
+import atexit
+import json
 
 # Load environment variables from .env file if it exists (for local development)
 try:
@@ -425,6 +427,115 @@ def get_canadapost_api():
     if _canadapost_api is None:
         _canadapost_api = CanadaPostAPI()
     return _canadapost_api
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Background Tracking Refresh Scheduler ──
+# ══════════════════════════════════════════════════════════════════════════════
+_scheduler = None
+_scheduler_initialized = False
+
+def init_background_scheduler():
+    """
+    Initialize background scheduler for automatic tracking updates.
+    Runs every 30 minutes to refresh stale tracking statuses.
+    """
+    global _scheduler, _scheduler_initialized
+
+    # Prevent multiple initializations (important with Flask debug reloader)
+    if _scheduler_initialized:
+        return
+
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        _scheduler = BackgroundScheduler(daemon=True)
+
+        # Schedule tracking refresh every 30 minutes
+        _scheduler.add_job(
+            func=background_tracking_refresh,
+            trigger=IntervalTrigger(minutes=30),
+            id='tracking_refresh',
+            name='Refresh stale tracking statuses',
+            replace_existing=True,
+            max_instances=1  # Prevent overlapping executions
+        )
+
+        _scheduler.start()
+        _scheduler_initialized = True
+        print("✅ Background tracking scheduler started (30 min interval)")
+
+        # Shut down scheduler when app stops
+        atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
+
+    except ImportError:
+        print("⚠️ APScheduler not installed - background tracking disabled")
+    except Exception as e:
+        print(f"⚠️ Failed to start background scheduler: {e}")
+
+
+def background_tracking_refresh():
+    """
+    Background job to refresh stale tracking statuses.
+    Finds non-delivered shipments with stale tracking and updates them.
+    """
+    print("\n🔄 [Background] Starting tracking status refresh...")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Find tracking numbers that:
+        # 1. Are not delivered
+        # 2. Have cache older than 4 hours OR no cache
+        # 3. Were shipped in the last 30 days (ignore old ones)
+        cursor.execute("""
+            SELECT DISTINCT sc.tracking_number, sc.carrier_code
+            FROM shipments_cache sc
+            LEFT JOIN tracking_status_cache tc ON sc.tracking_number = tc.tracking_number
+            WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '30 days'
+              AND (tc.status IS NULL
+                   OR tc.status NOT IN ('delivered', 'exception')
+                   OR tc.updated_at < NOW() - INTERVAL '4 hours')
+              AND sc.tracking_number IS NOT NULL
+              AND sc.tracking_number != ''
+            ORDER BY tc.updated_at ASC NULLS FIRST
+            LIMIT 100
+        """)
+
+        stale_shipments = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        if not stale_shipments:
+            print("✅ [Background] No stale tracking to refresh")
+            return
+
+        # Split by carrier
+        ups_tracking = [s['tracking_number'] for s in stale_shipments
+                       if s['tracking_number'].startswith('1Z')]
+        cp_tracking = [s['tracking_number'] for s in stale_shipments
+                      if 'canada' in (s.get('carrier_code') or '').lower()
+                      and not s['tracking_number'].startswith('1Z')]
+
+        print(f"📦 [Background] Found {len(stale_shipments)} stale: {len(ups_tracking)} UPS, {len(cp_tracking)} Canada Post")
+
+        # Update in batches (respecting API rate limits)
+        if ups_tracking:
+            print(f"🔄 [Background] Refreshing {min(len(ups_tracking), 30)} UPS tracking numbers...")
+            update_ups_tracking_cache(ups_tracking[:30], force_refresh=True)
+
+        if cp_tracking:
+            print(f"🔄 [Background] Refreshing {min(len(cp_tracking), 20)} Canada Post tracking numbers...")
+            update_canadapost_tracking_cache(cp_tracking[:20], force_refresh=True)
+
+        print("✅ [Background] Tracking refresh complete\n")
+
+    except Exception as e:
+        print(f"❌ [Background] Tracking refresh error: {e}")
+        import traceback
+        traceback.print_exc()
+
 
 # ── Orders Sync singleton ──
 _orders_sync = None
@@ -3992,8 +4103,28 @@ def check_shipments():
                     ship_datetime = datetime.strptime(ship_date, "%Y-%m-%d")
                     days_since = (datetime.now() - ship_datetime).days
                     if days_since >= 3:
-                        ups_status_text = "😴 Hasn't Moved"
-                        ups_status = "hasnt_moved"
+                        # Check if cache is stale before showing "hasn't moved"
+                        # If cache is > 4 hours old, the status might be outdated
+                        cache_is_stale = False
+                        if tracking_updated:
+                            tracking_updated_check = tracking_updated
+                            if hasattr(tracking_updated_check, 'tzinfo') and tracking_updated_check.tzinfo is not None:
+                                tracking_updated_check = tracking_updated_check.replace(tzinfo=None)
+                            cache_age_hours = (datetime.now() - tracking_updated_check).total_seconds() / 3600
+                            cache_is_stale = cache_age_hours > 4
+                        else:
+                            cache_is_stale = True  # No cache timestamp = definitely stale
+
+                        if cache_is_stale:
+                            # Cache is stale - show checking status and ensure refresh is queued
+                            ups_status_text = "🔄 Checking Status..."
+                            ups_status = "checking"
+                            if tracking_number not in tracking_to_refresh:
+                                tracking_to_refresh.append(tracking_number)
+                        else:
+                            # Cache is fresh - trust the "hasn't moved" status
+                            ups_status_text = "😴 Hasn't Moved"
+                            ups_status = "hasnt_moved"
                     else:
                         ups_status_text = "📦 Label Created"
                 except:
@@ -4571,6 +4702,21 @@ def all_orders():
         page = int(request.args.get('page', 1))
         per_page = 50
 
+        # Get sort parameters for server-side sorting
+        sort_by = request.args.get('sort', 'age')  # default sort by age (created date)
+        sort_dir = request.args.get('dir', 'desc')  # default newest first
+
+        # Validate sort parameters to prevent SQL injection
+        allowed_sorts = {
+            'order': 'order_number',
+            'age': 'shopify_created_at',
+            'customer': 'customer_name',
+            'email': 'customer_email',
+            'status': 'fulfillment_status'
+        }
+        sort_column = allowed_sorts.get(sort_by, 'shopify_created_at')
+        sort_direction = 'ASC' if sort_dir.lower() == 'asc' else 'DESC'
+
         # Parse multiple filters from JSON
         filters_json = request.args.get('filters', '').strip()
         filters = []
@@ -4762,8 +4908,8 @@ def all_orders():
         cursor.execute(count_query, params)
         total_count = cursor.fetchone()['count']
 
-        # Add ordering and pagination
-        base_query += f" ORDER BY {col_prefix}shopify_created_at DESC"
+        # Add ordering and pagination (server-side sorting)
+        base_query += f" ORDER BY {col_prefix}{sort_column} {sort_direction}"
         offset = (page - 1) * per_page
         base_query += f" LIMIT {per_page} OFFSET {offset}"
 
@@ -4791,7 +4937,10 @@ def all_orders():
             active_page="all_orders",
             # Multiple filters for template
             filters=filters,
-            filters_json=filters_json
+            filters_json=filters_json,
+            # Sort parameters for server-side sorting
+            sort_by=sort_by,
+            sort_dir=sort_dir
         )
     except Exception as e:
         print(f"Error loading all orders: {e}")
@@ -4812,7 +4961,9 @@ def all_orders():
             version=__version__,
             active_page="all_orders",
             filters=[],
-            filters_json=''
+            filters_json='',
+            sort_by='age',
+            sort_dir='desc'
         )
     finally:
         try:
@@ -4820,6 +4971,188 @@ def all_orders():
         except Exception:
             pass
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Order Batches - Group orders for fulfillment prep
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/create_order_batch", methods=["POST"])
+def create_order_batch():
+    """
+    Create a new order batch from selected orders.
+    Expects JSON array of order numbers in 'order_numbers' field.
+    """
+    try:
+        order_numbers_json = request.form.get('order_numbers', '[]')
+        order_numbers = json.loads(order_numbers_json)
+
+        if not order_numbers:
+            flash("No orders selected", "error")
+            return redirect(url_for('all_orders'))
+
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Create the batch
+        batch_name = f"Batch {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        cursor.execute("""
+            INSERT INTO order_batches (name, status, created_by)
+            VALUES (%s, 'pending', %s)
+            RETURNING id
+        """, (batch_name, session.get('user_email', 'unknown')))
+        batch_id = cursor.fetchone()['id']
+
+        # Add orders to the batch
+        added_count = 0
+        for order_num in order_numbers:
+            # Get order ID from order number
+            cursor.execute("SELECT id FROM orders WHERE order_number = %s", (order_num,))
+            order_row = cursor.fetchone()
+            if order_row:
+                try:
+                    cursor.execute("""
+                        INSERT INTO order_batch_items (batch_id, order_id, order_number)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (batch_id, order_id) DO NOTHING
+                    """, (batch_id, order_row['id'], order_num))
+                    added_count += 1
+                except Exception as e:
+                    print(f"Error adding order {order_num} to batch: {e}")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        flash(f"Created batch with {added_count} orders", "success")
+        return redirect(url_for('view_order_batch', batch_id=batch_id))
+
+    except Exception as e:
+        print(f"Error creating order batch: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error creating batch: {str(e)}", "error")
+        return redirect(url_for('all_orders'))
+
+
+@app.route("/order_batches")
+def order_batches():
+    """List all order batches."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT ob.*,
+                   COUNT(obi.id) as order_count,
+                   SUM(CASE WHEN obi.status = 'completed' THEN 1 ELSE 0 END) as completed_count
+            FROM order_batches ob
+            LEFT JOIN order_batch_items obi ON ob.id = obi.batch_id
+            GROUP BY ob.id
+            ORDER BY ob.created_at DESC
+        """)
+        batches = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        return render_template(
+            'order_batches.html',
+            batches=batches,
+            version=__version__,
+            active_page='order_batches'
+        )
+
+    except Exception as e:
+        print(f"Error loading order batches: {e}")
+        flash(f"Error loading batches: {str(e)}", "error")
+        return redirect(url_for('all_orders'))
+
+
+@app.route("/order_batch/<int:batch_id>")
+def view_order_batch(batch_id):
+    """View a single order batch with all its orders and line items."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Get batch info
+        cursor.execute("SELECT * FROM order_batches WHERE id = %s", (batch_id,))
+        batch = cursor.fetchone()
+        if not batch:
+            flash("Batch not found", "error")
+            return redirect(url_for('order_batches'))
+
+        # Get all orders in this batch with their line items
+        cursor.execute("""
+            SELECT obi.*, o.customer_name, o.customer_email, o.shipping_address,
+                   o.fulfillment_status, o.total_price, o.currency, o.note,
+                   o.shopify_created_at, o.tracking_number
+            FROM order_batch_items obi
+            JOIN orders o ON obi.order_id = o.id
+            WHERE obi.batch_id = %s
+            ORDER BY o.shopify_created_at DESC
+        """, (batch_id,))
+        batch_orders = cursor.fetchall()
+
+        # Get line items for each order
+        orders_with_items = []
+        for order in batch_orders:
+            cursor.execute("""
+                SELECT li.*, array_agg(CONCAT(lio.name, ': ', lio.value)) as options
+                FROM order_line_items li
+                LEFT JOIN order_line_item_options lio ON li.id = lio.line_item_id
+                WHERE li.order_id = %s
+                GROUP BY li.id
+                ORDER BY li.id
+            """, (order['order_id'],))
+            line_items = cursor.fetchall()
+
+            order_dict = dict(order)
+            order_dict['line_items'] = line_items
+
+            # Parse shipping address JSON
+            if order_dict.get('shipping_address'):
+                try:
+                    order_dict['shipping_address'] = json.loads(order_dict['shipping_address'])
+                except:
+                    pass
+
+            orders_with_items.append(order_dict)
+
+        cursor.close()
+        conn.close()
+
+        return render_template(
+            'order_batch_detail.html',
+            batch=batch,
+            orders=orders_with_items,
+            version=__version__,
+            active_page='order_batches'
+        )
+
+    except Exception as e:
+        print(f"Error viewing order batch: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error loading batch: {str(e)}", "error")
+        return redirect(url_for('order_batches'))
+
+
+@app.route("/order_batch/<int:batch_id>/delete", methods=["POST"])
+def delete_order_batch(batch_id):
+    """Delete an order batch."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM order_batches WHERE id = %s", (batch_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        flash("Batch deleted", "success")
+    except Exception as e:
+        flash(f"Error deleting batch: {str(e)}", "error")
+    return redirect(url_for('order_batches'))
 
 
 @app.route("/api/orders/sync", methods=["POST"])
@@ -5939,6 +6272,15 @@ def api_cancel_order(order_number):
         except Exception:
             pass
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Initialize Background Scheduler ──
+# ══════════════════════════════════════════════════════════════════════════════
+# Start the background scheduler for automatic tracking updates.
+# This runs whether the app is started via gunicorn or directly with python.
+# The scheduler handles its own duplicate prevention.
+init_background_scheduler()
 
 
 if __name__ == "__main__":
