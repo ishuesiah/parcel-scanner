@@ -5155,6 +5155,284 @@ def delete_order_batch(batch_id):
     return redirect(url_for('order_batches'))
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Settings & Packing Slip Builder
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_setting(key, default=None):
+    """Get a single setting value from the database."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT setting_value FROM app_settings WHERE setting_key = %s", (key,))
+        result = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return result['setting_value'] if result else default
+    except:
+        return default
+
+
+def get_all_settings():
+    """Get all settings as a dictionary."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT setting_key, setting_value, setting_type FROM app_settings")
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {row['setting_key']: row['setting_value'] for row in rows}
+    except:
+        return {}
+
+
+def save_setting(key, value, setting_type='text'):
+    """Save a setting to the database."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO app_settings (setting_key, setting_value, setting_type, updated_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (setting_key) DO UPDATE
+            SET setting_value = EXCLUDED.setting_value,
+                setting_type = EXCLUDED.setting_type,
+                updated_at = CURRENT_TIMESTAMP
+        """, (key, value, setting_type))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error saving setting {key}: {e}")
+        return False
+
+
+@app.route("/settings")
+def settings_page():
+    """Admin settings page with packing slip builder."""
+    settings = get_all_settings()
+
+    # Get default templates from orders_sync if not in DB
+    from orders_sync import DEFAULT_PACKING_SLIP_HTML, DEFAULT_PACKING_SLIP_CSS
+
+    return render_template(
+        "settings.html",
+        settings=settings,
+        default_html=DEFAULT_PACKING_SLIP_HTML,
+        default_css=DEFAULT_PACKING_SLIP_CSS,
+        version=__version__,
+        active_page="settings"
+    )
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_save_settings():
+    """Save settings from the settings page."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "No data provided"}), 400
+
+        saved = []
+        for key, value in data.items():
+            # Determine setting type based on key
+            if key.endswith('_html'):
+                stype = 'html'
+            elif key.endswith('_css'):
+                stype = 'css'
+            elif key.endswith('_js'):
+                stype = 'js'
+            elif key.endswith('_url'):
+                stype = 'url'
+            elif key.endswith('_width') or key.endswith('_height'):
+                stype = 'number'
+            else:
+                stype = 'text'
+
+            if save_setting(key, value, stype):
+                saved.append(key)
+
+        return jsonify({"success": True, "saved": saved})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/settings/logo", methods=["POST"])
+def api_upload_logo():
+    """Upload company logo."""
+    try:
+        if 'logo' not in request.files:
+            return jsonify({"success": False, "error": "No file provided"}), 400
+
+        file = request.files['logo']
+        if file.filename == '':
+            return jsonify({"success": False, "error": "No file selected"}), 400
+
+        # Validate file type
+        allowed_extensions = {'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'}
+        ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+        if ext not in allowed_extensions:
+            return jsonify({"success": False, "error": f"File type not allowed. Use: {', '.join(allowed_extensions)}"}), 400
+
+        # Save to static/uploads folder
+        import os
+        upload_dir = os.path.join(app.static_folder, 'uploads')
+        os.makedirs(upload_dir, exist_ok=True)
+
+        # Generate unique filename
+        filename = f"logo_{datetime.now().strftime('%Y%m%d%H%M%S')}.{ext}"
+        filepath = os.path.join(upload_dir, filename)
+        file.save(filepath)
+
+        # Save URL to settings
+        logo_url = url_for('static', filename=f'uploads/{filename}')
+        save_setting('company_logo_url', logo_url, 'url')
+
+        return jsonify({"success": True, "url": logo_url})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/settings/reset-template", methods=["POST"])
+def api_reset_packing_slip():
+    """Reset packing slip template to defaults."""
+    try:
+        from orders_sync import DEFAULT_PACKING_SLIP_HTML, DEFAULT_PACKING_SLIP_CSS
+
+        save_setting('packing_slip_html', DEFAULT_PACKING_SLIP_HTML, 'html')
+        save_setting('packing_slip_css', DEFAULT_PACKING_SLIP_CSS, 'css')
+        save_setting('packing_slip_js', '', 'js')
+
+        return jsonify({
+            "success": True,
+            "html": DEFAULT_PACKING_SLIP_HTML,
+            "css": DEFAULT_PACKING_SLIP_CSS,
+            "js": ""
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/packing-slip/preview")
+def api_packing_slip_preview():
+    """Generate a preview of the packing slip with sample data."""
+    settings = get_all_settings()
+
+    # Sample data for preview
+    sample_data = {
+        "company_name": settings.get('company_name', 'Hemlock & Oak'),
+        "company_logo": settings.get('company_logo_url', ''),
+        "company_address": settings.get('company_address', ''),
+        "order_number": "12345",
+        "order_date": datetime.now().strftime("%B %d, %Y"),
+        "shipping_name": "Jane Smith",
+        "shipping_address1": "123 Main Street",
+        "shipping_address2": "Apt 4B",
+        "shipping_city": "Vancouver",
+        "shipping_province": "BC",
+        "shipping_zip": "V6B 1A1",
+        "shipping_country": "Canada",
+        "billing_name": "Jane Smith",
+        "billing_address1": "123 Main Street",
+        "billing_address2": "",
+        "billing_city": "Vancouver",
+        "billing_province": "BC",
+        "billing_zip": "V6B 1A1",
+        "order_note": "Please leave at back door. Thank you!",
+        "tracking_number": "1Z999AA10123456784",
+        "line_items": [
+            {
+                "quantity": 2,
+                "title": "2025 Planner - Botanical Edition",
+                "variant_title": "Green / Weekly",
+                "sku": "PLN-BOT-GRN-W",
+                "properties": [
+                    {"name": "Start Month", "value": "January 2025"},
+                    {"name": "Personalization", "value": "Jane S."}
+                ]
+            },
+            {
+                "quantity": 1,
+                "title": "Matching Pen Set",
+                "variant_title": "Gold",
+                "sku": "PEN-GOLD-3PK",
+                "properties": []
+            },
+            {
+                "quantity": 3,
+                "title": "Sticky Notes - Floral Pack",
+                "variant_title": "",
+                "sku": "STK-FLR-100",
+                "properties": []
+            }
+        ]
+    }
+
+    return jsonify({
+        "success": True,
+        "data": sample_data,
+        "html": settings.get('packing_slip_html', ''),
+        "css": settings.get('packing_slip_css', ''),
+        "js": settings.get('packing_slip_js', ''),
+        "label_width": settings.get('packing_slip_label_width', '4'),
+        "label_height": settings.get('packing_slip_label_height', '6')
+    })
+
+
+# Available template variables for the packing slip
+PACKING_SLIP_VARIABLES = {
+    "Company Info": [
+        ("{{company_name}}", "Company name"),
+        ("{{company_logo}}", "Company logo URL"),
+        ("{{company_address}}", "Company address"),
+        ("{{company_phone}}", "Company phone"),
+        ("{{company_email}}", "Company email"),
+    ],
+    "Order Info": [
+        ("{{order_number}}", "Order number"),
+        ("{{order_date}}", "Order date"),
+        ("{{order_note}}", "Customer notes"),
+        ("{{tracking_number}}", "Tracking number"),
+    ],
+    "Shipping Address": [
+        ("{{shipping_name}}", "Recipient name"),
+        ("{{shipping_address1}}", "Address line 1"),
+        ("{{shipping_address2}}", "Address line 2"),
+        ("{{shipping_city}}", "City"),
+        ("{{shipping_province}}", "Province/State"),
+        ("{{shipping_zip}}", "Postal/ZIP code"),
+        ("{{shipping_country}}", "Country"),
+    ],
+    "Billing Address": [
+        ("{{billing_name}}", "Billing name"),
+        ("{{billing_address1}}", "Billing address 1"),
+        ("{{billing_address2}}", "Billing address 2"),
+        ("{{billing_city}}", "Billing city"),
+        ("{{billing_province}}", "Billing province"),
+        ("{{billing_zip}}", "Billing ZIP"),
+    ],
+    "Line Items (use in {{#each line_items}})": [
+        ("{{this.quantity}}", "Item quantity"),
+        ("{{this.title}}", "Product title"),
+        ("{{this.variant_title}}", "Variant title"),
+        ("{{this.sku}}", "Item SKU"),
+        ("{{this.properties}}", "Customizations (loop with {{#each this.properties}})"),
+    ],
+    "Conditionals": [
+        ("{{#if variable}}...{{/if}}", "Show content if variable exists"),
+        ("{{#each array}}...{{/each}}", "Loop through array items"),
+    ],
+}
+
+
+@app.route("/api/packing-slip/variables")
+def api_packing_slip_variables():
+    """Get available template variables."""
+    return jsonify({"success": True, "variables": PACKING_SLIP_VARIABLES})
+
+
 @app.route("/api/orders/sync", methods=["POST"])
 def api_orders_sync():
     """

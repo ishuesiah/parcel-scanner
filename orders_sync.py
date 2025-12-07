@@ -32,6 +32,265 @@ def sync_log(message: str):
     print(f"[orders_sync {timestamp}] {message}")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Default Packing Slip Template
+# ══════════════════════════════════════════════════════════════════════════════
+
+DEFAULT_PACKING_SLIP_HTML = '''<div class="packing-slip">
+  <div class="header">
+    {{#if company_logo}}
+    <img src="{{company_logo}}" alt="Logo" class="logo">
+    {{/if}}
+    <div class="company-info">
+      <h1>{{company_name}}</h1>
+      {{#if company_address}}<p>{{company_address}}</p>{{/if}}
+    </div>
+    <div class="order-info">
+      <h2>Packing Slip</h2>
+      <p><strong>Order #{{order_number}}</strong></p>
+      <p>{{order_date}}</p>
+    </div>
+  </div>
+
+  <div class="addresses">
+    <div class="ship-to">
+      <h3>Ship To:</h3>
+      <p class="name">{{shipping_name}}</p>
+      <p>{{shipping_address1}}</p>
+      {{#if shipping_address2}}<p>{{shipping_address2}}</p>{{/if}}
+      <p>{{shipping_city}}, {{shipping_province}} {{shipping_zip}}</p>
+      <p>{{shipping_country}}</p>
+    </div>
+    {{#if billing_name}}
+    <div class="bill-to">
+      <h3>Bill To:</h3>
+      <p class="name">{{billing_name}}</p>
+      <p>{{billing_address1}}</p>
+      {{#if billing_address2}}<p>{{billing_address2}}</p>{{/if}}
+      <p>{{billing_city}}, {{billing_province}} {{billing_zip}}</p>
+    </div>
+    {{/if}}
+  </div>
+
+  {{#if order_note}}
+  <div class="order-notes">
+    <h3>Customer Notes:</h3>
+    <p>{{order_note}}</p>
+  </div>
+  {{/if}}
+
+  <table class="items">
+    <thead>
+      <tr>
+        <th class="qty">Qty</th>
+        <th class="item">Item</th>
+        <th class="sku">SKU</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{#each line_items}}
+      <tr>
+        <td class="qty">{{this.quantity}}</td>
+        <td class="item">
+          {{this.title}}
+          {{#if this.variant_title}}<br><small>{{this.variant_title}}</small>{{/if}}
+          {{#if this.properties}}
+          <div class="item-options">
+            {{#each this.properties}}
+            <small>{{this.name}}: {{this.value}}</small><br>
+            {{/each}}
+          </div>
+          {{/if}}
+        </td>
+        <td class="sku">{{this.sku}}</td>
+      </tr>
+      {{/each}}
+    </tbody>
+  </table>
+
+  <div class="footer">
+    <p>Thank you for your order!</p>
+    {{#if tracking_number}}
+    <p class="tracking">Tracking: {{tracking_number}}</p>
+    {{/if}}
+  </div>
+</div>'''
+
+DEFAULT_PACKING_SLIP_CSS = '''/* Packing Slip Styles - 4x6 Label */
+@page {
+  size: 4in 6in;
+  margin: 0;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 10px;
+  line-height: 1.3;
+  color: #333;
+}
+
+.packing-slip {
+  width: 4in;
+  height: 6in;
+  padding: 0.15in;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 2px solid #333;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+}
+
+.logo {
+  max-height: 40px;
+  max-width: 80px;
+  object-fit: contain;
+}
+
+.company-info h1 {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.company-info p {
+  font-size: 8px;
+  color: #666;
+}
+
+.order-info {
+  text-align: right;
+}
+
+.order-info h2 {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.order-info p {
+  font-size: 9px;
+}
+
+.addresses {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.ship-to, .bill-to {
+  flex: 1;
+}
+
+.ship-to h3, .bill-to h3 {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #666;
+  margin-bottom: 2px;
+}
+
+.ship-to .name, .bill-to .name {
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.order-notes {
+  background: #fff9e6;
+  border: 1px solid #ffe066;
+  border-radius: 4px;
+  padding: 6px;
+  margin-bottom: 8px;
+}
+
+.order-notes h3 {
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #856404;
+  margin-bottom: 2px;
+}
+
+.order-notes p {
+  font-size: 9px;
+}
+
+.items {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+
+.items th {
+  background: #f5f5f5;
+  padding: 4px 6px;
+  text-align: left;
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  border-bottom: 1px solid #ddd;
+}
+
+.items td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #eee;
+  font-size: 9px;
+  vertical-align: top;
+}
+
+.items .qty {
+  width: 30px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.items .sku {
+  width: 60px;
+  font-family: monospace;
+  font-size: 8px;
+  color: #666;
+}
+
+.item-options {
+  margin-top: 2px;
+  color: #7b1fa2;
+}
+
+.item-options small {
+  font-size: 8px;
+}
+
+.footer {
+  position: absolute;
+  bottom: 0.15in;
+  left: 0.15in;
+  right: 0.15in;
+  text-align: center;
+  font-size: 9px;
+  color: #666;
+  border-top: 1px solid #eee;
+  padding-top: 6px;
+}
+
+.footer .tracking {
+  font-family: monospace;
+  font-size: 8px;
+  margin-top: 4px;
+}
+
+@media print {
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}'''
+
+
 def init_orders_tables(get_db_connection):
     """
     Initialize the orders tables if they don't exist.
@@ -273,6 +532,39 @@ def init_orders_tables(get_db_connection):
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_batch_items_batch ON order_batch_items(batch_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_batch_items_order ON order_batch_items(order_id)")
+
+        # Create app_settings table for packing slips, logos, and other configurations
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                id SERIAL PRIMARY KEY,
+                setting_key TEXT UNIQUE NOT NULL,
+                setting_value TEXT,
+                setting_type TEXT DEFAULT 'text',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_app_settings_key ON app_settings(setting_key)")
+
+        # Insert default packing slip settings if they don't exist
+        default_settings = [
+            ('packing_slip_html', DEFAULT_PACKING_SLIP_HTML, 'html'),
+            ('packing_slip_css', DEFAULT_PACKING_SLIP_CSS, 'css'),
+            ('packing_slip_js', '', 'js'),
+            ('packing_slip_label_width', '4', 'number'),
+            ('packing_slip_label_height', '6', 'number'),
+            ('company_logo_url', '', 'url'),
+            ('company_name', 'Hemlock & Oak', 'text'),
+            ('company_address', '', 'text'),
+            ('company_phone', '', 'text'),
+            ('company_email', '', 'text'),
+        ]
+        for key, value, stype in default_settings:
+            cursor.execute("""
+                INSERT INTO app_settings (setting_key, setting_value, setting_type)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (setting_key) DO NOTHING
+            """, (key, value, stype))
 
         conn.commit()
         cursor.close()
