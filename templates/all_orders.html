@@ -257,7 +257,7 @@
                   data-status="{{ order.fulfillment_status or 'unfulfilled' }}">
                 <td>
                   <input type="checkbox" class="order-checkbox" value="{{ order.order_number }}"
-                         data-order-id="{{ order.id }}" onchange="updateSelection()">
+                         data-order-id="{{ order.id }}">
                 </td>
                 <td>
                   <a href="#" onclick="showOrderDetails('{{ order.order_number }}'); return false;" class="order-number-link">
@@ -1072,12 +1072,15 @@
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Order Selection & Batch Creation
+  // Order Selection & Batch Creation (with Shift+Click support)
   // ═══════════════════════════════════════════════════════════════════════════
+
+  let lastCheckedIndex = null;  // Track last clicked checkbox for shift-select
 
   function toggleSelectAll(checkbox) {
     const checkboxes = document.querySelectorAll('.order-checkbox');
     checkboxes.forEach(cb => cb.checked = checkbox.checked);
+    lastCheckedIndex = null;  // Reset shift-select tracking
     updateSelection();
   }
 
@@ -1108,8 +1111,36 @@
   function clearSelection() {
     document.querySelectorAll('.order-checkbox').forEach(cb => cb.checked = false);
     document.getElementById('selectAll').checked = false;
+    lastCheckedIndex = null;
     updateSelection();
   }
+
+  // Handle checkbox click with shift-select support
+  function handleCheckboxClick(event) {
+    const checkboxes = Array.from(document.querySelectorAll('.order-checkbox'));
+    const clickedIndex = checkboxes.indexOf(event.target);
+
+    if (event.shiftKey && lastCheckedIndex !== null && clickedIndex !== lastCheckedIndex) {
+      // Shift+click: select range between last clicked and current
+      const start = Math.min(lastCheckedIndex, clickedIndex);
+      const end = Math.max(lastCheckedIndex, clickedIndex);
+      const shouldCheck = checkboxes[lastCheckedIndex].checked;
+
+      for (let i = start; i <= end; i++) {
+        checkboxes[i].checked = shouldCheck;
+      }
+    }
+
+    lastCheckedIndex = clickedIndex;
+    updateSelection();
+  }
+
+  // Initialize shift-click handlers on page load
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.order-checkbox').forEach(function(checkbox) {
+      checkbox.addEventListener('click', handleCheckboxClick);
+    });
+  });
 
   function getSelectedOrders() {
     const checkboxes = document.querySelectorAll('.order-checkbox:checked');
