@@ -326,3 +326,329 @@ class UPSAPI:
                 "status_description": "Failed to parse tracking data",
                 "error": str(e)
             }
+
+
+class UPSShippingAPI:
+    """
+    UPS Shipping & Rating API.
+    Extends tracking to support rate quotes and label creation with customs.
+    """
+
+    def __init__(self):
+        """
+        Initialize UPS Shipping API.
+        Requires: UPS_CLIENT_ID, UPS_CLIENT_SECRET, UPS_ACCOUNT_NUMBER
+        """
+        self.client_id = os.environ.get("UPS_CLIENT_ID", "")
+        self.client_secret = os.environ.get("UPS_CLIENT_SECRET", "")
+        self.account_number = os.environ.get("UPS_ACCOUNT_NUMBER", "")
+
+        self._access_token = None
+        self._token_expires_at = 0
+
+        # Production endpoint
+        self.base_url = "https://onlinetools.ups.com/api"
+
+        self.enabled = bool(self.client_id and self.client_secret)
+        self.rating_enabled = bool(self.enabled and self.account_number)
+
+        if not self.enabled:
+            print("⚠️ UPS Shipping API not configured (missing credentials)")
+        elif not self.account_number:
+            print("⚠️ UPS_ACCOUNT_NUMBER not set - rating/shipping disabled")
+
+        # Shipper address from environment
+        self.shipper_address = {
+            "name": os.environ.get("COMPANY_NAME", "Hemlock & Oak Stationery Inc."),
+            "attention_name": "Shipping Dept",
+            "phone": os.environ.get("COMPANY_PHONE", ""),
+            "address_line1": os.environ.get("WAREHOUSE_ADDRESS1", ""),
+            "address_line2": os.environ.get("WAREHOUSE_ADDRESS2", ""),
+            "city": os.environ.get("WAREHOUSE_CITY", ""),
+            "state": os.environ.get("WAREHOUSE_PROVINCE", "BC"),
+            "postal_code": os.environ.get("WAREHOUSE_POSTAL", ""),
+            "country_code": "CA"
+        }
+
+    def _get_oauth_token(self) -> Optional[str]:
+        """Get OAuth 2.0 access token (cached until expiry)."""
+        if self._access_token and time.time() < self._token_expires_at - 60:
+            return self._access_token
+
+        try:
+            credentials = f"{self.client_id}:{self.client_secret}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
+
+            response = requests.post(
+                "https://onlinetools.ups.com/security/v1/oauth/token",
+                data={"grant_type": "client_credentials"},
+                headers={
+                    "Authorization": f"Basic {encoded_credentials}",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                self._access_token = data.get("access_token")
+                expires_in = int(data.get("expires_in", 3600))
+                self._token_expires_at = time.time() + expires_in
+                return self._access_token
+            else:
+                print(f"UPS OAuth error: {response.status_code}")
+                return None
+
+        except Exception as e:
+            print(f"UPS OAuth exception: {e}")
+            return None
+
+    def get_rates(
+        self,
+        destination: Dict[str, str],
+        packages: list,
+        customs_items: list = None
+    ) -> Dict[str, Any]:
+        """
+        Get shipping rates from UPS.
+
+        Args:
+            destination: {
+                "name": "Customer Name",
+                "address_line1": "123 Main St",
+                "city": "New York",
+                "state": "NY",
+                "postal_code": "10001",
+                "country_code": "US"
+            }
+            packages: [{
+                "weight_kg": 0.5,
+                "length_cm": 25,
+                "width_cm": 18,
+                "height_cm": 5
+            }]
+            customs_items: (for international) [{
+                "description": "Planner agenda",
+                "hs_code": "4820102010",
+                "country_of_origin": "CA",
+                "quantity": 1,
+                "value": 74.10,
+                "weight_kg": 0.3
+            }]
+
+        Returns:
+            {
+                "success": True,
+                "rates": [
+                    {
+                        "service_code": "08",
+                        "service_name": "UPS Worldwide Expedited",
+                        "total_charge": 25.43,
+                        "currency": "CAD",
+                        "delivery_days": 3,
+                        "delivery_date": "2025-12-10"
+                    },
+                    ...
+                ]
+            }
+        """
+        if not self.rating_enabled:
+            return {"success": False, "error": "UPS Rating API not configured (missing account number)"}
+
+        token = self._get_oauth_token()
+        if not token:
+            return {"success": False, "error": "Failed to get UPS OAuth token"}
+
+        is_international = destination.get("country_code", "CA").upper() not in ["CA", "CANADA"]
+
+        # Build package objects
+        ups_packages = []
+        for pkg in packages:
+            ups_package = {
+                "PackagingType": {"Code": "02", "Description": "Package"},
+                "Dimensions": {
+                    "UnitOfMeasurement": {"Code": "CM"},
+                    "Length": str(int(pkg.get("length_cm", 25))),
+                    "Width": str(int(pkg.get("width_cm", 18))),
+                    "Height": str(int(pkg.get("height_cm", 5)))
+                },
+                "PackageWeight": {
+                    "UnitOfMeasurement": {"Code": "KGS"},
+                    "Weight": str(round(pkg.get("weight_kg", 0.5), 2))
+                }
+            }
+            ups_packages.append(ups_package)
+
+        # Build shipper address lines
+        shipper_lines = [self.shipper_address.get("address_line1", "")]
+        if self.shipper_address.get("address_line2"):
+            shipper_lines.append(self.shipper_address["address_line2"])
+
+        # Build destination address lines
+        dest_lines = [destination.get("address_line1", "")]
+        if destination.get("address_line2"):
+            dest_lines.append(destination["address_line2"])
+
+        # Build rate request
+        rate_request = {
+            "RateRequest": {
+                "Request": {
+                    "SubVersion": "2205",
+                    "TransactionReference": {"CustomerContext": "Rating"}
+                },
+                "Shipment": {
+                    "Shipper": {
+                        "Name": self.shipper_address.get("name", "Shipper"),
+                        "ShipperNumber": self.account_number,
+                        "Address": {
+                            "AddressLine": shipper_lines,
+                            "City": self.shipper_address.get("city", ""),
+                            "StateProvinceCode": self.shipper_address.get("state", "BC"),
+                            "PostalCode": self.shipper_address.get("postal_code", ""),
+                            "CountryCode": self.shipper_address.get("country_code", "CA")
+                        }
+                    },
+                    "ShipTo": {
+                        "Name": destination.get("name", "Customer"),
+                        "Address": {
+                            "AddressLine": dest_lines,
+                            "City": destination.get("city", ""),
+                            "StateProvinceCode": destination.get("state", ""),
+                            "PostalCode": destination.get("postal_code", ""),
+                            "CountryCode": destination.get("country_code", "CA")
+                        }
+                    },
+                    "ShipFrom": {
+                        "Name": self.shipper_address.get("name", "Shipper"),
+                        "Address": {
+                            "AddressLine": shipper_lines,
+                            "City": self.shipper_address.get("city", ""),
+                            "StateProvinceCode": self.shipper_address.get("state", "BC"),
+                            "PostalCode": self.shipper_address.get("postal_code", ""),
+                            "CountryCode": self.shipper_address.get("country_code", "CA")
+                        }
+                    },
+                    "PaymentDetails": {
+                        "ShipmentCharge": [{
+                            "Type": "01",
+                            "BillShipper": {"AccountNumber": self.account_number}
+                        }]
+                    },
+                    "Package": ups_packages,
+                    "ShipmentRatingOptions": {
+                        "NegotiatedRatesIndicator": ""
+                    }
+                }
+            }
+        }
+
+        # Add international customs info
+        if is_international and customs_items:
+            total_value = sum(
+                (item.get("value", 0) or 0) * (item.get("quantity", 1) or 1)
+                for item in customs_items
+            )
+
+            rate_request["RateRequest"]["Shipment"]["InvoiceLineTotal"] = {
+                "CurrencyCode": "CAD",
+                "MonetaryValue": str(round(total_value, 2))
+            }
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/rating/v2205/Shop",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "transId": f"rate_{int(time.time())}",
+                    "transactionSrc": "HO-ParcelScanner"
+                },
+                json=rate_request,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                rated_shipments = data.get("RateResponse", {}).get("RatedShipment", [])
+
+                rates = []
+                for rs in rated_shipments:
+                    service = rs.get("Service", {})
+                    total = rs.get("TotalCharges", {})
+                    negotiated = rs.get("NegotiatedRateCharges", {}).get("TotalCharge", {})
+
+                    charge = negotiated if negotiated else total
+
+                    delivery_days = None
+                    delivery_date = None
+                    if rs.get("GuaranteedDelivery"):
+                        delivery_days = rs["GuaranteedDelivery"].get("BusinessDaysInTransit")
+                    if rs.get("TimeInTransit", {}).get("ServiceSummary"):
+                        est_arrival = rs["TimeInTransit"]["ServiceSummary"].get("EstimatedArrival", {})
+                        delivery_date = est_arrival.get("Arrival", {}).get("Date")
+
+                    rates.append({
+                        "service_code": service.get("Code", ""),
+                        "service_name": self._get_service_name(service.get("Code", "")),
+                        "total_charge": float(charge.get("MonetaryValue", 0)),
+                        "currency": charge.get("CurrencyCode", "CAD"),
+                        "delivery_days": int(delivery_days) if delivery_days else None,
+                        "delivery_date": delivery_date
+                    })
+
+                rates.sort(key=lambda x: x["total_charge"])
+
+                return {"success": True, "rates": rates}
+            else:
+                error_msg = response.text[:500]
+                print(f"UPS Rating error: {response.status_code} - {error_msg}")
+                return {"success": False, "error": f"UPS API error: {response.status_code}"}
+
+        except Exception as e:
+            print(f"UPS Rating exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _get_service_name(self, code: str) -> str:
+        """Map UPS service codes to friendly names."""
+        services = {
+            "01": "UPS Next Day Air",
+            "02": "UPS 2nd Day Air",
+            "03": "UPS Ground",
+            "07": "UPS Worldwide Express",
+            "08": "UPS Worldwide Expedited",
+            "11": "UPS Standard",
+            "12": "UPS 3 Day Select",
+            "13": "UPS Next Day Air Saver",
+            "14": "UPS Next Day Air Early",
+            "54": "UPS Worldwide Express Plus",
+            "59": "UPS 2nd Day Air A.M.",
+            "65": "UPS Worldwide Saver",
+            "82": "UPS Today Standard",
+            "83": "UPS Today Dedicated Courier",
+            "84": "UPS Today Intercity",
+            "85": "UPS Today Express",
+            "86": "UPS Today Express Saver",
+            "96": "UPS Worldwide Express Freight"
+        }
+        return services.get(code, f"UPS Service {code}")
+
+
+# Singleton instances
+_ups_api = None
+_ups_shipping_api = None
+
+
+def get_ups_api() -> UPSAPI:
+    """Get or create singleton UPS Tracking API instance."""
+    global _ups_api
+    if _ups_api is None:
+        _ups_api = UPSAPI()
+    return _ups_api
+
+
+def get_ups_shipping_api() -> UPSShippingAPI:
+    """Get or create singleton UPS Shipping/Rating API instance."""
+    global _ups_shipping_api
+    if _ups_shipping_api is None:
+        _ups_shipping_api = UPSShippingAPI()
+    return _ups_shipping_api

@@ -6412,6 +6412,393 @@ def api_get_customs_form(order_number):
         return f"<html><body><h1>Error</h1><p>{str(e)}</p></body></html>", 500
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Rate Shopping & Shipping Rates API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/orders/<order_number>/rates", methods=["GET"])
+def api_get_shipping_rates(order_number):
+    """
+    Get shipping rates from all carriers for an order.
+    Returns rates from UPS and Canada Post sorted by price.
+    """
+    from rate_shopping import get_rate_shopping_service
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get order details
+        cursor.execute("""
+            SELECT id, shipping_address, total_weight_grams
+            FROM orders
+            WHERE order_number = %s
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Order not found"}), 404
+
+        # Parse shipping address
+        shipping_address = {}
+        if order.get('shipping_address'):
+            try:
+                shipping_address = json.loads(order['shipping_address'])
+            except:
+                pass
+
+        cursor.close()
+        conn.close()
+
+        # Build destination from shipping address
+        destination = {
+            "name": shipping_address.get("name", "Customer"),
+            "address_line1": shipping_address.get("address1", ""),
+            "address_line2": shipping_address.get("address2", ""),
+            "city": shipping_address.get("city", ""),
+            "state": shipping_address.get("province_code") or shipping_address.get("province", ""),
+            "postal_code": shipping_address.get("zip", ""),
+            "country_code": shipping_address.get("country_code") or "CA"
+        }
+
+        # Build package (using order weight or default)
+        weight_kg = (order.get("total_weight_grams") or 500) / 1000.0
+        packages = [{
+            "weight_kg": weight_kg,
+            "length_cm": 25,
+            "width_cm": 18,
+            "height_cm": 5
+        }]
+
+        # Get customs data for international orders
+        is_international = destination["country_code"].upper() not in ["CA", "CANADA"]
+        customs_items = None
+
+        rate_service = get_rate_shopping_service(get_mysql_connection)
+
+        if is_international:
+            customs_items = rate_service.get_customs_data_for_order(order["id"])
+
+        # Get rates from all carriers
+        result = rate_service.get_all_rates(
+            destination=destination,
+            packages=packages,
+            customs_items=customs_items
+        )
+
+        return jsonify(result)
+
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/hs-codes", methods=["GET"])
+def api_get_hs_codes():
+    """
+    Get list of HS codes from the reference table.
+    Supports filtering by category or search term.
+    """
+    category = request.args.get('category', '')
+    search = request.args.get('search', '')
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        if search:
+            cursor.execute("""
+                SELECT hs_code, description, category, notes
+                FROM hs_code_reference
+                WHERE hs_code LIKE %s OR description ILIKE %s OR category ILIKE %s
+                ORDER BY category, hs_code
+            """, (f"%{search}%", f"%{search}%", f"%{search}%"))
+        elif category:
+            cursor.execute("""
+                SELECT hs_code, description, category, notes
+                FROM hs_code_reference
+                WHERE category = %s
+                ORDER BY hs_code
+            """, (category,))
+        else:
+            cursor.execute("""
+                SELECT hs_code, description, category, notes
+                FROM hs_code_reference
+                ORDER BY category, hs_code
+            """)
+
+        codes = cursor.fetchall()
+
+        # Also get list of categories
+        cursor.execute("SELECT DISTINCT category FROM hs_code_reference ORDER BY category")
+        categories = [row['category'] for row in cursor.fetchall()]
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "codes": codes,
+            "categories": categories
+        })
+
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/hs-codes", methods=["POST"])
+def api_add_hs_code():
+    """
+    Add a new HS code to the reference table.
+    """
+    data = request.get_json()
+    if not data or not data.get('hs_code') or not data.get('description'):
+        return jsonify({"success": False, "error": "Missing required fields"}), 400
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO hs_code_reference (hs_code, description, category, notes)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+        """, (
+            data.get('hs_code'),
+            data.get('description'),
+            data.get('category', ''),
+            data.get('notes', '')
+        ))
+
+        result = cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"success": True, "id": result['id']})
+
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/product-customs", methods=["GET"])
+def api_get_product_customs():
+    """
+    Get product customs info for all or specific SKUs.
+    """
+    sku = request.args.get('sku', '')
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        if sku:
+            cursor.execute("""
+                SELECT id, sku, product_title, customs_description, hs_code, hs_code_us,
+                       country_of_origin, weight_grams, created_at, updated_at
+                FROM product_customs_info
+                WHERE sku = %s
+            """, (sku,))
+        else:
+            cursor.execute("""
+                SELECT id, sku, product_title, customs_description, hs_code, hs_code_us,
+                       country_of_origin, weight_grams, created_at, updated_at
+                FROM product_customs_info
+                ORDER BY sku
+            """)
+
+        products = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"success": True, "products": products})
+
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/product-customs", methods=["POST"])
+def api_save_product_customs():
+    """
+    Save or update product customs info for a SKU.
+    Can be used to set defaults that auto-fill when creating shipments.
+
+    Request body:
+    {
+        "sku": "PLN-2025-GRN",
+        "product_title": "2025 Planner",
+        "customs_description": "Bound paper planner",
+        "hs_code": "4820102010",
+        "hs_code_us": "",
+        "country_of_origin": "CA",
+        "weight_grams": 350
+    }
+    """
+    data = request.get_json()
+    if not data or not data.get('sku'):
+        return jsonify({"success": False, "error": "Missing SKU"}), 400
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Upsert - insert or update on conflict
+        cursor.execute("""
+            INSERT INTO product_customs_info
+                (sku, product_title, customs_description, hs_code, hs_code_us,
+                 country_of_origin, weight_grams, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (sku) DO UPDATE SET
+                product_title = EXCLUDED.product_title,
+                customs_description = EXCLUDED.customs_description,
+                hs_code = EXCLUDED.hs_code,
+                hs_code_us = EXCLUDED.hs_code_us,
+                country_of_origin = EXCLUDED.country_of_origin,
+                weight_grams = EXCLUDED.weight_grams,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING id
+        """, (
+            data.get('sku'),
+            data.get('product_title') or None,
+            data.get('customs_description') or data.get('product_title') or 'Goods',
+            data.get('hs_code') or '4820102010',
+            data.get('hs_code_us') or None,
+            data.get('country_of_origin') or 'CA',
+            data.get('weight_grams') or None
+        ))
+
+        result = cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"success": True, "id": result['id']})
+
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/product-customs/<sku>", methods=["DELETE"])
+def api_delete_product_customs(sku):
+    """Delete product customs info for a SKU."""
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM product_customs_info WHERE sku = %s", (sku,))
+        deleted = cursor.rowcount
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        if deleted > 0:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "error": "SKU not found"}), 404
+
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/orders/<order_number>/save-customs-defaults", methods=["POST"])
+def api_save_customs_defaults(order_number):
+    """
+    Save the customs info from an order's line items as defaults for those SKUs.
+    This allows quickly setting up product customs info from existing orders.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get the order
+        cursor.execute("SELECT id FROM orders WHERE order_number = %s", (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Order not found"}), 404
+
+        # Get line items with customs info
+        cursor.execute("""
+            SELECT sku, product_title, grams, hs_code, country_of_origin, customs_description
+            FROM order_line_items
+            WHERE order_id = %s AND sku IS NOT NULL AND sku != ''
+        """, (order['id'],))
+        line_items = cursor.fetchall()
+
+        saved_count = 0
+        for item in line_items:
+            if item.get('hs_code'):  # Only save if HS code is set
+                cursor.execute("""
+                    INSERT INTO product_customs_info
+                        (sku, product_title, customs_description, hs_code, country_of_origin, weight_grams, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (sku) DO UPDATE SET
+                        product_title = COALESCE(EXCLUDED.product_title, product_customs_info.product_title),
+                        customs_description = COALESCE(EXCLUDED.customs_description, product_customs_info.customs_description),
+                        hs_code = EXCLUDED.hs_code,
+                        country_of_origin = EXCLUDED.country_of_origin,
+                        weight_grams = COALESCE(EXCLUDED.weight_grams, product_customs_info.weight_grams),
+                        updated_at = CURRENT_TIMESTAMP
+                """, (
+                    item.get('sku'),
+                    item.get('product_title'),
+                    item.get('customs_description') or item.get('product_title'),
+                    item.get('hs_code'),
+                    item.get('country_of_origin') or 'CA',
+                    item.get('grams')
+                ))
+                saved_count += 1
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "saved_count": saved_count,
+            "message": f"Saved customs defaults for {saved_count} product(s)"
+        })
+
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/orders/<order_number>/cancel", methods=["POST"])
 def api_cancel_order(order_number):
     """

@@ -580,6 +580,56 @@ def init_orders_tables(get_db_connection):
                 ON CONFLICT (setting_key) DO NOTHING
             """, (key, value, stype))
 
+        # Create product_customs_info table for default customs data per SKU
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS product_customs_info (
+                id SERIAL PRIMARY KEY,
+                sku TEXT UNIQUE NOT NULL,
+                product_title TEXT,
+                customs_description TEXT NOT NULL,
+                hs_code TEXT NOT NULL,
+                hs_code_us TEXT,
+                country_of_origin TEXT DEFAULT 'CA',
+                weight_grams INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_product_customs_sku ON product_customs_info(sku)")
+
+        # Create hs_code_reference table for common HS codes lookup
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS hs_code_reference (
+                id SERIAL PRIMARY KEY,
+                hs_code TEXT NOT NULL,
+                description TEXT,
+                category TEXT,
+                notes TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_hs_code_reference_code ON hs_code_reference(hs_code)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_hs_code_reference_category ON hs_code_reference(category)")
+
+        # Insert default HS codes for common stationery products
+        default_hs_codes = [
+            ('4820102010', 'Bound diaries, planners, agendas', 'Planners', 'Paper/cardboard-bound day planners and appointment books'),
+            ('4820109000', 'Notebooks, notepads, memo pads', 'Notebooks', 'Other paper/cardboard notebooks and note pads'),
+            ('4911910000', 'Printed pictures, designs, photographs', 'Stickers', 'Printed pictures, designs and photographs'),
+            ('4821100000', 'Paper labels, printed', 'Labels', 'Printed paper or paperboard labels'),
+            ('4911990000', 'Other printed matter', 'Printed Goods', 'Other printed matter n.e.s.'),
+            ('9608100000', 'Ball point pens', 'Pens', 'Ball point pens'),
+            ('9608200000', 'Felt tipped markers and pens', 'Pens', 'Felt tipped and other porous-tipped pens and markers'),
+            ('4817100000', 'Envelopes of paper', 'Paper Goods', 'Paper or paperboard envelopes'),
+            ('4823909000', 'Other articles of paper/paperboard', 'Paper Goods', 'Other articles of paper pulp, paper or paperboard'),
+            ('3926909990', 'Articles of plastics n.e.s.', 'Plastic Goods', 'Other articles of plastics'),
+        ]
+        for hs_code, description, category, notes in default_hs_codes:
+            cursor.execute("""
+                INSERT INTO hs_code_reference (hs_code, description, category, notes)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+            """, (hs_code, description, category, notes))
+
         conn.commit()
         cursor.close()
         conn.close()

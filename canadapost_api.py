@@ -408,12 +408,249 @@ class CanadaPostAPI:
         return self._map_event_type_to_status("", description)
 
 
-# Singleton instance
+class CanadaPostShippingAPI:
+    """
+    Canada Post Shipping & Rating API.
+    Supports rate quotes for domestic and international shipments.
+    """
+
+    def __init__(self):
+        """
+        Initialize Canada Post Shipping API.
+        Requires: CANADAPOST_USERNAME, CANADAPOST_PASSWORD, CANADAPOST_CUSTOMER_NUMBER
+        Optional: CANADAPOST_CONTRACT_ID (for commercial rates)
+        """
+        self.username = os.environ.get("CANADAPOST_USERNAME", "")
+        self.password = os.environ.get("CANADAPOST_PASSWORD", "")
+        self.customer_number = os.environ.get("CANADAPOST_CUSTOMER_NUMBER", "")
+        self.contract_id = os.environ.get("CANADAPOST_CONTRACT_ID", "")
+        self.env = os.environ.get("CANADAPOST_ENV", "development").lower()
+
+        # API endpoints
+        if self.env == "production":
+            self.base_url = "https://soa-gw.canadapost.ca"
+        else:
+            self.base_url = "https://ct.soa-gw.canadapost.ca"
+
+        self.enabled = bool(self.username and self.password)
+        self.rating_enabled = bool(self.enabled and self.customer_number)
+
+        if not self.enabled:
+            print("⚠️ Canada Post Shipping API not configured")
+        elif not self.customer_number:
+            print("⚠️ CANADAPOST_CUSTOMER_NUMBER not set - rating disabled")
+
+        # Origin postal code from environment
+        self.origin_postal = os.environ.get("WAREHOUSE_POSTAL", "").replace(" ", "").upper()
+
+    def _get_auth_header(self) -> str:
+        """Generate Basic Auth header value."""
+        credentials = f"{self.username}:{self.password}"
+        encoded = base64.b64encode(credentials.encode()).decode()
+        return f"Basic {encoded}"
+
+    def get_rates(
+        self,
+        destination_postal: str,
+        destination_country: str,
+        weight_kg: float,
+        dimensions_cm: Dict[str, float] = None,
+        customs_items: list = None
+    ) -> Dict[str, Any]:
+        """
+        Get shipping rates from Canada Post.
+
+        Args:
+            destination_postal: Postal/ZIP code
+            destination_country: ISO country code (CA, US, etc.)
+            weight_kg: Total weight in kg
+            dimensions_cm: {"length": 25, "width": 18, "height": 5}
+            customs_items: (for international) list of items with value
+
+        Returns:
+            {
+                "success": True,
+                "rates": [
+                    {
+                        "service_code": "DOM.EP",
+                        "service_name": "Expedited Parcel",
+                        "total_charge": 15.43,
+                        "currency": "CAD",
+                        "delivery_days": 2
+                    },
+                    ...
+                ]
+            }
+        """
+        if not self.rating_enabled:
+            return {"success": False, "error": "Canada Post Rating API not configured"}
+
+        if not self.origin_postal:
+            return {"success": False, "error": "WAREHOUSE_POSTAL not configured"}
+
+        is_domestic = destination_country.upper() in ["CA", "CANADA"]
+        is_usa = destination_country.upper() in ["US", "USA", "UNITED STATES"]
+
+        # Build mailing scenario XML
+        xml_parts = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<mailing-scenario xmlns="http://www.canadapost.ca/ws/ship/rate-v4">',
+        ]
+
+        # Add customer info for contract rates
+        if self.customer_number:
+            xml_parts.append(f'<customer-number>{self.customer_number}</customer-number>')
+        if self.contract_id:
+            xml_parts.append(f'<contract-id>{self.contract_id}</contract-id>')
+
+        # Origin postal code
+        xml_parts.append(f'<origin-postal-code>{self.origin_postal}</origin-postal-code>')
+
+        # Parcel characteristics
+        xml_parts.append('<parcel-characteristics>')
+        xml_parts.append(f'<weight>{weight_kg:.3f}</weight>')
+
+        if dimensions_cm:
+            xml_parts.append('<dimensions>')
+            xml_parts.append(f'<length>{dimensions_cm.get("length", 25):.1f}</length>')
+            xml_parts.append(f'<width>{dimensions_cm.get("width", 18):.1f}</width>')
+            xml_parts.append(f'<height>{dimensions_cm.get("height", 5):.1f}</height>')
+            xml_parts.append('</dimensions>')
+
+        xml_parts.append('</parcel-characteristics>')
+
+        # Destination
+        xml_parts.append('<destination>')
+        if is_domestic:
+            clean_postal = destination_postal.replace(" ", "").upper()
+            xml_parts.append(f'<domestic><postal-code>{clean_postal}</postal-code></domestic>')
+        elif is_usa:
+            xml_parts.append(f'<united-states><zip-code>{destination_postal}</zip-code></united-states>')
+        else:
+            xml_parts.append(f'<international><country-code>{destination_country.upper()}</country-code></international>')
+        xml_parts.append('</destination>')
+
+        xml_parts.append('</mailing-scenario>')
+
+        xml_body = '\n'.join(xml_parts)
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/rs/ship/price",
+                data=xml_body.encode('utf-8'),
+                headers={
+                    "Content-Type": "application/vnd.cpc.ship.rate-v4+xml",
+                    "Accept": "application/vnd.cpc.ship.rate-v4+xml",
+                    "Authorization": self._get_auth_header()
+                },
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                return self._parse_rate_response(response.content)
+            else:
+                error_msg = response.text[:500]
+                print(f"Canada Post Rating error: {response.status_code} - {error_msg}")
+                return {"success": False, "error": f"Canada Post API error: {response.status_code}"}
+
+        except Exception as e:
+            print(f"Canada Post Rating exception: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _parse_rate_response(self, xml_content: bytes) -> Dict[str, Any]:
+        """Parse Canada Post rate response XML."""
+        try:
+            root = ET.fromstring(xml_content)
+            ns = {'cp': 'http://www.canadapost.ca/ws/ship/rate-v4'}
+
+            rates = []
+            for quote in root.findall('.//cp:price-quote', ns):
+                service_code = quote.find('cp:service-code', ns)
+                service_name = quote.find('cp:service-name', ns)
+                price_details = quote.find('cp:price-details', ns)
+                service_standard = quote.find('cp:service-standard', ns)
+
+                if price_details is not None:
+                    due = price_details.find('cp:due', ns)
+
+                    delivery_days = None
+                    if service_standard is not None:
+                        days_elem = service_standard.find('cp:expected-transit-time', ns)
+                        if days_elem is not None and days_elem.text:
+                            try:
+                                delivery_days = int(days_elem.text)
+                            except:
+                                pass
+
+                    rates.append({
+                        "service_code": service_code.text if service_code is not None else "",
+                        "service_name": self._get_service_name(
+                            service_code.text if service_code is not None else "",
+                            service_name.text if service_name is not None else ""
+                        ),
+                        "total_charge": float(due.text) if due is not None and due.text else 0,
+                        "currency": "CAD",
+                        "delivery_days": delivery_days
+                    })
+
+            # Sort by price
+            rates.sort(key=lambda x: x["total_charge"])
+
+            return {"success": True, "rates": rates}
+
+        except ET.ParseError as e:
+            print(f"Failed to parse Canada Post rate XML: {e}")
+            return {"success": False, "error": f"XML parse error: {e}"}
+        except Exception as e:
+            print(f"Error parsing Canada Post rate response: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _get_service_name(self, code: str, name: str = "") -> str:
+        """Map Canada Post service codes to friendly names."""
+        services = {
+            # Domestic
+            "DOM.RP": "Regular Parcel",
+            "DOM.EP": "Expedited Parcel",
+            "DOM.XP": "Xpresspost",
+            "DOM.PC": "Priority",
+            # USA
+            "USA.EP": "Expedited Parcel USA",
+            "USA.PW.ENV": "Priority Worldwide Envelope USA",
+            "USA.PW.PAK": "Priority Worldwide pak USA",
+            "USA.PW.PARCEL": "Priority Worldwide Parcel USA",
+            "USA.SP.AIR": "Small Packet USA Air",
+            "USA.TP": "Tracked Packet - USA",
+            "USA.XP": "Xpresspost USA",
+            # International
+            "INT.XP": "Xpresspost International",
+            "INT.IP.AIR": "International Parcel Air",
+            "INT.IP.SURF": "International Parcel Surface",
+            "INT.PW.ENV": "Priority Worldwide Envelope Int'l",
+            "INT.PW.PAK": "Priority Worldwide pak Int'l",
+            "INT.PW.PARCEL": "Priority Worldwide parcel Int'l",
+            "INT.SP.AIR": "Small Packet International Air",
+            "INT.SP.SURF": "Small Packet International Surface",
+            "INT.TP": "Tracked Packet - International"
+        }
+        return services.get(code, name or code)
+
+
+# Singleton instances
 _canadapost_api = None
+_canadapost_shipping_api = None
+
 
 def get_canadapost_api() -> CanadaPostAPI:
-    """Get or create singleton Canada Post API instance."""
+    """Get or create singleton Canada Post Tracking API instance."""
     global _canadapost_api
     if _canadapost_api is None:
         _canadapost_api = CanadaPostAPI()
     return _canadapost_api
+
+
+def get_canadapost_shipping_api() -> CanadaPostShippingAPI:
+    """Get or create singleton Canada Post Shipping/Rating API instance."""
+    global _canadapost_shipping_api
+    if _canadapost_shipping_api is None:
+        _canadapost_shipping_api = CanadaPostShippingAPI()
+    return _canadapost_shipping_api
