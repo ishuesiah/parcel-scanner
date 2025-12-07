@@ -4700,7 +4700,7 @@ def all_orders():
         search_query = request.args.get('q', '').strip()
         fulfillment_filter = request.args.get('filter', 'unfulfilled')  # unfulfilled, fulfilled, all
         page = int(request.args.get('page', 1))
-        per_page = 50
+        per_page = 250
 
         # Get sort parameters for server-side sorting
         sort_by = request.args.get('sort', 'age')  # default sort by age (created date)
@@ -4735,12 +4735,16 @@ def all_orders():
         need_line_items_join = any(f.get('field') in ('item_name', 'item_sku') for f in filters)
         need_options_join = any(f.get('field') == 'item_options' for f in filters)
 
-        # Build base query
+        # Build base query with line item counts and country extraction
         if need_line_items_join or need_options_join:
             base_query = """
                 SELECT DISTINCT o.id, o.shopify_order_id, o.order_number, o.customer_name, o.customer_email,
                        o.tracking_number, o.fulfillment_status, o.financial_status, o.total_price,
-                       o.currency, o.shopify_created_at, o.scanned_status, o.cancelled_at, o.shipping_address, o.note
+                       o.currency, o.shopify_created_at, o.scanned_status, o.cancelled_at, o.shipping_address, o.note,
+                       o.total_weight_grams,
+                       COALESCE(o.shipping_address::jsonb ->> 'country', o.shipping_address::jsonb ->> 'country_code', '') as ship_country,
+                       (SELECT COALESCE(SUM(oli.quantity), 0) FROM order_line_items oli WHERE oli.order_id = o.id) as item_qty,
+                       (SELECT COUNT(*) FROM order_line_items oli WHERE oli.order_id = o.id) as line_item_count
                 FROM orders o
                 INNER JOIN order_line_items li ON li.order_id = o.id
             """
@@ -4752,7 +4756,11 @@ def all_orders():
             base_query = """
                 SELECT id, shopify_order_id, order_number, customer_name, customer_email,
                        tracking_number, fulfillment_status, financial_status, total_price,
-                       currency, shopify_created_at, scanned_status, cancelled_at, shipping_address, note
+                       currency, shopify_created_at, scanned_status, cancelled_at, shipping_address, note,
+                       total_weight_grams,
+                       COALESCE(shipping_address::jsonb ->> 'country', shipping_address::jsonb ->> 'country_code', '') as ship_country,
+                       (SELECT COALESCE(SUM(oli.quantity), 0) FROM order_line_items oli WHERE oli.order_id = orders.id) as item_qty,
+                       (SELECT COUNT(*) FROM order_line_items oli WHERE oli.order_id = orders.id) as line_item_count
                 FROM orders
                 WHERE cancelled_at IS NULL
             """
@@ -4867,23 +4875,31 @@ def all_orders():
                     'ship_zip': 'zip'
                 }
                 json_key = json_field_map.get(adv_field, 'country')
+                # Use PostgreSQL JSON extraction operator ->> for proper JSON field access
                 if is_contains:
-                    conds = [f"{col_prefix}shipping_address::text ILIKE %s" for _ in keywords]
+                    conds = [f"({col_prefix}shipping_address::jsonb ->> %s) ILIKE %s" for _ in keywords]
                     for kw in keywords:
-                        params.append(f'%"{json_key}"%{kw}%')
+                        params.append(json_key)
+                        params.append(f'%{kw}%' if not is_exact else kw)
                     base_query += f" AND ({' OR '.join(conds)})"
                 else:
                     for kw in keywords:
-                        base_query += f" AND ({col_prefix}shipping_address IS NULL OR {col_prefix}shipping_address::text NOT ILIKE %s)"
-                        params.append(f'%"{json_key}"%{kw}%')
+                        base_query += f" AND ({col_prefix}shipping_address IS NULL OR ({col_prefix}shipping_address::jsonb ->> %s) NOT ILIKE %s)"
+                        params.append(json_key)
+                        params.append(f'%{kw}%')
 
             elif adv_field == 'is_international':
+                # Use proper JSON extraction to check country field
                 if adv_condition in ('contains', 'equals'):
-                    base_query += f" AND ({col_prefix}shipping_address IS NULL OR {col_prefix}shipping_address::text NOT ILIKE %s)"
-                    params.append('%"country"%Canada%')
+                    # International = NOT Canada
+                    base_query += f" AND ({col_prefix}shipping_address IS NULL OR (({col_prefix}shipping_address::jsonb ->> 'country') NOT ILIKE %s AND ({col_prefix}shipping_address::jsonb ->> 'country') NOT ILIKE %s AND ({col_prefix}shipping_address::jsonb ->> 'country_code') NOT IN ('CA', 'CAN')))"
+                    params.append('%Canada%')
+                    params.append('%CA%')
                 else:
-                    base_query += f" AND {col_prefix}shipping_address::text ILIKE %s"
-                    params.append('%"country"%Canada%')
+                    # Domestic = Canada
+                    base_query += f" AND (({col_prefix}shipping_address::jsonb ->> 'country') ILIKE %s OR ({col_prefix}shipping_address::jsonb ->> 'country') ILIKE %s OR ({col_prefix}shipping_address::jsonb ->> 'country_code') IN ('CA', 'CAN'))"
+                    params.append('%Canada%')
+                    params.append('%CA%')
 
             elif adv_field == 'weight_over':
                 # Filter orders with total weight over X grams
@@ -4953,7 +4969,7 @@ def all_orders():
             search_query='',
             fulfillment_filter='unfulfilled',
             page=1,
-            per_page=50,
+            per_page=250,
             total_count=0,
             total_pages=0,
             sync_status={},
@@ -5518,19 +5534,20 @@ def api_orders_sync_status():
 @app.route("/api/orders/<order_number>/details", methods=["GET"])
 def api_get_order_details(order_number):
     """
-    Get order details including line items and shipping address.
+    Get order details including line items, shipping address, customs info, and rate zones.
     Used for the order popup modal.
     """
     conn = get_mysql_connection()
     try:
         cursor = conn.cursor()
 
-        # Get the order
+        # Get the order with additional fields
         cursor.execute("""
             SELECT id, shopify_order_id, order_number, customer_name, customer_email,
                    customer_phone, shipping_address, total_price, subtotal_price,
                    total_tax, financial_status, fulfillment_status, tracking_number,
-                   note, shopify_created_at, cancelled_at
+                   note, shopify_created_at, cancelled_at, total_weight_grams,
+                   currency
             FROM orders
             WHERE order_number = %s
         """, (order_number,))
@@ -5541,17 +5558,23 @@ def api_get_order_details(order_number):
             conn.close()
             return jsonify({"success": False, "error": "Order not found"}), 404
 
-        # Get line items
+        # Get line items with customs info
         cursor.execute("""
-            SELECT id, product_title, variant_title, sku, quantity, price
-            FROM order_line_items
-            WHERE order_id = %s
-            ORDER BY id
+            SELECT oli.id, oli.product_title, oli.variant_title, oli.sku, oli.quantity, oli.price, oli.grams,
+                   COALESCE(pci.hs_code, oli.hs_code, '') as hs_code,
+                   COALESCE(pci.customs_description, oli.customs_description, '') as customs_description,
+                   COALESCE(pci.country_of_origin, oli.country_of_origin, 'CA') as country_of_origin,
+                   COALESCE(pci.weight_grams, oli.grams, 0) as weight_grams
+            FROM order_line_items oli
+            LEFT JOIN product_customs_info pci ON pci.sku = oli.sku
+            WHERE oli.order_id = %s
+            ORDER BY oli.id
         """, (order['id'],))
         line_items = cursor.fetchall()
 
         # Get properties for each line item
         line_items_with_props = []
+        total_items_qty = 0
         for item in line_items:
             cursor.execute("""
                 SELECT name, value
@@ -5560,13 +5583,19 @@ def api_get_order_details(order_number):
                 ORDER BY id
             """, (item['id'],))
             properties = cursor.fetchall()
+            qty = item['quantity'] or 1
+            total_items_qty += qty
 
             line_items_with_props.append({
                 "title": item['product_title'] or '',
                 "variant": item['variant_title'] or '',
                 "sku": item['sku'] or '',
-                "quantity": item['quantity'] or 1,
+                "quantity": qty,
                 "price": float(item['price']) if item.get('price') else 0,
+                "weight_grams": item.get('weight_grams') or 0,
+                "hs_code": item.get('hs_code') or '',
+                "customs_description": item.get('customs_description') or '',
+                "country_of_origin": item.get('country_of_origin') or 'CA',
                 "properties": [{"name": p['name'], "value": p['value']} for p in properties]
             })
 
@@ -5577,10 +5606,73 @@ def api_get_order_details(order_number):
         shipping_address = {}
         if order.get('shipping_address'):
             try:
-                import json
                 shipping_address = json.loads(order['shipping_address'])
             except:
                 shipping_address = {"raw": order['shipping_address']}
+
+        # Determine rate zone based on destination country
+        country = shipping_address.get('country', '') or shipping_address.get('country_code', '')
+        country_upper = country.upper() if country else ''
+        province = shipping_address.get('province_code', '') or shipping_address.get('province', '')
+
+        # Calculate rate zone similar to ShipStation
+        rate_zone = "Unknown"
+        rate_zone_detail = ""
+        if country_upper in ('CANADA', 'CA'):
+            rate_zone = "Domestic"
+            rate_zone_detail = f"Canada - {province}" if province else "Canada"
+        elif country_upper in ('UNITED STATES', 'US', 'USA'):
+            rate_zone = "USA"
+            rate_zone_detail = f"United States - {province}" if province else "United States"
+        elif country_upper:
+            # International zones
+            intl_zones = {
+                # North America
+                'MX': ('International - Zone A', 'Mexico'),
+                'MEXICO': ('International - Zone A', 'Mexico'),
+                # Europe
+                'GB': ('International - Zone B', 'United Kingdom'),
+                'UK': ('International - Zone B', 'United Kingdom'),
+                'UNITED KINGDOM': ('International - Zone B', 'United Kingdom'),
+                'DE': ('International - Zone B', 'Germany'),
+                'GERMANY': ('International - Zone B', 'Germany'),
+                'FR': ('International - Zone B', 'France'),
+                'FRANCE': ('International - Zone B', 'France'),
+                'IT': ('International - Zone B', 'Italy'),
+                'ITALY': ('International - Zone B', 'Italy'),
+                'ES': ('International - Zone B', 'Spain'),
+                'SPAIN': ('International - Zone B', 'Spain'),
+                'NL': ('International - Zone B', 'Netherlands'),
+                'NETHERLANDS': ('International - Zone B', 'Netherlands'),
+                'BE': ('International - Zone B', 'Belgium'),
+                'BELGIUM': ('International - Zone B', 'Belgium'),
+                'AT': ('International - Zone B', 'Austria'),
+                'AUSTRIA': ('International - Zone B', 'Austria'),
+                'CH': ('International - Zone B', 'Switzerland'),
+                'SWITZERLAND': ('International - Zone B', 'Switzerland'),
+                # Australia/NZ
+                'AU': ('International - Zone C', 'Australia'),
+                'AUSTRALIA': ('International - Zone C', 'Australia'),
+                'NZ': ('International - Zone C', 'New Zealand'),
+                'NEW ZEALAND': ('International - Zone C', 'New Zealand'),
+                # Asia
+                'JP': ('International - Zone C', 'Japan'),
+                'JAPAN': ('International - Zone C', 'Japan'),
+                'KR': ('International - Zone C', 'South Korea'),
+                'SOUTH KOREA': ('International - Zone C', 'South Korea'),
+                'SG': ('International - Zone C', 'Singapore'),
+                'SINGAPORE': ('International - Zone C', 'Singapore'),
+                'HK': ('International - Zone C', 'Hong Kong'),
+                'HONG KONG': ('International - Zone C', 'Hong Kong'),
+            }
+            if country_upper in intl_zones:
+                rate_zone, rate_zone_detail = intl_zones[country_upper]
+            else:
+                rate_zone = "International - Zone D"
+                rate_zone_detail = country
+
+        # Calculate total weight
+        total_weight = order.get('total_weight_grams') or sum(item.get('weight_grams', 0) * item.get('quantity', 1) for item in line_items_with_props)
 
         return jsonify({
             "success": True,
@@ -5593,14 +5685,22 @@ def api_get_order_details(order_number):
                 "total_price": float(order['total_price']) if order.get('total_price') else 0,
                 "subtotal_price": float(order['subtotal_price']) if order.get('subtotal_price') else 0,
                 "total_tax": float(order['total_tax']) if order.get('total_tax') else 0,
+                "currency": order.get('currency') or 'CAD',
                 "financial_status": order.get('financial_status') or '',
                 "fulfillment_status": order.get('fulfillment_status') or 'unfulfilled',
                 "tracking_number": order.get('tracking_number') or '',
                 "note": order.get('note') or '',
                 "created_at": order['shopify_created_at'].isoformat() if order.get('shopify_created_at') else '',
-                "cancelled": order.get('cancelled_at') is not None
+                "cancelled": order.get('cancelled_at') is not None,
+                "total_weight_grams": total_weight,
+                "total_items_qty": total_items_qty
             },
-            "line_items": line_items_with_props
+            "line_items": line_items_with_props,
+            "rate_zone": {
+                "zone": rate_zone,
+                "detail": rate_zone_detail,
+                "is_international": rate_zone != "Domestic"
+            }
         })
 
     except Exception as e:

@@ -209,42 +209,48 @@
       </div>
     </div>
 
-    <!-- Orders Table -->
+    <!-- Orders Table with Draggable Columns -->
     <div class="orders-table-container">
       {% if orders %}
-        <table class="orders-table">
+        <table class="orders-table" id="ordersTable">
           <thead>
             <tr>
-              <th style="width: 40px;">
+              <th style="width: 40px;" data-col="select" class="no-drag">
                 <input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" title="Select all on this page">
               </th>
-              <th class="sortable {% if sort_by == 'order' %}sorted {{ sort_dir }}{% endif %}">
+              <th class="sortable draggable {% if sort_by == 'order' %}sorted {{ sort_dir }}{% endif %}" data-col="order" draggable="true">
                 <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, sort='order', dir='asc' if sort_by == 'order' and sort_dir == 'desc' else 'desc', filters=filters_json) }}">
                   Order # <span class="sort-icon"></span>
                 </a>
               </th>
-              <th class="sortable {% if sort_by == 'age' %}sorted {{ sort_dir }}{% endif %}">
+              <th class="sortable draggable {% if sort_by == 'age' %}sorted {{ sort_dir }}{% endif %}" data-col="age" draggable="true">
                 <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, sort='age', dir='asc' if sort_by == 'age' and sort_dir == 'desc' else 'desc', filters=filters_json) }}">
-                  Scanned <span class="sort-icon"></span>
+                  Date <span class="sort-icon"></span>
                 </a>
               </th>
-              <th class="sortable {% if sort_by == 'customer' %}sorted {{ sort_dir }}{% endif %}">
+              <th class="sortable draggable {% if sort_by == 'customer' %}sorted {{ sort_dir }}{% endif %}" data-col="customer" draggable="true">
                 <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, sort='customer', dir='asc' if sort_by == 'customer' and sort_dir == 'desc' else 'desc', filters=filters_json) }}">
                   Customer <span class="sort-icon"></span>
                 </a>
               </th>
-              <th class="sortable {% if sort_by == 'email' %}sorted {{ sort_dir }}{% endif %}">
-                <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, sort='email', dir='asc' if sort_by == 'email' and sort_dir == 'desc' else 'desc', filters=filters_json) }}">
-                  Email <span class="sort-icon"></span>
-                </a>
+              <th class="draggable" data-col="items" draggable="true" title="Click to expand items">
+                Items
               </th>
-              <th>Tracking #</th>
-              <th class="sortable {% if sort_by == 'status' %}sorted {{ sort_dir }}{% endif %}">
+              <th class="draggable" data-col="qty" draggable="true">
+                Qty
+              </th>
+              <th class="draggable" data-col="country" draggable="true">
+                Country
+              </th>
+              <th class="draggable" data-col="tracking" draggable="true">
+                Tracking #
+              </th>
+              <th class="sortable draggable {% if sort_by == 'status' %}sorted {{ sort_dir }}{% endif %}" data-col="status" draggable="true">
                 <a href="{{ url_for('all_orders', filter=fulfillment_filter, q=search_query, sort='status', dir='asc' if sort_by == 'status' and sort_dir == 'desc' else 'desc', filters=filters_json) }}">
                   Status <span class="sort-icon"></span>
                 </a>
               </th>
-              <th>Actions</th>
+              <th data-col="actions" class="no-drag">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -254,20 +260,21 @@
                   data-age="{{ order.shopify_created_at.isoformat() if order.shopify_created_at else '' }}"
                   data-customer="{{ order.customer_name or '' }}"
                   data-email="{{ order.customer_email or '' }}"
-                  data-status="{{ order.fulfillment_status or 'unfulfilled' }}">
-                <td>
+                  data-status="{{ order.fulfillment_status or 'unfulfilled' }}"
+                  data-country="{{ order.ship_country or '' }}">
+                <td data-col="select">
                   <input type="checkbox" class="order-checkbox" value="{{ order.order_number }}"
                          data-order-id="{{ order.id }}">
                 </td>
-                <td>
+                <td data-col="order">
                   <a href="#" onclick="showOrderDetails('{{ order.order_number }}'); return false;" class="order-number-link">
                     #{{ order.order_number }}
                   </a>
                 </td>
-                <td>
+                <td data-col="age">
                   <span class="order-age" data-created="{{ order.shopify_created_at.isoformat() if order.shopify_created_at else '' }}"></span>
                 </td>
-                <td>
+                <td data-col="customer">
                   {% if order.customer_name %}
                     <a href="#" onclick="showOrderDetails('{{ order.order_number }}'); return false;" style="color: #333; text-decoration: none;">
                       {{ order.customer_name }}
@@ -276,21 +283,43 @@
                     —
                   {% endif %}
                 </td>
-                <td>{{ order.customer_email or '—' }}</td>
-                <td>
+                <td data-col="items" class="items-cell">
+                  <button type="button" class="btn-expand-items" onclick="toggleOrderItems('{{ order.order_number }}', this)" title="View items">
+                    <span class="expand-icon">▶</span> {{ order.line_item_count or 0 }} item{{ 's' if (order.line_item_count or 0) != 1 else '' }}
+                  </button>
+                  <div class="order-items-detail" id="items-{{ order.order_number }}" style="display: none;"></div>
+                </td>
+                <td data-col="qty" style="text-align: center; font-weight: 500;">
+                  {{ order.item_qty|int if order.item_qty else 0 }}
+                </td>
+                <td data-col="country">
+                  {% set country = order.ship_country or '' %}
+                  {% if country %}
+                    {% if country.upper() in ['CANADA', 'CA'] %}
+                      <span style="color: #2e7d32;">{{ country }}</span>
+                    {% elif country.upper() in ['UNITED STATES', 'US', 'USA'] %}
+                      <span style="color: #1565c0;">{{ country }}</span>
+                    {% else %}
+                      <span style="color: #e65100; font-weight: 500;">{{ country }}</span>
+                    {% endif %}
+                  {% else %}
+                    <span style="color: #999;">—</span>
+                  {% endif %}
+                </td>
+                <td data-col="tracking">
                   {% if order.tracking_number %}
                     <span class="tracking-number">{{ order.tracking_number }}</span>
                   {% else %}
                     <span style="color: #999;">—</span>
                   {% endif %}
                 </td>
-                <td>
+                <td data-col="status">
                   {% set status = order.fulfillment_status or 'unfulfilled' %}
                   <span class="fulfillment-badge {{ status }}">
                     {{ status|capitalize }}
                   </span>
                 </td>
-                <td>
+                <td data-col="actions">
                   <button type="button" class="btn-cancel"
                           onclick="openCancelModal('{{ order.order_number }}', '{{ order.customer_name }}', '{{ order.customer_email }}', '{{ order.total_price }}', '{{ order.currency }}')">
                     Cancel
@@ -340,22 +369,22 @@
       {% endif %}
     </div>
 
-    <!-- Order Details Modal -->
-    <div id="orderModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;">
-      <div style="background: white; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; position: relative; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
-        <div style="padding: 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
-          <h3 style="margin: 0; color: #333;" id="orderModalTitle">Order Details</h3>
-          <button onclick="closeOrderModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #666;">&times;</button>
+    <!-- Order Details Modal - Full Screen -->
+    <div id="orderModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; justify-content: center; align-items: center;">
+      <div style="background: white; border-radius: 12px; width: 95%; max-width: 1400px; height: 90vh; display: flex; flex-direction: column; position: relative; box-shadow: 0 8px 40px rgba(0,0,0,0.3);">
+        <div style="padding: 16px 24px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+          <h3 style="margin: 0; color: #333; font-size: 1.25rem;" id="orderModalTitle">Order Details</h3>
+          <button onclick="closeOrderModal()" style="background: none; border: none; font-size: 1.75rem; cursor: pointer; color: #666; line-height: 1;">&times;</button>
         </div>
-        <div id="orderModalContent" style="padding: 20px;">
+        <div id="orderModalContent" style="padding: 24px; overflow-y: auto; flex: 1;">
           <p style="text-align: center; color: #666;">Loading...</p>
         </div>
-        <div style="padding: 15px 20px; border-top: 1px solid #eee; display: flex; justify-content: space-between; background: #f9f9f9; flex-wrap: wrap; gap: 8px;">
-          <div style="display: flex; gap: 8px;">
-            <button onclick="printPackingSlip()" style="padding: 8px 16px; background: #534bc4; color: white; border: none; border-radius: 4px; cursor: pointer;">Print Packing Slip</button>
-            <button id="customsFormBtn" onclick="printCustomsForm()" style="padding: 8px 16px; background: #2e7d32; color: white; border: none; border-radius: 4px; cursor: pointer; display: none;">Print Customs Form</button>
+        <div style="padding: 16px 24px; border-top: 1px solid #eee; display: flex; justify-content: space-between; background: #f9f9f9; flex-wrap: wrap; gap: 8px; flex-shrink: 0; border-radius: 0 0 12px 12px;">
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button onclick="printPackingSlip()" style="padding: 10px 20px; background: #534bc4; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">Print Packing Slip</button>
+            <button id="customsFormBtn" onclick="printCustomsForm()" style="padding: 10px 20px; background: #2e7d32; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; display: none;">Print Customs Form</button>
           </div>
-          <button onclick="closeOrderModal()" style="padding: 8px 16px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+          <button onclick="closeOrderModal()" style="padding: 10px 20px; background: #666; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">Close</button>
         </div>
       </div>
     </div>
@@ -458,9 +487,10 @@
       if (data.success) {
         const order = data.order;
         const items = data.line_items;
+        const rateZone = data.rate_zone || {};
 
         // Check if international
-        let isInternational = false;
+        let isInternational = rateZone.is_international || false;
         const addr = order.shipping_address;
         if (addr && addr.country) {
           const country = addr.country.toUpperCase();
@@ -489,72 +519,144 @@
           addressHtml = '<p style="color: #999;">No shipping address</p>';
         }
 
+        // Build items table with customs info
         let itemsHtml = '';
         if (items && items.length > 0) {
-          itemsHtml = items.map(item => {
+          itemsHtml = `
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+              <thead>
+                <tr style="background: #f5f5f5; text-align: left;">
+                  <th style="padding: 10px; border-bottom: 2px solid #ddd;">Item</th>
+                  <th style="padding: 10px; border-bottom: 2px solid #ddd; text-align: center;">Qty</th>
+                  <th style="padding: 10px; border-bottom: 2px solid #ddd; text-align: right;">Price</th>
+                  ${isInternational ? '<th style="padding: 10px; border-bottom: 2px solid #ddd;">HS Code</th><th style="padding: 10px; border-bottom: 2px solid #ddd;">Origin</th>' : ''}
+                </tr>
+              </thead>
+              <tbody>
+          `;
+          items.forEach(item => {
             let propsHtml = '';
             if (item.properties && item.properties.length > 0) {
               propsHtml = '<div style="margin-top: 6px; padding: 6px 8px; background: #f8f9fa; border-radius: 4px; font-size: 0.85em;">' +
                 item.properties.map(p => `<div style="color: #555;"><span style="color: #888;">${p.name}:</span> ${p.value}</div>`).join('') +
                 '</div>';
             }
-            return `
-            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee;">
-              <div style="flex: 1;">
-                <strong>${item.title}</strong>
-                ${item.variant ? '<br><span style="color: #666; font-size: 0.9em;">' + item.variant + '</span>' : ''}
-                ${item.sku ? '<br><span style="color: #999; font-size: 0.85em;">SKU: ' + item.sku + '</span>' : ''}
-                ${propsHtml}
-              </div>
-              <div style="text-align: right; white-space: nowrap; margin-left: 12px;">
-                <span style="color: #666;">× ${item.quantity}</span>
-                <br><strong>$${item.price.toFixed(2)}</strong>
-              </div>
-            </div>
-          `}).join('');
+            itemsHtml += `
+              <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 10px; vertical-align: top;">
+                  <strong>${item.title}</strong>
+                  ${item.variant ? '<br><span style="color: #666; font-size: 0.9em;">' + item.variant + '</span>' : ''}
+                  ${item.sku ? '<br><span style="color: #999; font-size: 0.85em;">SKU: ' + item.sku + '</span>' : ''}
+                  ${item.weight_grams ? '<br><span style="color: #888; font-size: 0.8em;">' + item.weight_grams + 'g</span>' : ''}
+                  ${propsHtml}
+                </td>
+                <td style="padding: 10px; text-align: center; vertical-align: top; font-weight: 500;">${item.quantity}</td>
+                <td style="padding: 10px; text-align: right; vertical-align: top;">$${item.price.toFixed(2)}</td>
+                ${isInternational ? `
+                  <td style="padding: 10px; vertical-align: top; font-family: monospace; font-size: 0.85em;">${item.hs_code || '<span style="color: #c62828;">Not set</span>'}</td>
+                  <td style="padding: 10px; vertical-align: top;">${item.country_of_origin || 'CA'}</td>
+                ` : ''}
+              </tr>
+            `;
+          });
+          itemsHtml += '</tbody></table>';
         } else {
           itemsHtml = '<p style="color: #999;">No items found</p>';
         }
 
-        // International order badge
-        const internationalBadge = isInternational ?
-          '<span style="display: inline-block; background: #1565c0; color: white; padding: 3px 8px; border-radius: 4px; font-size: 0.8em; margin-left: 8px;">INTERNATIONAL</span>' : '';
+        // Rate zone badge
+        const rateZoneBadge = rateZone.zone ? `
+          <span style="display: inline-block; background: ${isInternational ? '#1565c0' : '#2e7d32'}; color: white; padding: 4px 10px; border-radius: 4px; font-size: 0.85em; font-weight: 500;">
+            ${rateZone.zone}
+          </span>
+          ${rateZone.detail ? `<span style="color: #666; margin-left: 8px;">${rateZone.detail}</span>` : ''}
+        ` : '';
+
+        // Weight display
+        const weightDisplay = order.total_weight_grams ?
+          `<span style="color: #666; font-size: 0.9em;">${order.total_weight_grams}g (${(order.total_weight_grams / 1000).toFixed(2)}kg)</span>` : '';
 
         modalContent.innerHTML = `
-          <div style="margin-bottom: 20px;">
-            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Customer</h4>
-            <p style="margin: 0;"><strong>${order.customer_name || 'Unknown'}</strong></p>
-            <p style="margin: 4px 0; color: #666;">${order.customer_email || ''}</p>
-            ${order.customer_phone ? '<p style="margin: 4px 0; color: #666;">' + order.customer_phone + '</p>' : ''}
-          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+            <!-- Left Column -->
+            <div>
+              <div style="margin-bottom: 24px; padding: 16px; background: #f8f9fa; border-radius: 8px;">
+                <h4 style="margin: 0 0 12px 0; color: #333; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.5px;">Customer</h4>
+                <p style="margin: 0; font-size: 1.1em;"><strong>${order.customer_name || 'Unknown'}</strong></p>
+                <p style="margin: 4px 0; color: #666;">${order.customer_email || ''}</p>
+                ${order.customer_phone ? '<p style="margin: 4px 0; color: #666;">' + order.customer_phone + '</p>' : ''}
+              </div>
 
-          <div style="margin-bottom: 20px;">
-            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">
-              Shipping Address ${internationalBadge}
-            </h4>
-            ${addressHtml}
-          </div>
+              <div style="margin-bottom: 24px; padding: 16px; background: #f8f9fa; border-radius: 8px;">
+                <h4 style="margin: 0 0 12px 0; color: #333; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.5px;">
+                  Shipping Address
+                </h4>
+                ${addressHtml}
+              </div>
 
-          <div style="margin-bottom: 20px;">
-            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Items Ordered</h4>
-            ${itemsHtml}
-          </div>
+              <!-- Rate Zone / Shipping Info -->
+              <div style="margin-bottom: 24px; padding: 16px; background: ${isInternational ? '#e3f2fd' : '#e8f5e9'}; border-radius: 8px; border: 1px solid ${isInternational ? '#90caf9' : '#a5d6a7'};">
+                <h4 style="margin: 0 0 12px 0; color: #333; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.5px;">
+                  Shipping Zone
+                </h4>
+                <div style="margin-bottom: 8px;">${rateZoneBadge}</div>
+                <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px;">
+                  <div>
+                    <span style="color: #666; font-size: 0.85em;">Total Items:</span>
+                    <strong style="margin-left: 4px;">${order.total_items_qty || items.reduce((sum, i) => sum + i.quantity, 0)}</strong>
+                  </div>
+                  ${order.total_weight_grams ? `
+                    <div>
+                      <span style="color: #666; font-size: 0.85em;">Total Weight:</span>
+                      <strong style="margin-left: 4px;">${order.total_weight_grams}g</strong>
+                    </div>
+                  ` : ''}
+                </div>
+              </div>
 
-          <div style="background: #f5f5f5; padding: 12px; border-radius: 4px;">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-              <span>Subtotal:</span><span>$${order.subtotal_price.toFixed(2)}</span>
+              <!-- Order Summary -->
+              <div style="background: #fff; padding: 16px; border-radius: 8px; border: 1px solid #e0e0e0;">
+                <h4 style="margin: 0 0 12px 0; color: #333; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.5px;">Order Summary</h4>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                  <span style="color: #666;">Subtotal:</span><span>$${order.subtotal_price.toFixed(2)} ${order.currency || ''}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                  <span style="color: #666;">Tax:</span><span>$${order.total_tax.toFixed(2)}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.15em; border-top: 2px solid #333; padding-top: 10px; margin-top: 10px;">
+                  <span>Total:</span><span>$${order.total_price.toFixed(2)} ${order.currency || ''}</span>
+                </div>
+              </div>
             </div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-              <span>Tax:</span><span>$${order.total_tax.toFixed(2)}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.1em; border-top: 1px solid #ddd; padding-top: 8px; margin-top: 8px;">
-              <span>Total:</span><span>$${order.total_price.toFixed(2)}</span>
+
+            <!-- Right Column - Items -->
+            <div>
+              <div style="padding: 16px; background: #fff; border-radius: 8px; border: 1px solid #e0e0e0;">
+                <h4 style="margin: 0 0 16px 0; color: #333; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.5px;">
+                  Items Ordered (${order.total_items_qty || items.reduce((sum, i) => sum + i.quantity, 0)} items)
+                </h4>
+                ${itemsHtml}
+              </div>
+
+              ${isInternational ? `
+                <div style="margin-top: 16px; padding: 16px; background: #fff3e0; border-radius: 8px; border: 1px solid #ffcc80;">
+                  <h4 style="margin: 0 0 12px 0; color: #e65100; font-size: 0.95rem;">
+                    ⚠ Customs Information Required
+                  </h4>
+                  <p style="margin: 0; color: #666; font-size: 0.9em;">
+                    This is an international order to <strong>${rateZone.detail || 'an international destination'}</strong>.
+                    Ensure all items have valid HS codes and customs descriptions before shipping.
+                  </p>
+                  <button onclick="printCustomsForm()" style="margin-top: 12px; padding: 8px 16px; background: #e65100; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
+                    Generate Customs Form
+                  </button>
+                </div>
+              ` : ''}
             </div>
           </div>
 
-          ${order.note ? '<div style="margin-top: 15px; padding: 10px; background: #fff8e1; border-radius: 4px;"><strong>Note:</strong> ' + order.note + '</div>' : ''}
-          ${order.cancelled ? '<div style="margin-top: 15px; padding: 10px; background: #ffebee; border-radius: 4px; color: #c62828;"><strong>⚠ This order has been cancelled</strong></div>' : ''}
-          ${isInternational ? '<div style="margin-top: 15px; padding: 10px; background: #e3f2fd; border-radius: 4px; color: #1565c0;"><strong>🌍 International Order</strong> - Requires customs declaration</div>' : ''}
+          ${order.note ? '<div style="margin-top: 20px; padding: 14px; background: #fff8e1; border-radius: 8px; border: 1px solid #ffe082;"><strong>Customer Note:</strong> ' + order.note + '</div>' : ''}
+          ${order.cancelled ? '<div style="margin-top: 20px; padding: 14px; background: #ffebee; border-radius: 8px; border: 1px solid #ef9a9a; color: #c62828;"><strong>⚠ This order has been cancelled</strong></div>' : ''}
         `;
 
       } else {
@@ -1178,5 +1280,289 @@
     document.body.appendChild(form);
     form.submit();
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Expandable Order Items
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const expandedOrders = new Set();
+  const itemsCache = {};
+
+  async function toggleOrderItems(orderNumber, btn) {
+    const container = document.getElementById(`items-${orderNumber}`);
+    const icon = btn.querySelector('.expand-icon');
+
+    if (expandedOrders.has(orderNumber)) {
+      // Collapse
+      container.style.display = 'none';
+      icon.textContent = '▶';
+      expandedOrders.delete(orderNumber);
+    } else {
+      // Expand
+      icon.textContent = '▼';
+      expandedOrders.add(orderNumber);
+
+      if (itemsCache[orderNumber]) {
+        container.innerHTML = itemsCache[orderNumber];
+        container.style.display = 'block';
+      } else {
+        container.innerHTML = '<div style="padding: 8px; color: #666; font-size: 0.85em;">Loading...</div>';
+        container.style.display = 'block';
+
+        try {
+          const response = await fetch(`/api/orders/${orderNumber}/details`);
+          const data = await response.json();
+
+          if (data.success && data.line_items) {
+            let html = '<div style="padding: 8px 0; font-size: 0.85em;">';
+            data.line_items.forEach(item => {
+              html += `
+                <div style="padding: 6px 0; border-bottom: 1px solid #f0f0f0;">
+                  <div style="display: flex; justify-content: space-between;">
+                    <span><strong>${item.quantity}×</strong> ${item.title}</span>
+                    <span style="color: #666;">$${item.price.toFixed(2)}</span>
+                  </div>
+                  ${item.variant ? `<div style="color: #888; font-size: 0.9em;">${item.variant}</div>` : ''}
+                  ${item.sku ? `<div style="color: #999; font-size: 0.85em;">SKU: ${item.sku}</div>` : ''}
+                </div>
+              `;
+            });
+            html += '</div>';
+            itemsCache[orderNumber] = html;
+            container.innerHTML = html;
+          } else {
+            container.innerHTML = '<div style="padding: 8px; color: #c62828; font-size: 0.85em;">Failed to load items</div>';
+          }
+        } catch (err) {
+          container.innerHTML = '<div style="padding: 8px; color: #c62828; font-size: 0.85em;">Error loading items</div>';
+        }
+      }
+    }
+  }
+
+  // Bulk expand/collapse all items
+  function expandAllItems() {
+    document.querySelectorAll('.btn-expand-items').forEach(btn => {
+      const orderNumber = btn.closest('tr').dataset.order;
+      if (!expandedOrders.has(orderNumber)) {
+        toggleOrderItems(orderNumber, btn);
+      }
+    });
+  }
+
+  function collapseAllItems() {
+    document.querySelectorAll('.btn-expand-items').forEach(btn => {
+      const orderNumber = btn.closest('tr').dataset.order;
+      if (expandedOrders.has(orderNumber)) {
+        toggleOrderItems(orderNumber, btn);
+      }
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Draggable Columns
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  let dragSrcCol = null;
+
+  function initDraggableColumns() {
+    const table = document.getElementById('ordersTable');
+    if (!table) return;
+
+    const headers = table.querySelectorAll('th.draggable');
+
+    headers.forEach(header => {
+      header.addEventListener('dragstart', handleDragStart);
+      header.addEventListener('dragover', handleDragOver);
+      header.addEventListener('dragenter', handleDragEnter);
+      header.addEventListener('dragleave', handleDragLeave);
+      header.addEventListener('drop', handleDrop);
+      header.addEventListener('dragend', handleDragEnd);
+    });
+  }
+
+  function handleDragStart(e) {
+    dragSrcCol = this;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', this.dataset.col);
+    this.classList.add('dragging');
+  }
+
+  function handleDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    return false;
+  }
+
+  function handleDragEnter(e) {
+    this.classList.add('drag-over');
+  }
+
+  function handleDragLeave(e) {
+    this.classList.remove('drag-over');
+  }
+
+  function handleDrop(e) {
+    e.stopPropagation();
+    e.preventDefault();
+
+    if (dragSrcCol !== this) {
+      const srcCol = dragSrcCol.dataset.col;
+      const destCol = this.dataset.col;
+
+      // Swap columns in all rows
+      const table = document.getElementById('ordersTable');
+      const srcIndex = getColumnIndex(srcCol);
+      const destIndex = getColumnIndex(destCol);
+
+      if (srcIndex !== -1 && destIndex !== -1) {
+        // Swap in header
+        const headerRow = table.querySelector('thead tr');
+        swapCells(headerRow, srcIndex, destIndex);
+
+        // Swap in all body rows
+        table.querySelectorAll('tbody tr').forEach(row => {
+          swapCells(row, srcIndex, destIndex);
+        });
+
+        // Save column order to localStorage
+        saveColumnOrder();
+      }
+    }
+
+    this.classList.remove('drag-over');
+    return false;
+  }
+
+  function handleDragEnd(e) {
+    this.classList.remove('dragging');
+    document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+  }
+
+  function getColumnIndex(colName) {
+    const headers = document.querySelectorAll('#ordersTable th');
+    for (let i = 0; i < headers.length; i++) {
+      if (headers[i].dataset.col === colName) return i;
+    }
+    return -1;
+  }
+
+  function swapCells(row, idx1, idx2) {
+    const cells = row.children;
+    if (idx1 < idx2) {
+      row.insertBefore(cells[idx2], cells[idx1]);
+    } else {
+      row.insertBefore(cells[idx1], cells[idx2]);
+    }
+  }
+
+  function saveColumnOrder() {
+    const headers = document.querySelectorAll('#ordersTable th');
+    const order = Array.from(headers).map(h => h.dataset.col);
+    localStorage.setItem('allOrdersColumnOrder', JSON.stringify(order));
+  }
+
+  function loadColumnOrder() {
+    const saved = localStorage.getItem('allOrdersColumnOrder');
+    if (!saved) return;
+
+    try {
+      const order = JSON.parse(saved);
+      const table = document.getElementById('ordersTable');
+      if (!table) return;
+
+      const headerRow = table.querySelector('thead tr');
+      const rows = table.querySelectorAll('tbody tr');
+
+      // Build index map
+      const currentOrder = Array.from(headerRow.children).map(h => h.dataset.col);
+      const newOrder = order.filter(col => currentOrder.includes(col));
+
+      // Add any new columns that aren't in saved order
+      currentOrder.forEach(col => {
+        if (!newOrder.includes(col)) newOrder.push(col);
+      });
+
+      // Reorder each row
+      [headerRow, ...rows].forEach(row => {
+        const cells = Array.from(row.children);
+        const cellMap = {};
+        cells.forEach(cell => {
+          cellMap[cell.dataset.col] = cell;
+        });
+
+        // Clear and rebuild
+        row.innerHTML = '';
+        newOrder.forEach(col => {
+          if (cellMap[col]) {
+            row.appendChild(cellMap[col]);
+          }
+        });
+      });
+    } catch (e) {
+      console.error('Error loading column order:', e);
+    }
+  }
+
+  // Initialize on page load
+  document.addEventListener('DOMContentLoaded', function() {
+    initDraggableColumns();
+    loadColumnOrder();
+  });
 </script>
+
+<style>
+  /* Draggable column styles */
+  th.draggable {
+    cursor: grab;
+    user-select: none;
+  }
+  th.draggable:active {
+    cursor: grabbing;
+  }
+  th.dragging {
+    opacity: 0.5;
+    background: #e3f2fd !important;
+  }
+  th.drag-over {
+    background: #bbdefb !important;
+    border-left: 3px solid #1976d2;
+  }
+
+  /* Expand items button styles */
+  .btn-expand-items {
+    background: none;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.85em;
+    cursor: pointer;
+    color: #333;
+    transition: all 0.2s;
+  }
+  .btn-expand-items:hover {
+    background: #f5f5f5;
+    border-color: #bbb;
+  }
+  .expand-icon {
+    display: inline-block;
+    font-size: 0.7em;
+    margin-right: 4px;
+    transition: transform 0.2s;
+  }
+  .order-items-detail {
+    margin-top: 8px;
+    padding: 8px;
+    background: #fafafa;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  /* Items cell */
+  .items-cell {
+    min-width: 120px;
+  }
+</style>
 {% endblock %}
