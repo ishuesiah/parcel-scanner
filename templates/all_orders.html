@@ -861,19 +861,23 @@
         const age = formatRelativeTime(created);
         el.textContent = age;
 
-        // Add classes for styling
+        // Add classes for styling - Green (fresh) → Orange (medium) → Red (old)
         const date = new Date(created);
         const now = new Date();
         const diffHours = (now - date) / 3600000;
 
+        // Remove all age classes first
+        el.classList.remove('recent', 'medium', 'old');
+
         if (diffHours < 4) {
+          // Fresh: Green - Less than 4 hours old
           el.classList.add('recent');
-          el.classList.remove('old');
-        } else if (diffHours > 48) {
-          el.classList.add('old');
-          el.classList.remove('recent');
+        } else if (diffHours <= 48) {
+          // Medium: Orange - Between 4 and 48 hours old
+          el.classList.add('medium');
         } else {
-          el.classList.remove('recent', 'old');
+          // Old: Red - More than 48 hours old
+          el.classList.add('old');
         }
       }
     });
