@@ -1,0 +1,823 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Packing Slip Builder{% endblock %}
+
+{% block extra_styles %}
+<style>
+  .settings-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    min-height: calc(100vh - 140px);
+  }
+
+  .settings-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .preview-panel {
+    position: sticky;
+    top: 20px;
+    height: fit-content;
+  }
+
+  .settings-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .card-header {
+    background: var(--bg-main);
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .card-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--text-main);
+  }
+
+  .card-body {
+    padding: 20px;
+  }
+
+  /* Form Elements */
+  .form-group {
+    margin-bottom: 16px;
+  }
+
+  .form-group:last-child {
+    margin-bottom: 0;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .form-group input[type="text"],
+  .form-group input[type="number"],
+  .form-group input[type="email"] {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+  }
+
+  .form-group input:focus {
+    outline: none;
+    border-color: var(--secondary);
+    box-shadow: 0 0 0 3px rgba(81, 106, 236, 0.1);
+  }
+
+  .form-row {
+    display: flex;
+    gap: 12px;
+  }
+
+  .form-row .form-group {
+    flex: 1;
+  }
+
+  /* Logo Upload */
+  .logo-upload {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .logo-preview {
+    width: 80px;
+    height: 80px;
+    border: 2px dashed var(--border-color);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: var(--bg-main);
+  }
+
+  .logo-preview img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
+
+  .logo-preview.empty {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+
+  .logo-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* Code Editor Tabs */
+  .editor-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: -1px;
+  }
+
+  .editor-tab {
+    padding: 10px 20px;
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .editor-tab:hover {
+    background: var(--bg-surface);
+  }
+
+  .editor-tab.active {
+    background: var(--bg-surface);
+    color: var(--secondary);
+    border-bottom-color: var(--bg-surface);
+  }
+
+  .editor-content {
+    display: none;
+  }
+
+  .editor-content.active {
+    display: block;
+  }
+
+  .code-editor {
+    width: 100%;
+    min-height: 300px;
+    padding: 16px;
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    border: 1px solid var(--border-color);
+    border-radius: 0 8px 8px 8px;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    resize: vertical;
+    tab-size: 2;
+  }
+
+  .code-editor:focus {
+    outline: none;
+    border-color: var(--secondary);
+  }
+
+  /* Label Size */
+  .label-size {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .label-size input {
+    width: 80px;
+    text-align: center;
+  }
+
+  .label-size span {
+    color: var(--text-muted);
+  }
+
+  /* Variables Panel */
+  .variables-panel {
+    max-height: 250px;
+    overflow-y: auto;
+  }
+
+  .variable-group {
+    margin-bottom: 12px;
+  }
+
+  .variable-group h4 {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .variable-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    background: var(--bg-main);
+    border-radius: 6px;
+    margin-bottom: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .variable-item:hover {
+    background: var(--secondary);
+    color: white;
+  }
+
+  .variable-item code {
+    font-size: 0.8rem;
+    font-family: monospace;
+  }
+
+  .variable-item small {
+    font-size: 0.7rem;
+    opacity: 0.7;
+  }
+
+  /* Preview Panel */
+  .preview-container {
+    background: #f5f5f5;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 16px;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 400px;
+    overflow: auto;
+  }
+
+  .preview-frame {
+    background: white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    transform-origin: top center;
+  }
+
+  .preview-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  /* Buttons */
+  .btn {
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: none;
+  }
+
+  .btn-primary {
+    background: var(--secondary);
+    color: white;
+  }
+
+  .btn-primary:hover {
+    background: #4158d0;
+    transform: translateY(-1px);
+  }
+
+  .btn-secondary {
+    background: var(--bg-main);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+  }
+
+  .btn-secondary:hover {
+    background: var(--border-color);
+  }
+
+  .btn-danger {
+    background: var(--cancel-btn);
+    color: white;
+  }
+
+  .btn-danger:hover {
+    background: #c62828;
+  }
+
+  .btn-sm {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+  }
+
+  /* Status */
+  .save-status {
+    font-size: 0.85rem;
+    padding: 6px 12px;
+    border-radius: 6px;
+    display: none;
+  }
+
+  .save-status.success {
+    display: inline-block;
+    background: #e8f5e9;
+    color: #2e7d32;
+  }
+
+  .save-status.error {
+    display: inline-block;
+    background: #ffebee;
+    color: #c62828;
+  }
+
+  .save-status.saving {
+    display: inline-block;
+    background: #e3f2fd;
+    color: #1976d2;
+  }
+
+  /* Responsive */
+  @media (max-width: 1200px) {
+    .settings-container {
+      grid-template-columns: 1fr;
+    }
+
+    .preview-panel {
+      position: static;
+    }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>Settings</h2>
+  <div style="display: flex; gap: 12px; align-items: center;">
+    <span id="saveStatus" class="save-status"></span>
+    <button class="btn btn-primary" onclick="saveAllSettings()">Save All Settings</button>
+  </div>
+</div>
+
+<div class="settings-container">
+  <!-- Left Panel: Editors -->
+  <div class="settings-panel">
+    <!-- Company Settings -->
+    <div class="settings-card">
+      <div class="card-header">
+        <h3>Company Information</h3>
+      </div>
+      <div class="card-body">
+        <div class="form-group">
+          <label>Company Logo</label>
+          <div class="logo-upload">
+            <div class="logo-preview {% if not settings.company_logo_url %}empty{% endif %}" id="logoPreview">
+              {% if settings.company_logo_url %}
+                <img src="{{ settings.company_logo_url }}" alt="Logo">
+              {% else %}
+                No logo
+              {% endif %}
+            </div>
+            <div class="logo-actions">
+              <input type="file" id="logoInput" accept="image/*" style="display: none;" onchange="uploadLogo(this)">
+              <button class="btn btn-sm btn-secondary" onclick="document.getElementById('logoInput').click()">
+                Upload Logo
+              </button>
+              <button class="btn btn-sm btn-secondary" onclick="removeLogo()">Remove</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Company Name</label>
+          <input type="text" id="companyName" value="{{ settings.company_name or 'Hemlock & Oak' }}">
+        </div>
+        <div class="form-group">
+          <label>Company Address</label>
+          <input type="text" id="companyAddress" value="{{ settings.company_address or '' }}" placeholder="123 Main St, City, Province">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Phone</label>
+            <input type="text" id="companyPhone" value="{{ settings.company_phone or '' }}" placeholder="(555) 123-4567">
+          </div>
+          <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="companyEmail" value="{{ settings.company_email or '' }}" placeholder="info@company.com">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Label Size -->
+    <div class="settings-card">
+      <div class="card-header">
+        <h3>Label Size</h3>
+      </div>
+      <div class="card-body">
+        <div class="label-size">
+          <input type="number" id="labelWidth" value="{{ settings.packing_slip_label_width or '4' }}" min="1" max="12" step="0.5" onchange="updatePreview()">
+          <span>inches</span>
+          <span style="margin: 0 8px;">&times;</span>
+          <input type="number" id="labelHeight" value="{{ settings.packing_slip_label_height or '6' }}" min="1" max="12" step="0.5" onchange="updatePreview()">
+          <span>inches</span>
+        </div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 12px;">
+          Common sizes: 4"&times;6" (shipping label), 4"&times;4" (square), 2"&times;1" (barcode)
+        </p>
+      </div>
+    </div>
+
+    <!-- Template Editor -->
+    <div class="settings-card">
+      <div class="card-header">
+        <h3>Packing Slip Template</h3>
+        <button class="btn btn-sm btn-danger" onclick="resetTemplate()">Reset to Default</button>
+      </div>
+      <div class="card-body" style="padding: 0;">
+        <div style="padding: 16px 20px 0;">
+          <div class="editor-tabs">
+            <button class="editor-tab active" data-tab="html" onclick="switchTab('html')">HTML</button>
+            <button class="editor-tab" data-tab="css" onclick="switchTab('css')">CSS</button>
+            <button class="editor-tab" data-tab="js" onclick="switchTab('js')">JavaScript</button>
+          </div>
+        </div>
+        <div style="padding: 0 20px 20px;">
+          <div class="editor-content active" data-content="html">
+            <textarea class="code-editor" id="editorHtml" onkeyup="debouncePreview()" onchange="debouncePreview()">{{ settings.packing_slip_html or default_html }}</textarea>
+          </div>
+          <div class="editor-content" data-content="css">
+            <textarea class="code-editor" id="editorCss" onkeyup="debouncePreview()" onchange="debouncePreview()">{{ settings.packing_slip_css or default_css }}</textarea>
+          </div>
+          <div class="editor-content" data-content="js">
+            <textarea class="code-editor" id="editorJs" onkeyup="debouncePreview()" onchange="debouncePreview()" placeholder="// Optional JavaScript for custom functionality">{{ settings.packing_slip_js or '' }}</textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Available Variables -->
+    <div class="settings-card">
+      <div class="card-header">
+        <h3>Available Variables</h3>
+        <span style="font-size: 0.75rem; color: var(--text-muted);">Click to insert</span>
+      </div>
+      <div class="card-body variables-panel" id="variablesPanel">
+        <!-- Variables will be loaded here -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Panel: Preview -->
+  <div class="preview-panel">
+    <div class="settings-card">
+      <div class="card-header">
+        <h3>Live Preview</h3>
+        <div class="preview-actions">
+          <button class="btn btn-sm btn-secondary" onclick="updatePreview()">Refresh</button>
+          <button class="btn btn-sm btn-primary" onclick="printPreview()">Print</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="preview-container" id="previewContainer">
+          <iframe id="previewFrame" class="preview-frame" style="border: none;"></iframe>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% raw %}
+<script>
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Settings & Packing Slip Builder
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  let previewTimeout = null;
+  let sampleData = null;
+
+  // Initialize on page load
+  document.addEventListener('DOMContentLoaded', function() {
+    loadVariables();
+    loadPreviewData();
+  });
+
+  // Tab switching
+  function switchTab(tab) {
+    document.querySelectorAll('.editor-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.editor-content').forEach(c => c.classList.remove('active'));
+    document.querySelector(`.editor-tab[data-tab="${tab}"]`).classList.add('active');
+    document.querySelector(`.editor-content[data-content="${tab}"]`).classList.add('active');
+  }
+
+  // Debounced preview update
+  function debouncePreview() {
+    clearTimeout(previewTimeout);
+    previewTimeout = setTimeout(updatePreview, 500);
+  }
+
+  // Load variables list
+  function loadVariables() {
+    fetch('/api/packing-slip/variables')
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          const panel = document.getElementById('variablesPanel');
+          let html = '';
+          for (const [group, vars] of Object.entries(data.variables)) {
+            html += `<div class="variable-group"><h4>${group}</h4>`;
+            for (const [code, desc] of vars) {
+              html += `<div class="variable-item" onclick="insertVariable('${code.replace(/'/g, "\\'")}')">
+                <code>${code}</code>
+                <small>${desc}</small>
+              </div>`;
+            }
+            html += '</div>';
+          }
+          panel.innerHTML = html;
+        }
+      });
+  }
+
+  // Insert variable at cursor in active editor
+  function insertVariable(variable) {
+    const activeTab = document.querySelector('.editor-tab.active').dataset.tab;
+    const editor = document.getElementById('editor' + activeTab.charAt(0).toUpperCase() + activeTab.slice(1));
+
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    const text = editor.value;
+
+    editor.value = text.substring(0, start) + variable + text.substring(end);
+    editor.selectionStart = editor.selectionEnd = start + variable.length;
+    editor.focus();
+
+    debouncePreview();
+  }
+
+  // Load sample data for preview
+  function loadPreviewData() {
+    fetch('/api/packing-slip/preview')
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          sampleData = data.data;
+          updatePreview();
+        }
+      });
+  }
+
+  // Render template with Handlebars-like syntax
+  function renderTemplate(html, data) {
+    // Simple Handlebars-like template engine
+    let result = html;
+
+    // Pre-process line_items to add computed properties (quantity_circled, quantity_gt_1)
+    if (data.line_items && Array.isArray(data.line_items)) {
+      data.line_items = data.line_items.map(item => {
+        const qty = parseInt(item.quantity) || 1;
+        return {
+          ...item,
+          quantity_gt_1: qty > 1,
+          quantity_circled: qty > 1
+            ? `<span class="qty-circled">${qty}</span>`
+            : String(qty)
+        };
+      });
+    }
+
+    // Handle {{#each array}}...{{/each}}
+    result = result.replace(/\{\{#each\s+(\w+)\}\}([\s\S]*?)\{\{\/each\}\}/g, function(match, arrayName, content) {
+      const arr = data[arrayName];
+      if (!arr || !Array.isArray(arr)) return '';
+      return arr.map(item => {
+        let itemContent = content;
+        // Replace {{this.property}} with item values
+        itemContent = itemContent.replace(/\{\{this\.(\w+)\}\}/g, (m, prop) => {
+          if (prop === 'properties' && item[prop]) {
+            return ''; // Properties are handled by nested each
+          }
+          return item[prop] !== undefined ? item[prop] : '';
+        });
+        // Handle nested {{#each this.properties}}
+        itemContent = itemContent.replace(/\{\{#each\s+this\.(\w+)\}\}([\s\S]*?)\{\{\/each\}\}/g, function(m, propName, propContent) {
+          const propArr = item[propName];
+          if (!propArr || !Array.isArray(propArr)) return '';
+          return propArr.map(propItem => {
+            return propContent.replace(/\{\{this\.(\w+)\}\}/g, (mm, p) => propItem[p] || '');
+          }).join('');
+        });
+        // Handle {{#if this.property}}
+        itemContent = itemContent.replace(/\{\{#if\s+this\.(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g, (m, prop, content) => {
+          return item[prop] ? content : '';
+        });
+        return itemContent;
+      }).join('');
+    });
+
+    // Handle {{#if variable}}...{{/if}}
+    result = result.replace(/\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g, function(match, varName, content) {
+      return data[varName] ? content : '';
+    });
+
+    // Replace {{variable}} with data values
+    result = result.replace(/\{\{(\w+)\}\}/g, function(match, varName) {
+      return data[varName] !== undefined ? data[varName] : '';
+    });
+
+    return result;
+  }
+
+  // Update live preview
+  function updatePreview() {
+    if (!sampleData) return;
+
+    const html = document.getElementById('editorHtml').value;
+    const css = document.getElementById('editorCss').value;
+    const js = document.getElementById('editorJs').value;
+    const width = parseFloat(document.getElementById('labelWidth').value) || 4;
+    const height = parseFloat(document.getElementById('labelHeight').value) || 6;
+
+    // Render the template
+    const renderedHtml = renderTemplate(html, sampleData);
+
+    // Build the preview document
+    const previewDoc = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          ${css}
+          body { margin: 0; padding: 0; }
+        </style>
+      </head>
+      <body>
+        ${renderedHtml}
+        <script>${js}<\/script>
+      </body>
+      </html>
+    `;
+
+    // Update iframe
+    const frame = document.getElementById('previewFrame');
+    frame.style.width = (width * 96) + 'px';  // 96 DPI
+    frame.style.height = (height * 96) + 'px';
+
+    const doc = frame.contentDocument || frame.contentWindow.document;
+    doc.open();
+    doc.write(previewDoc);
+    doc.close();
+  }
+
+  // Upload logo
+  function uploadLogo(input) {
+    if (!input.files || !input.files[0]) return;
+
+    const formData = new FormData();
+    formData.append('logo', input.files[0]);
+
+    showStatus('Uploading...', 'saving');
+
+    fetch('/api/settings/logo', {
+      method: 'POST',
+      body: formData
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        const preview = document.getElementById('logoPreview');
+        preview.innerHTML = `<img src="${data.url}" alt="Logo">`;
+        preview.classList.remove('empty');
+        showStatus('Logo uploaded!', 'success');
+
+        // Update sample data and refresh preview
+        if (sampleData) {
+          sampleData.company_logo = data.url;
+          updatePreview();
+        }
+      } else {
+        showStatus(data.error || 'Upload failed', 'error');
+      }
+    })
+    .catch(err => showStatus('Upload failed: ' + err, 'error'));
+  }
+
+  // Remove logo
+  function removeLogo() {
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_logo_url: '' })
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        const preview = document.getElementById('logoPreview');
+        preview.innerHTML = 'No logo';
+        preview.classList.add('empty');
+        if (sampleData) {
+          sampleData.company_logo = '';
+          updatePreview();
+        }
+        showStatus('Logo removed', 'success');
+      }
+    });
+  }
+
+  // Reset template to default
+  function resetTemplate() {
+    if (!confirm('Reset the packing slip template to default? This will overwrite your customizations.')) return;
+
+    showStatus('Resetting...', 'saving');
+
+    fetch('/api/settings/reset-template', { method: 'POST' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          document.getElementById('editorHtml').value = data.html;
+          document.getElementById('editorCss').value = data.css;
+          document.getElementById('editorJs').value = data.js || '';
+          updatePreview();
+          showStatus('Template reset!', 'success');
+        } else {
+          showStatus(data.error || 'Reset failed', 'error');
+        }
+      })
+      .catch(err => showStatus('Reset failed: ' + err, 'error'));
+  }
+
+  // Save all settings
+  function saveAllSettings() {
+    showStatus('Saving...', 'saving');
+
+    const settings = {
+      company_name: document.getElementById('companyName').value,
+      company_address: document.getElementById('companyAddress').value,
+      company_phone: document.getElementById('companyPhone').value,
+      company_email: document.getElementById('companyEmail').value,
+      packing_slip_label_width: document.getElementById('labelWidth').value,
+      packing_slip_label_height: document.getElementById('labelHeight').value,
+      packing_slip_html: document.getElementById('editorHtml').value,
+      packing_slip_css: document.getElementById('editorCss').value,
+      packing_slip_js: document.getElementById('editorJs').value,
+    };
+
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        showStatus('Saved!', 'success');
+
+        // Update sample data with new company info
+        if (sampleData) {
+          sampleData.company_name = settings.company_name;
+          sampleData.company_address = settings.company_address;
+          updatePreview();
+        }
+      } else {
+        showStatus(data.error || 'Save failed', 'error');
+      }
+    })
+    .catch(err => showStatus('Save failed: ' + err, 'error'));
+  }
+
+  // Show status message
+  function showStatus(message, type) {
+    const status = document.getElementById('saveStatus');
+    status.textContent = message;
+    status.className = 'save-status ' + type;
+
+    if (type === 'success') {
+      setTimeout(() => { status.style.display = 'none'; }, 3000);
+    }
+  }
+
+  // Print preview
+  function printPreview() {
+    const frame = document.getElementById('previewFrame');
+    frame.contentWindow.print();
+  }
+
+  // Handle Tab key in textareas
+  document.querySelectorAll('.code-editor').forEach(editor => {
+    editor.addEventListener('keydown', function(e) {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = this.selectionStart;
+        const end = this.selectionEnd;
+        this.value = this.value.substring(0, start) + '  ' + this.value.substring(end);
+        this.selectionStart = this.selectionEnd = start + 2;
+      }
+    });
+  });
+</script>
+{% endraw %}
+{% endblock %}

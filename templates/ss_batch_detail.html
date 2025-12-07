@@ -233,7 +233,29 @@
 
           ${order.note ? '<div style="margin-top: 15px; padding: 10px; background: #fff8e1; border-radius: 4px;"><strong>Note:</strong> ' + order.note + '</div>' : ''}
           ${order.cancelled ? '<div style="margin-top: 15px; padding: 10px; background: #ffebee; border-radius: 4px; color: #c62828;"><strong>⚠ This order has been cancelled</strong></div>' : ''}
+
+          <div id="customsSection" style="margin-top: 20px; display: none;">
+            <h4 style="margin: 0 0 10px 0; color: #d32f2f; font-size: 0.9rem; text-transform: uppercase;">
+              🌍 International Customs Info
+            </h4>
+            <div id="customsItems"></div>
+            <div style="margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap;">
+              <button onclick="saveCustomsInfo('${orderNumber}')" style="padding: 8px 16px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
+                💾 Save Customs Info
+              </button>
+              <button onclick="saveAsDefaults('${orderNumber}')" style="padding: 8px 16px; background: #2196f3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
+                📋 Save as Product Defaults
+              </button>
+              <button onclick="getShippingRates('${orderNumber}')" style="padding: 8px 16px; background: #ff9800; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
+                📦 Get Shipping Rates
+              </button>
+            </div>
+            <div id="ratesResult" style="margin-top: 15px; display: none;"></div>
+          </div>
         `;
+
+        // Load customs info for international orders
+        loadCustomsInfo(orderNumber);
 
       } else {
         modalContent.innerHTML = `<p style="text-align: center; color: #c62828;">Error: ${data.error || 'Could not load order'}</p>`;
@@ -259,5 +281,201 @@
       closeOrderModal();
     }
   });
+
+  // ── Customs Info Functions ──
+  let currentCustomsItems = [];
+
+  async function loadCustomsInfo(orderNumber) {
+    try {
+      const response = await fetch(`/api/orders/${orderNumber}/customs-info`);
+      const data = await response.json();
+
+      const customsSection = document.getElementById('customsSection');
+      const customsItems = document.getElementById('customsItems');
+
+      if (data.success && data.is_international) {
+        customsSection.style.display = 'block';
+        currentCustomsItems = data.items;
+
+        const destCountry = data.destination_country || 'Unknown';
+
+        let itemsHtml = `
+          <div style="background: #fff3e0; padding: 10px; border-radius: 4px; margin-bottom: 15px;">
+            <strong>Destination:</strong> ${destCountry}
+            <span style="margin-left: 15px;"><strong>Total Weight:</strong> ${data.total_weight_grams || 0}g</span>
+          </div>
+          <table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
+            <thead>
+              <tr style="background: #f5f5f5;">
+                <th style="padding: 8px; text-align: left; border-bottom: 2px solid #ddd;">Item</th>
+                <th style="padding: 8px; text-align: left; border-bottom: 2px solid #ddd; width: 180px;">Description</th>
+                <th style="padding: 8px; text-align: left; border-bottom: 2px solid #ddd; width: 100px;">HS Code</th>
+                <th style="padding: 8px; text-align: center; border-bottom: 2px solid #ddd; width: 70px;">Origin</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+
+        data.items.forEach((item, idx) => {
+          itemsHtml += `
+            <tr data-item-id="${item.id}">
+              <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                <div><strong>${item.title}</strong></div>
+                <div style="color: #666; font-size: 0.85em;">SKU: ${item.sku || 'N/A'} | Qty: ${item.quantity} | $${item.price.toFixed(2)}</div>
+              </td>
+              <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                <input type="text" class="customs-desc" data-idx="${idx}"
+                       value="${item.customs_description || ''}"
+                       style="width: 100%; padding: 6px; border: 1px solid #ddd; border-radius: 4px;"
+                       placeholder="e.g. Bound paper planner">
+              </td>
+              <td style="padding: 8px; border-bottom: 1px solid #eee;">
+                <input type="text" class="customs-hs" data-idx="${idx}"
+                       value="${item.hs_code || ''}"
+                       style="width: 100%; padding: 6px; border: 1px solid #ddd; border-radius: 4px;"
+                       placeholder="e.g. 4820102010">
+              </td>
+              <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: center;">
+                <input type="text" class="customs-origin" data-idx="${idx}"
+                       value="${item.country_of_origin || 'CA'}"
+                       style="width: 50px; padding: 6px; border: 1px solid #ddd; border-radius: 4px; text-align: center;"
+                       maxlength="2">
+              </td>
+            </tr>
+          `;
+        });
+
+        itemsHtml += '</tbody></table>';
+        customsItems.innerHTML = itemsHtml;
+      } else {
+        customsSection.style.display = 'none';
+      }
+    } catch (error) {
+      console.error('Error loading customs info:', error);
+    }
+  }
+
+  async function saveCustomsInfo(orderNumber) {
+    const items = currentCustomsItems.map((item, idx) => {
+      const descInput = document.querySelector(`.customs-desc[data-idx="${idx}"]`);
+      const hsInput = document.querySelector(`.customs-hs[data-idx="${idx}"]`);
+      const originInput = document.querySelector(`.customs-origin[data-idx="${idx}"]`);
+      return {
+        id: item.id,
+        hs_code: hsInput ? hsInput.value : item.hs_code,
+        country_of_origin: originInput ? originInput.value : item.country_of_origin,
+        customs_description: descInput ? descInput.value : item.customs_description
+      };
+    });
+
+    try {
+      const response = await fetch(`/api/orders/${orderNumber}/customs-info`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items })
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        alert(`✅ Saved customs info for ${data.updated_count} item(s)`);
+      } else {
+        alert('❌ Error: ' + (data.error || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Error saving customs info:', error);
+      alert('❌ Error saving customs info');
+    }
+  }
+
+  async function saveAsDefaults(orderNumber) {
+    // First save the current values
+    await saveCustomsInfo(orderNumber);
+
+    try {
+      const response = await fetch(`/api/orders/${orderNumber}/save-customs-defaults`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        alert(`✅ ${data.message}`);
+      } else {
+        alert('❌ Error: ' + (data.error || 'Unknown error'));
+      }
+    } catch (error) {
+      console.error('Error saving defaults:', error);
+      alert('❌ Error saving defaults');
+    }
+  }
+
+  async function getShippingRates(orderNumber) {
+    const ratesResult = document.getElementById('ratesResult');
+    ratesResult.style.display = 'block';
+    ratesResult.innerHTML = '<p style="text-align: center; color: #666;">⏳ Fetching rates from carriers...</p>';
+
+    try {
+      const response = await fetch(`/api/orders/${orderNumber}/rates`);
+      const data = await response.json();
+
+      if (data.success && data.rates && data.rates.length > 0) {
+        let html = `
+          <div style="background: #e8f5e9; padding: 12px; border-radius: 6px;">
+            <h5 style="margin: 0 0 10px 0; color: #2e7d32;">📊 Available Shipping Rates</h5>
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.85em;">
+              <thead>
+                <tr style="background: #c8e6c9;">
+                  <th style="padding: 6px 8px; text-align: left;">Carrier</th>
+                  <th style="padding: 6px 8px; text-align: left;">Service</th>
+                  <th style="padding: 6px 8px; text-align: right;">Price</th>
+                  <th style="padding: 6px 8px; text-align: center;">Days</th>
+                </tr>
+              </thead>
+              <tbody>
+        `;
+
+        data.rates.forEach((rate, idx) => {
+          const isCheapest = data.cheapest && rate.service_code === data.cheapest.service_code && rate.carrier === data.cheapest.carrier;
+          const isFastest = data.fastest && rate.service_code === data.fastest.service_code && rate.carrier === data.fastest.carrier;
+          let badge = '';
+          if (isCheapest && isFastest) badge = '<span style="background: #4caf50; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; margin-left: 6px;">Best</span>';
+          else if (isCheapest) badge = '<span style="background: #2196f3; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; margin-left: 6px;">Cheapest</span>';
+          else if (isFastest) badge = '<span style="background: #ff9800; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.8em; margin-left: 6px;">Fastest</span>';
+
+          html += `
+            <tr style="border-bottom: 1px solid #ddd;">
+              <td style="padding: 8px;">${rate.carrier}</td>
+              <td style="padding: 8px;">${rate.service_name}${badge}</td>
+              <td style="padding: 8px; text-align: right; font-weight: bold;">$${rate.total_charge.toFixed(2)} ${rate.currency}</td>
+              <td style="padding: 8px; text-align: center;">${rate.delivery_days || '-'}</td>
+            </tr>
+          `;
+        });
+
+        html += '</tbody></table></div>';
+
+        if (data.errors && data.errors.length > 0) {
+          html += '<div style="margin-top: 10px; color: #f57c00; font-size: 0.85em;">⚠️ ' + data.errors.join('<br>') + '</div>';
+        }
+
+        ratesResult.innerHTML = html;
+      } else {
+        let errorHtml = '<div style="background: #ffebee; padding: 12px; border-radius: 6px; color: #c62828;">';
+        errorHtml += '<strong>❌ No rates available</strong>';
+        if (data.errors && data.errors.length > 0) {
+          errorHtml += '<ul style="margin: 8px 0 0 20px;">';
+          data.errors.forEach(err => {
+            errorHtml += `<li>${err}</li>`;
+          });
+          errorHtml += '</ul>';
+        }
+        errorHtml += '</div>';
+        ratesResult.innerHTML = errorHtml;
+      }
+    } catch (error) {
+      console.error('Error getting rates:', error);
+      ratesResult.innerHTML = '<div style="background: #ffebee; padding: 12px; border-radius: 6px; color: #c62828;">❌ Error fetching shipping rates</div>';
+    }
+  }
 </script>
 {% endblock %}
