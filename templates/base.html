@@ -47,7 +47,7 @@
     <div class="sidebar hidden md:flex w-64 flex-col justify-between flex-shrink-0 bg-bg-surface border-r border-border-color transition-colors duration-300">
       <div class="overflow-y-auto">
         <!-- Logo Area -->
-        <div class="p-6 pb-8">
+        <div class="p-6 pb-4">
           <div class="flex items-center gap-2.5 font-bold text-xl tracking-tight text-text-main">
             <div class="relative flex items-center justify-center w-9 h-9 rounded-xl text-white shadow-lg bg-secondary">
               <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
@@ -59,6 +59,64 @@
           <p class="text-[11px] font-medium mt-1.5 pl-1 uppercase tracking-wider text-text-muted opacity-70">
             Logistics Dashboard
           </p>
+        </div>
+
+        <!-- Current Batches / Quick Stats Area -->
+        <div class="px-4 pb-4">
+          <div class="sidebar-stats-card rounded-xl p-4 bg-accent/[0.08] border border-accent/20">
+            {% if sidebar_batches and sidebar_batches|length > 0 %}
+              <!-- Active Batches -->
+              <div class="text-[10px] font-bold uppercase tracking-widest text-text-muted opacity-70 mb-3">
+                Current batches:
+              </div>
+              <div class="space-y-2">
+                {% for batch in sidebar_batches[:3] %}
+                  <a href="{{ url_for('view_batch', batch_id=batch.id) }}"
+                     class="sidebar-batch-item flex items-center gap-2.5 group">
+                    <span class="batch-pulse-indicator"></span>
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center justify-between gap-2">
+                        <span class="text-sm font-semibold text-text-main group-hover:text-accent transition-colors truncate">
+                          Batch {{ batch.id }}
+                        </span>
+                        <span class="text-[11px] font-medium text-accent shrink-0">
+                          {{ batch.pkg_count or 0 }} pkg{{ 's' if (batch.pkg_count or 0) != 1 else '' }}
+                        </span>
+                      </div>
+                      <span class="text-[11px] text-text-muted opacity-70">{{ batch.carrier or 'No carrier' }}</span>
+                    </div>
+                  </a>
+                {% endfor %}
+              </div>
+              {% if sidebar_batches|length > 3 %}
+                <a href="{{ url_for('all_batches') }}" class="block mt-2.5 text-[11px] font-medium text-accent hover:underline">
+                  +{{ sidebar_batches|length - 3 }} more batch{{ 'es' if sidebar_batches|length - 3 != 1 else '' }}
+                </a>
+              {% endif %}
+            {% else %}
+              <!-- No Active Batches - Show Create Button -->
+              <div class="text-[10px] font-bold uppercase tracking-widest text-text-muted opacity-70 mb-3">
+                No active batches
+              </div>
+              <a href="{{ url_for('new_batch') }}"
+                 class="sidebar-create-batch-btn flex items-center justify-center gap-2 w-full py-2.5 px-3 rounded-lg bg-accent text-white text-sm font-semibold transition-all hover:bg-accent/90 hover:shadow-md">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M12 5v14M5 12h14"/>
+                </svg>
+                New Batch
+              </a>
+            {% endif %}
+          </div>
+
+          <!-- 30-Day Stats -->
+          <div class="mt-3 flex items-center gap-2 px-1">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-text-muted opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m7.5 4.27 9 5.15" /><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" /><path d="m3.3 7 8.7 5 8.7-5" /><path d="M12 22V12" />
+            </svg>
+            <span class="text-[12px] text-text-muted">
+              <span class="font-semibold text-text-main">{{ '{:,}'.format(scan_count_30d) }}</span> parcels shipped (30d)
+            </span>
+          </div>
         </div>
 
         <!-- Navigation -->

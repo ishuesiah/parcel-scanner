@@ -568,6 +568,94 @@ def invalidate_stats_cache():
     _stats_cache["data"] = None
     _stats_cache["expires_at"] = 0
 
+
+# ── Sidebar Data Cache (for current batches + 30-day stats) ──
+_sidebar_cache = {
+    "data": None,
+    "expires_at": 0
+}
+SIDEBAR_CACHE_TTL = 60  # 1 minute cache for sidebar data
+
+
+def get_sidebar_data():
+    """
+    Get sidebar data: active batches and 30-day scan count.
+    Uses a short cache to avoid DB hits on every page load.
+    """
+    # Check cache first
+    if _sidebar_cache["data"] and time.time() < _sidebar_cache["expires_at"]:
+        return _sidebar_cache["data"]
+
+    data = {
+        "active_batches": [],
+        "scan_count_30d": 0
+    }
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Get active batches (in_progress status)
+        cursor.execute("""
+            SELECT b.id, b.carrier, b.created_at,
+                   COUNT(s.id) as pkg_count
+            FROM batches b
+            LEFT JOIN scans s ON s.batch_id = b.id
+            WHERE b.status = 'in_progress' OR b.status IS NULL
+            GROUP BY b.id, b.carrier, b.created_at
+            ORDER BY b.created_at DESC
+            LIMIT 5
+        """)
+        data["active_batches"] = cursor.fetchall()
+
+        # Get scan count for last 30 days
+        cursor.execute("""
+            SELECT COUNT(*) as count
+            FROM scans
+            WHERE scan_date >= NOW() - INTERVAL '30 days'
+        """)
+        result = cursor.fetchone()
+        data["scan_count_30d"] = result['count'] if result else 0
+
+        cursor.close()
+        conn.close()
+
+        # Cache the result
+        _sidebar_cache["data"] = data
+        _sidebar_cache["expires_at"] = time.time() + SIDEBAR_CACHE_TTL
+
+    except Exception as e:
+        print(f"⚠️ Error fetching sidebar data: {e}")
+
+    return data
+
+
+def invalidate_sidebar_cache():
+    """Clear sidebar cache (call after batch/scan changes)."""
+    _sidebar_cache["data"] = None
+    _sidebar_cache["expires_at"] = 0
+
+
+@app.context_processor
+def inject_sidebar_data():
+    """
+    Inject sidebar data into all templates.
+    Provides active batches and 30-day scan statistics.
+    """
+    # Only fetch if user is logged in
+    if 'user' not in session:
+        return {
+            'sidebar_batches': [],
+            'scan_count_30d': 0
+        }
+
+    sidebar_data = get_sidebar_data()
+    return {
+        'sidebar_batches': sidebar_data.get('active_batches', []),
+        'scan_count_30d': sidebar_data.get('scan_count_30d', 0)
+    }
+
+
 # ── Shipments Cache System ──
 def init_shipments_cache():
     """
@@ -1735,6 +1823,9 @@ def new_batch():
         batch_id = result['id'] if result else None
         conn.commit()
 
+        # Invalidate sidebar cache on new batch
+        invalidate_sidebar_cache()
+
         session["batch_id"] = batch_id
 
         flash(f"Started new {carrier} batch (ID {batch_id}). Scan parcels below.", "success")
@@ -2424,8 +2515,9 @@ def _process_single_scan(code, is_ajax):
         conn.commit()
         cursor.close()
 
-        # Invalidate stats cache when new scan is recorded
+        # Invalidate caches when new scan is recorded
         invalidate_stats_cache()
+        invalidate_sidebar_cache()
 
         # ── Launch background thread for API calls (only if not duplicate) ──
         # Note: We still insert the scan record even if duplicate, but we don't
@@ -2774,6 +2866,9 @@ def record_batch():
         """, (pkg_count, tracking_csv, batch_id))
         conn.commit()
 
+        # Invalidate sidebar cache on batch status change
+        invalidate_sidebar_cache()
+
         # Keep session for immediate notification, but allow viewing from batches page
         flash(f"✓ Batch #{batch_id} marked as picked up ({pkg_count} parcels). Ready to notify customers.", "success")
         return redirect(url_for("index"))
@@ -2795,6 +2890,8 @@ def finish_batch():
     """
     batch_id = session.pop("batch_id", None)
     if batch_id:
+        # Invalidate sidebar cache when batch is finished
+        invalidate_sidebar_cache()
         flash(f"Batch #{batch_id} finished. You can now create a new batch.", "success")
     return redirect(url_for("index"))
 
