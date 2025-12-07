@@ -12,6 +12,7 @@ import os
 import requests
 import bcrypt
 import time
+import atexit
 
 # Load environment variables from .env file if it exists (for local development)
 try:
@@ -425,6 +426,115 @@ def get_canadapost_api():
     if _canadapost_api is None:
         _canadapost_api = CanadaPostAPI()
     return _canadapost_api
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Background Tracking Refresh Scheduler ──
+# ══════════════════════════════════════════════════════════════════════════════
+_scheduler = None
+_scheduler_initialized = False
+
+def init_background_scheduler():
+    """
+    Initialize background scheduler for automatic tracking updates.
+    Runs every 30 minutes to refresh stale tracking statuses.
+    """
+    global _scheduler, _scheduler_initialized
+
+    # Prevent multiple initializations (important with Flask debug reloader)
+    if _scheduler_initialized:
+        return
+
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        _scheduler = BackgroundScheduler(daemon=True)
+
+        # Schedule tracking refresh every 30 minutes
+        _scheduler.add_job(
+            func=background_tracking_refresh,
+            trigger=IntervalTrigger(minutes=30),
+            id='tracking_refresh',
+            name='Refresh stale tracking statuses',
+            replace_existing=True,
+            max_instances=1  # Prevent overlapping executions
+        )
+
+        _scheduler.start()
+        _scheduler_initialized = True
+        print("✅ Background tracking scheduler started (30 min interval)")
+
+        # Shut down scheduler when app stops
+        atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
+
+    except ImportError:
+        print("⚠️ APScheduler not installed - background tracking disabled")
+    except Exception as e:
+        print(f"⚠️ Failed to start background scheduler: {e}")
+
+
+def background_tracking_refresh():
+    """
+    Background job to refresh stale tracking statuses.
+    Finds non-delivered shipments with stale tracking and updates them.
+    """
+    print("\n🔄 [Background] Starting tracking status refresh...")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Find tracking numbers that:
+        # 1. Are not delivered
+        # 2. Have cache older than 4 hours OR no cache
+        # 3. Were shipped in the last 30 days (ignore old ones)
+        cursor.execute("""
+            SELECT DISTINCT sc.tracking_number, sc.carrier_code
+            FROM shipments_cache sc
+            LEFT JOIN tracking_status_cache tc ON sc.tracking_number = tc.tracking_number
+            WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '30 days'
+              AND (tc.status IS NULL
+                   OR tc.status NOT IN ('delivered', 'exception')
+                   OR tc.updated_at < NOW() - INTERVAL '4 hours')
+              AND sc.tracking_number IS NOT NULL
+              AND sc.tracking_number != ''
+            ORDER BY tc.updated_at ASC NULLS FIRST
+            LIMIT 100
+        """)
+
+        stale_shipments = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        if not stale_shipments:
+            print("✅ [Background] No stale tracking to refresh")
+            return
+
+        # Split by carrier
+        ups_tracking = [s['tracking_number'] for s in stale_shipments
+                       if s['tracking_number'].startswith('1Z')]
+        cp_tracking = [s['tracking_number'] for s in stale_shipments
+                      if 'canada' in (s.get('carrier_code') or '').lower()
+                      and not s['tracking_number'].startswith('1Z')]
+
+        print(f"📦 [Background] Found {len(stale_shipments)} stale: {len(ups_tracking)} UPS, {len(cp_tracking)} Canada Post")
+
+        # Update in batches (respecting API rate limits)
+        if ups_tracking:
+            print(f"🔄 [Background] Refreshing {min(len(ups_tracking), 30)} UPS tracking numbers...")
+            update_ups_tracking_cache(ups_tracking[:30], force_refresh=True)
+
+        if cp_tracking:
+            print(f"🔄 [Background] Refreshing {min(len(cp_tracking), 20)} Canada Post tracking numbers...")
+            update_canadapost_tracking_cache(cp_tracking[:20], force_refresh=True)
+
+        print("✅ [Background] Tracking refresh complete\n")
+
+    except Exception as e:
+        print(f"❌ [Background] Tracking refresh error: {e}")
+        import traceback
+        traceback.print_exc()
+
 
 # ── Orders Sync singleton ──
 _orders_sync = None
@@ -3992,8 +4102,28 @@ def check_shipments():
                     ship_datetime = datetime.strptime(ship_date, "%Y-%m-%d")
                     days_since = (datetime.now() - ship_datetime).days
                     if days_since >= 3:
-                        ups_status_text = "😴 Hasn't Moved"
-                        ups_status = "hasnt_moved"
+                        # Check if cache is stale before showing "hasn't moved"
+                        # If cache is > 4 hours old, the status might be outdated
+                        cache_is_stale = False
+                        if tracking_updated:
+                            tracking_updated_check = tracking_updated
+                            if hasattr(tracking_updated_check, 'tzinfo') and tracking_updated_check.tzinfo is not None:
+                                tracking_updated_check = tracking_updated_check.replace(tzinfo=None)
+                            cache_age_hours = (datetime.now() - tracking_updated_check).total_seconds() / 3600
+                            cache_is_stale = cache_age_hours > 4
+                        else:
+                            cache_is_stale = True  # No cache timestamp = definitely stale
+
+                        if cache_is_stale:
+                            # Cache is stale - show checking status and ensure refresh is queued
+                            ups_status_text = "🔄 Checking Status..."
+                            ups_status = "checking"
+                            if tracking_number not in tracking_to_refresh:
+                                tracking_to_refresh.append(tracking_number)
+                        else:
+                            # Cache is fresh - trust the "hasn't moved" status
+                            ups_status_text = "😴 Hasn't Moved"
+                            ups_status = "hasnt_moved"
                     else:
                         ups_status_text = "📦 Label Created"
                 except:
@@ -5939,6 +6069,15 @@ def api_cancel_order(order_number):
         except Exception:
             pass
         conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Initialize Background Scheduler ──
+# ══════════════════════════════════════════════════════════════════════════════
+# Start the background scheduler for automatic tracking updates.
+# This runs whether the app is started via gunicorn or directly with python.
+# The scheduler handles its own duplicate prevention.
+init_background_scheduler()
 
 
 if __name__ == "__main__":

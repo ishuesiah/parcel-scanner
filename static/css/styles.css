@@ -1094,6 +1094,7 @@ td input[type="checkbox"] {
 /* Shipment-specific statuses */
 .status-almost_there   { background-color: #d4edda; color: #155724; font-weight: 600; }
 .status-hasnt_moved    { background-color: #fff3cd; color: #856404; }
+.status-checking       { background-color: #e3f2fd; color: #1976d2; animation: pulse 2s infinite; }
 .status-non_ups        { background-color: #f5f5f5; color: #999; }
 .status-not_printed    { background-color: #e3f2fd; color: #1976d2; }
 
