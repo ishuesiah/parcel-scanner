@@ -90,7 +90,7 @@ DEFAULT_PACKING_SLIP_HTML = '''<div class="packing-slip">
     <tbody>
       {{#each line_items}}
       <tr>
-        <td class="qty">{{this.quantity}}</td>
+        <td class="qty">{{this.quantity_circled}}</td>
         <td class="item">
           {{this.title}}
           {{#if this.variant_title}}<br><small>{{this.variant_title}}</small>{{/if}}
@@ -250,6 +250,20 @@ body {
   width: 30px;
   text-align: center;
   font-weight: 600;
+}
+
+/* Circled quantity for items with qty > 1 */
+.qty-circled {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #d32f2f;
+  border-radius: 50%;
+  color: #d32f2f;
+  font-weight: 700;
+  font-size: 10px;
 }
 
 .items .sku {

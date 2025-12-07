@@ -5328,6 +5328,7 @@ def api_packing_slip_preview():
         "order_number": "12345",
         "order_date": datetime.now().strftime("%B %d, %Y"),
         "shipping_name": "Jane Smith",
+        "shipping_first_name": "Jane",
         "shipping_address1": "123 Main Street",
         "shipping_address2": "Apt 4B",
         "shipping_city": "Vancouver",
@@ -5335,6 +5336,7 @@ def api_packing_slip_preview():
         "shipping_zip": "V6B 1A1",
         "shipping_country": "Canada",
         "billing_name": "Jane Smith",
+        "billing_first_name": "Jane",
         "billing_address1": "123 Main Street",
         "billing_address2": "",
         "billing_city": "Vancouver",
@@ -5397,7 +5399,8 @@ PACKING_SLIP_VARIABLES = {
         ("{{tracking_number}}", "Tracking number"),
     ],
     "Shipping Address": [
-        ("{{shipping_name}}", "Recipient name"),
+        ("{{shipping_name}}", "Recipient full name"),
+        ("{{shipping_first_name}}", "Recipient first name only"),
         ("{{shipping_address1}}", "Address line 1"),
         ("{{shipping_address2}}", "Address line 2"),
         ("{{shipping_city}}", "City"),
@@ -5406,7 +5409,8 @@ PACKING_SLIP_VARIABLES = {
         ("{{shipping_country}}", "Country"),
     ],
     "Billing Address": [
-        ("{{billing_name}}", "Billing name"),
+        ("{{billing_name}}", "Billing full name"),
+        ("{{billing_first_name}}", "Billing first name only"),
         ("{{billing_address1}}", "Billing address 1"),
         ("{{billing_address2}}", "Billing address 2"),
         ("{{billing_city}}", "Billing city"),
@@ -5415,6 +5419,7 @@ PACKING_SLIP_VARIABLES = {
     ],
     "Line Items (use in {{#each line_items}})": [
         ("{{this.quantity}}", "Item quantity"),
+        ("{{this.quantity_circled}}", "Quantity circled if > 1"),
         ("{{this.title}}", "Product title"),
         ("{{this.variant_title}}", "Variant title"),
         ("{{this.sku}}", "Item SKU"),
@@ -5423,6 +5428,7 @@ PACKING_SLIP_VARIABLES = {
     "Conditionals": [
         ("{{#if variable}}...{{/if}}", "Show content if variable exists"),
         ("{{#each array}}...{{/each}}", "Loop through array items"),
+        ("{{#if this.quantity_gt_1}}...{{/if}}", "Show if quantity > 1"),
     ],
 }
 

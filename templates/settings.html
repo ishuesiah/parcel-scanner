@@ -576,6 +576,20 @@
     // Simple Handlebars-like template engine
     let result = html;
 
+    // Pre-process line_items to add computed properties (quantity_circled, quantity_gt_1)
+    if (data.line_items && Array.isArray(data.line_items)) {
+      data.line_items = data.line_items.map(item => {
+        const qty = parseInt(item.quantity) || 1;
+        return {
+          ...item,
+          quantity_gt_1: qty > 1,
+          quantity_circled: qty > 1
+            ? `<span class="qty-circled">${qty}</span>`
+            : String(qty)
+        };
+      });
+    }
+
     // Handle {{#each array}}...{{/each}}
     result = result.replace(/\{\{#each\s+(\w+)\}\}([\s\S]*?)\{\{\/each\}\}/g, function(match, arrayName, content) {
       const arr = data[arrayName];
