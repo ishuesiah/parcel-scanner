@@ -5606,7 +5606,9 @@ def api_get_order_details(order_number):
         shipping_address = {}
         if order.get('shipping_address'):
             try:
-                shipping_address = json.loads(order['shipping_address'])
+                parsed = json.loads(order['shipping_address'])
+                # Ensure we always have a dict (json.loads could return None for "null")
+                shipping_address = parsed if isinstance(parsed, dict) else {}
             except:
                 shipping_address = {"raw": order['shipping_address']}
 

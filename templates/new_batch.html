@@ -259,9 +259,10 @@
         }
       }
 
-      // Update status (cell 6) - change from "Processing" to "Complete"
-      if (cells[6] && scan.status === 'Complete') {
-        cells[6].textContent = scan.status;
+      // Update status (cell 7) - change from "Processing" to "Complete"
+      // Note: cell indexes are 0=checkbox, 1=tracking, 2=carrier, 3=order#, 4=customer, 5=email, 6=scan time, 7=status
+      if (cells[7] && scan.status === 'Complete') {
+        cells[7].textContent = scan.status;
       }
     }
 
