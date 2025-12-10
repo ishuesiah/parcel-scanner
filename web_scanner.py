@@ -712,6 +712,84 @@ def init_tracking_groups():
         print(f"❌ Error initializing tracking groups: {e}")
 
 
+def init_carrier_accounts():
+    """
+    Initialize carrier_accounts and shipping_labels tables for direct label generation.
+    """
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Create carrier_accounts table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS carrier_accounts (
+                id SERIAL PRIMARY KEY,
+                carrier_code TEXT NOT NULL UNIQUE,
+                carrier_name TEXT NOT NULL,
+                client_id TEXT,
+                client_secret TEXT,
+                account_number TEXT,
+                extra_config TEXT,
+                shipper_name TEXT,
+                shipper_phone TEXT,
+                shipper_address1 TEXT,
+                shipper_address2 TEXT,
+                shipper_city TEXT,
+                shipper_province TEXT,
+                shipper_postal_code TEXT,
+                shipper_country TEXT DEFAULT 'CA',
+                enabled INTEGER DEFAULT 1,
+                test_mode INTEGER DEFAULT 0,
+                last_tested_at TIMESTAMP,
+                last_error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_carrier_accounts_code ON carrier_accounts(carrier_code)")
+
+        # Create shipping_labels table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS shipping_labels (
+                id SERIAL PRIMARY KEY,
+                order_id INTEGER,
+                order_number TEXT NOT NULL,
+                carrier_code TEXT NOT NULL,
+                service_code TEXT,
+                service_name TEXT,
+                tracking_number TEXT,
+                label_format TEXT DEFAULT 'PDF',
+                label_data BYTEA,
+                label_url TEXT,
+                ship_to_name TEXT,
+                ship_to_address TEXT,
+                ship_to_country TEXT,
+                customs_data TEXT,
+                shipping_cost REAL,
+                currency TEXT DEFAULT 'CAD',
+                weight_kg REAL,
+                length_cm REAL,
+                width_cm REAL,
+                height_cm REAL,
+                status TEXT DEFAULT 'created',
+                voided_at TIMESTAMP,
+                void_reason TEXT,
+                carrier_response TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_by TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipping_labels_order ON shipping_labels(order_number)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipping_labels_tracking ON shipping_labels(tracking_number)")
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✓ Carrier accounts tables initialized")
+    except Exception as e:
+        print(f"❌ Error initializing carrier accounts: {e}")
+
+
 def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
     """
     Update UPS tracking cache for given tracking numbers.
@@ -943,6 +1021,7 @@ def update_canadapost_tracking_cache(tracking_numbers, force_refresh=False):
 init_shipments_cache()
 init_tracking_status_cache()
 init_tracking_groups()
+init_carrier_accounts()
 init_orders_tables(get_db_connection)
 normalize_table_collations()
 
@@ -5533,6 +5612,576 @@ PACKING_SLIP_VARIABLES = {
 def api_packing_slip_variables():
     """Get available template variables."""
     return jsonify({"success": True, "variables": PACKING_SLIP_VARIABLES})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Carrier Accounts API - For Direct Label Generation
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/carrier-accounts", methods=["GET"])
+def api_get_carrier_accounts():
+    """Get all carrier accounts (credentials masked)."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, carrier_code, carrier_name, client_id, account_number,
+                   shipper_name, shipper_phone, shipper_address1, shipper_address2,
+                   shipper_city, shipper_province, shipper_postal_code, shipper_country,
+                   enabled, test_mode, last_tested_at, last_error, extra_config
+            FROM carrier_accounts
+            ORDER BY carrier_name
+        """)
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        accounts = []
+        for row in rows:
+            accounts.append({
+                "id": row["id"],
+                "carrier_code": row["carrier_code"],
+                "carrier_name": row["carrier_name"],
+                "client_id": row["client_id"] or "",
+                "client_id_set": bool(row["client_id"]),
+                "client_secret_set": False,  # Never expose the secret
+                "account_number": row["account_number"] or "",
+                "shipper_name": row["shipper_name"] or "",
+                "shipper_phone": row["shipper_phone"] or "",
+                "shipper_address1": row["shipper_address1"] or "",
+                "shipper_address2": row["shipper_address2"] or "",
+                "shipper_city": row["shipper_city"] or "",
+                "shipper_province": row["shipper_province"] or "",
+                "shipper_postal_code": row["shipper_postal_code"] or "",
+                "shipper_country": row["shipper_country"] or "CA",
+                "enabled": bool(row["enabled"]),
+                "test_mode": bool(row["test_mode"]),
+                "last_tested_at": row["last_tested_at"].isoformat() if row["last_tested_at"] else None,
+                "last_error": row["last_error"],
+                "extra_config": json.loads(row["extra_config"]) if row["extra_config"] else {}
+            })
+
+        return jsonify({"success": True, "accounts": accounts})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/carrier-accounts", methods=["POST"])
+def api_save_carrier_account():
+    """Save or update a carrier account."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "No data provided"}), 400
+
+        carrier_code = data.get("carrier_code")
+        if not carrier_code:
+            return jsonify({"success": False, "error": "carrier_code is required"}), 400
+
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Check if account exists
+        cursor.execute("SELECT id, client_secret FROM carrier_accounts WHERE carrier_code = %s", (carrier_code,))
+        existing = cursor.fetchone()
+
+        # Build field values
+        carrier_name = data.get("carrier_name") or carrier_code.upper()
+        client_id = data.get("client_id") or ""
+        client_secret = data.get("client_secret")  # Only update if provided
+        account_number = data.get("account_number") or ""
+        extra_config = json.dumps(data.get("extra_config", {})) if data.get("extra_config") else None
+
+        shipper_name = data.get("shipper_name") or ""
+        shipper_phone = data.get("shipper_phone") or ""
+        shipper_address1 = data.get("shipper_address1") or ""
+        shipper_address2 = data.get("shipper_address2") or ""
+        shipper_city = data.get("shipper_city") or ""
+        shipper_province = data.get("shipper_province") or ""
+        shipper_postal_code = data.get("shipper_postal_code") or ""
+        shipper_country = data.get("shipper_country") or "CA"
+
+        enabled = 1 if data.get("enabled", True) else 0
+        test_mode = 1 if data.get("test_mode", False) else 0
+
+        if existing:
+            # Update existing - preserve secret if not provided
+            if client_secret is None:
+                client_secret = existing["client_secret"]
+
+            cursor.execute("""
+                UPDATE carrier_accounts SET
+                    carrier_name = %s,
+                    client_id = %s,
+                    client_secret = %s,
+                    account_number = %s,
+                    extra_config = %s,
+                    shipper_name = %s,
+                    shipper_phone = %s,
+                    shipper_address1 = %s,
+                    shipper_address2 = %s,
+                    shipper_city = %s,
+                    shipper_province = %s,
+                    shipper_postal_code = %s,
+                    shipper_country = %s,
+                    enabled = %s,
+                    test_mode = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE carrier_code = %s
+            """, (
+                carrier_name, client_id, client_secret, account_number, extra_config,
+                shipper_name, shipper_phone, shipper_address1, shipper_address2,
+                shipper_city, shipper_province, shipper_postal_code, shipper_country,
+                enabled, test_mode, carrier_code
+            ))
+            account_id = existing["id"]
+        else:
+            # Insert new
+            cursor.execute("""
+                INSERT INTO carrier_accounts (
+                    carrier_code, carrier_name, client_id, client_secret, account_number, extra_config,
+                    shipper_name, shipper_phone, shipper_address1, shipper_address2,
+                    shipper_city, shipper_province, shipper_postal_code, shipper_country,
+                    enabled, test_mode
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                carrier_code, carrier_name, client_id, client_secret or "", account_number, extra_config,
+                shipper_name, shipper_phone, shipper_address1, shipper_address2,
+                shipper_city, shipper_province, shipper_postal_code, shipper_country,
+                enabled, test_mode
+            ))
+            account_id = cursor.fetchone()["id"]
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"success": True, "id": account_id, "carrier_code": carrier_code})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/carrier-accounts/<carrier_code>/test", methods=["POST"])
+def api_test_carrier_account(carrier_code):
+    """Test carrier account credentials."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT client_id, client_secret, account_number
+            FROM carrier_accounts
+            WHERE carrier_code = %s
+        """, (carrier_code,))
+        account = cursor.fetchone()
+
+        if not account:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Carrier account not found"}), 404
+
+        test_result = {"success": False, "error": "Unknown carrier"}
+
+        if carrier_code == "ups":
+            # Test UPS OAuth credentials
+            test_result = test_ups_credentials(
+                account["client_id"],
+                account["client_secret"],
+                account["account_number"]
+            )
+        elif carrier_code == "canada_post":
+            # Test Canada Post credentials
+            test_result = test_canada_post_credentials(
+                account["client_id"],
+                account["client_secret"],
+                account["account_number"]
+            )
+
+        # Update last_tested_at and last_error
+        if test_result["success"]:
+            cursor.execute("""
+                UPDATE carrier_accounts
+                SET last_tested_at = CURRENT_TIMESTAMP, last_error = NULL
+                WHERE carrier_code = %s
+            """, (carrier_code,))
+        else:
+            cursor.execute("""
+                UPDATE carrier_accounts
+                SET last_tested_at = CURRENT_TIMESTAMP, last_error = %s
+                WHERE carrier_code = %s
+            """, (test_result.get("error", "Unknown error"), carrier_code))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify(test_result)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/carrier-accounts/<carrier_code>", methods=["DELETE"])
+def api_delete_carrier_account(carrier_code):
+    """Delete a carrier account."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM carrier_accounts WHERE carrier_code = %s", (carrier_code,))
+        deleted = cursor.rowcount
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        if deleted:
+            return jsonify({"success": True, "deleted": carrier_code})
+        else:
+            return jsonify({"success": False, "error": "Account not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def test_ups_credentials(client_id, client_secret, account_number):
+    """Test UPS API credentials by getting an OAuth token."""
+    import base64
+
+    if not client_id or not client_secret:
+        return {"success": False, "error": "Client ID and Secret are required"}
+
+    try:
+        credentials = f"{client_id}:{client_secret}"
+        encoded = base64.b64encode(credentials.encode()).decode()
+
+        response = requests.post(
+            "https://onlinetools.ups.com/security/v1/oauth/token",
+            data={"grant_type": "client_credentials"},
+            headers={
+                "Authorization": f"Basic {encoded}",
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            timeout=15
+        )
+
+        if response.status_code == 200:
+            token_data = response.json()
+            if token_data.get("access_token"):
+                return {"success": True, "message": "UPS credentials valid! OAuth token obtained."}
+            else:
+                return {"success": False, "error": "No access token in response"}
+        else:
+            error_msg = response.text[:200] if response.text else f"HTTP {response.status_code}"
+            return {"success": False, "error": f"Authentication failed: {error_msg}"}
+    except requests.exceptions.Timeout:
+        return {"success": False, "error": "Connection timed out"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def test_canada_post_credentials(client_id, client_secret, account_number):
+    """Test Canada Post API credentials."""
+    import base64
+
+    if not client_id or not client_secret:
+        return {"success": False, "error": "Username and Password are required"}
+
+    try:
+        # Canada Post uses Basic auth with username:password
+        credentials = f"{client_id}:{client_secret}"
+        encoded = base64.b64encode(credentials.encode()).decode()
+
+        # Test by getting customer info
+        response = requests.get(
+            f"https://soa-gw.canadapost.ca/rs/ship/customer/{account_number}",
+            headers={
+                "Authorization": f"Basic {encoded}",
+                "Accept": "application/vnd.cpc.ship.rate-v4+xml"
+            },
+            timeout=15
+        )
+
+        if response.status_code == 200:
+            return {"success": True, "message": "Canada Post credentials valid!"}
+        elif response.status_code == 401:
+            return {"success": False, "error": "Invalid credentials"}
+        elif response.status_code == 404:
+            return {"success": True, "message": "Credentials valid (account not found is expected for rate-only)"}
+        else:
+            return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+    except requests.exceptions.Timeout:
+        return {"success": False, "error": "Connection timed out"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Label Generation API - Create shipping labels directly from UPS/Canada Post
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/orders/<order_number>/create-label", methods=["POST"])
+def api_create_label(order_number):
+    """
+    Create a shipping label for an order.
+
+    POST body:
+    {
+        "carrier": "ups" or "canada_post",
+        "service_code": "11" (UPS Standard) or other service code,
+        "packages": [{
+            "weight_kg": 0.5,
+            "length_cm": 25,
+            "width_cm": 18,
+            "height_cm": 5
+        }],
+        "customs_items": [...] (optional, for international)
+    }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "No data provided"}), 400
+
+        carrier = data.get("carrier", "ups")
+        service_code = data.get("service_code", "11")
+        packages = data.get("packages", [{"weight_kg": 0.5, "length_cm": 25, "width_cm": 18, "height_cm": 5}])
+        customs_items = data.get("customs_items", [])
+
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Get order details
+        cursor.execute("""
+            SELECT id, order_number, customer_name, customer_email, customer_phone,
+                   shipping_address, fulfillment_status
+            FROM orders
+            WHERE order_number = %s
+        """, (order_number,))
+        order = cursor.fetchone()
+
+        if not order:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Order not found"}), 404
+
+        # Parse shipping address
+        ship_address = {}
+        if order["shipping_address"]:
+            try:
+                ship_address = json.loads(order["shipping_address"])
+            except:
+                pass
+
+        # Get carrier account settings
+        cursor.execute("""
+            SELECT client_id, client_secret, account_number,
+                   shipper_name, shipper_phone, shipper_address1, shipper_address2,
+                   shipper_city, shipper_province, shipper_postal_code, shipper_country
+            FROM carrier_accounts
+            WHERE carrier_code = %s AND enabled = 1
+        """, (carrier,))
+        carrier_account = cursor.fetchone()
+
+        if not carrier_account:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": f"Carrier {carrier} not configured. Please set up in Settings."}), 400
+
+        # Build shipper info from carrier account
+        shipper = {
+            "name": carrier_account["shipper_name"] or "Hemlock & Oak Stationery Inc.",
+            "attention_name": carrier_account["shipper_name"] or "Shipping Dept",
+            "phone": carrier_account["shipper_phone"] or "",
+            "address_line1": carrier_account["shipper_address1"] or "",
+            "address_line2": carrier_account["shipper_address2"] or "",
+            "city": carrier_account["shipper_city"] or "",
+            "state": carrier_account["shipper_province"] or "BC",
+            "postal_code": carrier_account["shipper_postal_code"] or "",
+            "country_code": carrier_account["shipper_country"] or "CA"
+        }
+
+        # Build ship_to info from order
+        ship_to = {
+            "name": ship_address.get("name") or order["customer_name"] or "Customer",
+            "attention_name": ship_address.get("name") or order["customer_name"] or "Customer",
+            "phone": ship_address.get("phone") or order["customer_phone"] or "",
+            "address_line1": ship_address.get("address1") or "",
+            "address_line2": ship_address.get("address2") or "",
+            "city": ship_address.get("city") or "",
+            "state": ship_address.get("province_code") or ship_address.get("province") or "",
+            "postal_code": ship_address.get("zip") or "",
+            "country_code": ship_address.get("country_code") or "CA"
+        }
+
+        result = {"success": False, "error": "Unknown carrier"}
+
+        if carrier == "ups":
+            # Import and use UPS API with carrier account credentials
+            from ups_api import UPSShippingAPI
+
+            # Create a custom UPS API instance with stored credentials
+            ups = UPSShippingAPI()
+            ups.client_id = carrier_account["client_id"]
+            ups.client_secret = carrier_account["client_secret"]
+            ups.account_number = carrier_account["account_number"]
+            ups.enabled = True
+            ups.rating_enabled = True
+            ups._access_token = None  # Force new token
+
+            # Create label
+            result = ups.create_label(
+                shipper=shipper,
+                ship_to=ship_to,
+                packages=packages,
+                service_code=service_code,
+                customs_items=customs_items if customs_items else None,
+                reference1=order_number
+            )
+
+        elif carrier == "canada_post":
+            # Canada Post implementation would go here
+            result = {"success": False, "error": "Canada Post label creation not yet implemented"}
+
+        if result.get("success"):
+            # Store the label in the database
+            import base64
+
+            label_data = None
+            if result.get("label_image"):
+                try:
+                    label_data = base64.b64decode(result["label_image"])
+                except:
+                    pass
+
+            cursor.execute("""
+                INSERT INTO shipping_labels (
+                    order_id, order_number, carrier_code, service_code, service_name,
+                    tracking_number, label_format, label_data,
+                    ship_to_name, ship_to_address, ship_to_country,
+                    customs_data, shipping_cost, currency,
+                    weight_kg, length_cm, width_cm, height_cm,
+                    status, carrier_response
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s
+                )
+                RETURNING id
+            """, (
+                order["id"], order_number, carrier, service_code, result.get("service_name", ""),
+                result.get("tracking_number", ""), result.get("label_format", "GIF"), label_data,
+                ship_to.get("name", ""), json.dumps(ship_to), ship_to.get("country_code", ""),
+                json.dumps(customs_items) if customs_items else None, result.get("total_charge", 0), result.get("currency", "CAD"),
+                packages[0].get("weight_kg") if packages else None,
+                packages[0].get("length_cm") if packages else None,
+                packages[0].get("width_cm") if packages else None,
+                packages[0].get("height_cm") if packages else None,
+                "created", json.dumps(result.get("raw_response", {}))
+            ))
+            label_id = cursor.fetchone()["id"]
+
+            # Update order with tracking number if not already set
+            cursor.execute("""
+                UPDATE orders
+                SET tracking_number = COALESCE(tracking_number, %s),
+                    fulfillment_status = 'fulfilled',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE order_number = %s AND (tracking_number IS NULL OR tracking_number = '')
+            """, (result.get("tracking_number", ""), order_number))
+
+            conn.commit()
+
+            cursor.close()
+            conn.close()
+
+            return jsonify({
+                "success": True,
+                "label_id": label_id,
+                "tracking_number": result.get("tracking_number"),
+                "label_image": result.get("label_image"),
+                "label_format": result.get("label_format", "GIF"),
+                "service_name": result.get("service_name"),
+                "total_charge": result.get("total_charge"),
+                "currency": result.get("currency")
+            })
+        else:
+            cursor.close()
+            conn.close()
+            return jsonify(result), 400
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/labels/<int:label_id>/download")
+def api_download_label(label_id):
+    """Download a shipping label as PDF/image."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT label_data, label_format, tracking_number, order_number
+            FROM shipping_labels
+            WHERE id = %s
+        """, (label_id,))
+        label = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        if not label or not label["label_data"]:
+            return jsonify({"success": False, "error": "Label not found"}), 404
+
+        label_format = label["label_format"] or "GIF"
+        content_type = "image/gif" if label_format == "GIF" else "application/pdf"
+        filename = f"label_{label['order_number']}_{label['tracking_number']}.{label_format.lower()}"
+
+        from flask import Response
+        return Response(
+            label["label_data"],
+            mimetype=content_type,
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/orders/<order_number>/labels")
+def api_get_order_labels(order_number):
+    """Get all labels for an order."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, carrier_code, service_code, service_name, tracking_number,
+                   label_format, shipping_cost, currency, status, created_at
+            FROM shipping_labels
+            WHERE order_number = %s
+            ORDER BY created_at DESC
+        """, (order_number,))
+        labels = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "labels": [dict(row) for row in labels]
+        })
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/api/orders/sync", methods=["POST"])

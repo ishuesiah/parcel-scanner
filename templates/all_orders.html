@@ -391,6 +391,7 @@
           <div style="display: flex; gap: 8px; flex-wrap: wrap;">
             <button onclick="printPackingSlip()" style="padding: 10px 20px; background: #534bc4; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">Print Packing Slip</button>
             <button id="customsFormBtn" onclick="printCustomsForm()" style="padding: 10px 20px; background: #2e7d32; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; display: none;">Print Customs Form</button>
+            <button id="createLabelBtn" onclick="toggleLabelPanel()" style="padding: 10px 20px; background: #ff9800; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">Create Label</button>
           </div>
           <button onclick="closeOrderModal()" style="padding: 10px 20px; background: #666; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">Close</button>
         </div>
@@ -798,6 +799,219 @@
     window.open('/api/orders/' + currentViewingOrderNumber + '/customs-form', '_blank');
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Label Creation Functions
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  let labelPanelVisible = false;
+
+  function toggleLabelPanel() {
+    if (!currentViewingOrderNumber) {
+      alert('No order selected');
+      return;
+    }
+
+    const existingPanel = document.getElementById('labelCreationPanel');
+    if (existingPanel) {
+      existingPanel.remove();
+      labelPanelVisible = false;
+      document.getElementById('createLabelBtn').textContent = 'Create Label';
+      return;
+    }
+
+    labelPanelVisible = true;
+    document.getElementById('createLabelBtn').textContent = 'Hide Label Panel';
+
+    // Create and insert the label panel
+    const panelHtml = `
+      <div id="labelCreationPanel" style="background: #fff3e0; border: 2px solid #ff9800; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+        <h4 style="margin: 0 0 16px 0; color: #e65100; display: flex; justify-content: space-between; align-items: center;">
+          <span>Create Shipping Label</span>
+          <span id="labelStatus" style="font-size: 0.85rem; font-weight: normal;"></span>
+        </h4>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 16px;">
+          <div>
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #666; margin-bottom: 4px;">Carrier</label>
+            <select id="labelCarrier" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px;">
+              <option value="ups">UPS</option>
+              <option value="canada_post" disabled>Canada Post (coming soon)</option>
+            </select>
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #666; margin-bottom: 4px;">Service</label>
+            <select id="labelService" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px;">
+              <option value="11">UPS Standard</option>
+              <option value="03">UPS Ground</option>
+              <option value="08">UPS Worldwide Expedited</option>
+              <option value="07">UPS Worldwide Express</option>
+              <option value="65">UPS Worldwide Saver</option>
+              <option value="12">UPS 3 Day Select</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;">
+          <div>
+            <label style="display: block; font-size: 0.8rem; color: #666; margin-bottom: 4px;">Weight (kg)</label>
+            <input type="number" id="labelWeight" value="0.5" step="0.1" min="0.1" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.8rem; color: #666; margin-bottom: 4px;">Length (cm)</label>
+            <input type="number" id="labelLength" value="25" min="1" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.8rem; color: #666; margin-bottom: 4px;">Width (cm)</label>
+            <input type="number" id="labelWidth" value="18" min="1" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.8rem; color: #666; margin-bottom: 4px;">Height (cm)</label>
+            <input type="number" id="labelHeight" value="5" min="1" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;">
+          </div>
+        </div>
+
+        <div id="labelResult" style="display: none; margin-bottom: 16px;"></div>
+
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <button onclick="createShippingLabel()" id="createLabelSubmit" style="padding: 10px 24px; background: #ff9800; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">
+            Generate Label
+          </button>
+          <span id="labelCost" style="font-size: 0.9rem; color: #666;"></span>
+        </div>
+      </div>
+    `;
+
+    const modalContent = document.getElementById('orderModalContent');
+    modalContent.insertAdjacentHTML('afterbegin', panelHtml);
+  }
+
+  async function createShippingLabel() {
+    if (!currentViewingOrderNumber) {
+      alert('No order selected');
+      return;
+    }
+
+    const carrier = document.getElementById('labelCarrier').value;
+    const serviceCode = document.getElementById('labelService').value;
+    const weight = parseFloat(document.getElementById('labelWeight').value) || 0.5;
+    const length = parseInt(document.getElementById('labelLength').value) || 25;
+    const width = parseInt(document.getElementById('labelWidth').value) || 18;
+    const height = parseInt(document.getElementById('labelHeight').value) || 5;
+
+    const submitBtn = document.getElementById('createLabelSubmit');
+    const resultDiv = document.getElementById('labelResult');
+    const statusSpan = document.getElementById('labelStatus');
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Creating...';
+    statusSpan.textContent = 'Connecting to ' + carrier.toUpperCase() + '...';
+    statusSpan.style.color = '#1976d2';
+
+    // Gather customs info from the customs section if present
+    const customsItems = [];
+    const customsSection = document.querySelector('.customs-section');
+    if (customsSection) {
+      customsSection.querySelectorAll('.customs-item-row').forEach(row => {
+        customsItems.push({
+          description: row.querySelector('[name="customs_description"]')?.value || '',
+          hs_code: row.querySelector('[name="customs_hs_code"]')?.value || '',
+          country_of_origin: row.querySelector('[name="customs_origin"]')?.value || 'CA',
+          quantity: parseInt(row.querySelector('[name="customs_quantity"]')?.value) || 1,
+          value: parseFloat(row.querySelector('[name="customs_value"]')?.value) || 0,
+          weight_kg: parseFloat(row.querySelector('[name="customs_weight"]')?.value) || 0.1
+        });
+      });
+    }
+
+    try {
+      const response = await fetch(`/api/orders/${currentViewingOrderNumber}/create-label`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          carrier: carrier,
+          service_code: serviceCode,
+          packages: [{
+            weight_kg: weight,
+            length_cm: length,
+            width_cm: width,
+            height_cm: height
+          }],
+          customs_items: customsItems.length > 0 ? customsItems : null
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        statusSpan.textContent = 'Label created!';
+        statusSpan.style.color = '#2e7d32';
+
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = `
+          <div style="background: #e8f5e9; border: 1px solid #81c784; border-radius: 6px; padding: 16px;">
+            <p style="margin: 0 0 8px 0; font-weight: 600; color: #2e7d32;">Label Created Successfully!</p>
+            <p style="margin: 0 0 8px 0;"><strong>Tracking:</strong> ${data.tracking_number}</p>
+            <p style="margin: 0 0 8px 0;"><strong>Service:</strong> ${data.service_name}</p>
+            <p style="margin: 0 0 12px 0;"><strong>Cost:</strong> $${data.total_charge?.toFixed(2) || '0.00'} ${data.currency || 'CAD'}</p>
+            <div style="display: flex; gap: 12px;">
+              <a href="/api/labels/${data.label_id}/download" target="_blank" style="padding: 8px 16px; background: #2e7d32; color: white; text-decoration: none; border-radius: 6px; font-weight: 500;">
+                Download Label
+              </a>
+              ${data.label_image ? `
+                <button onclick="printLabelImage('${data.label_image}')" style="padding: 8px 16px; background: #1976d2; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">
+                  Print Label
+                </button>
+              ` : ''}
+            </div>
+          </div>
+        `;
+
+        document.getElementById('labelCost').textContent = `$${data.total_charge?.toFixed(2) || '0.00'} ${data.currency || 'CAD'}`;
+      } else {
+        statusSpan.textContent = 'Failed';
+        statusSpan.style.color = '#c62828';
+
+        resultDiv.style.display = 'block';
+        resultDiv.innerHTML = `
+          <div style="background: #ffebee; border: 1px solid #ef9a9a; border-radius: 6px; padding: 16px;">
+            <p style="margin: 0; color: #c62828;"><strong>Error:</strong> ${data.error || 'Unknown error'}</p>
+          </div>
+        `;
+      }
+    } catch (err) {
+      statusSpan.textContent = 'Error';
+      statusSpan.style.color = '#c62828';
+      resultDiv.style.display = 'block';
+      resultDiv.innerHTML = `
+        <div style="background: #ffebee; border: 1px solid #ef9a9a; border-radius: 6px; padding: 16px;">
+          <p style="margin: 0; color: #c62828;"><strong>Error:</strong> ${err.message}</p>
+        </div>
+      `;
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Generate Label';
+    }
+  }
+
+  function printLabelImage(base64Image) {
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(`
+      <html>
+        <head><title>Shipping Label</title></head>
+        <body style="margin: 0; padding: 20px; display: flex; justify-content: center;">
+          <img src="data:image/gif;base64,${base64Image}" style="max-width: 4in; max-height: 6in;">
+          <script>
+            window.onload = function() {
+              window.print();
+            };
+          <\/script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Customs Section Functions
   function toggleCustomsSection() {
     const section = document.getElementById('customsSection');
