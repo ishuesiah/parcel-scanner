@@ -1693,7 +1693,7 @@ def index():
             scans=scans,
             shop_url=SHOP_URL,
             version=__version__,
-            active_page="new_batch"
+            active_page="current_batch"
         )
     finally:
         try:
