@@ -34,10 +34,13 @@
         </a>
       </div>
 
-      <form action="{{ url_for('all_orders') }}" method="get" class="search-box">
+      <form action="{{ url_for('all_orders') }}" method="get" class="search-box" style="display: flex; gap: 0;">
         <input type="hidden" name="filter" value="{{ fulfillment_filter }}">
         <input type="text" name="q" placeholder="Search order #, name, email, tracking..."
-               value="{{ search_query }}">
+               value="{{ search_query }}" style="border-radius: 6px 0 0 6px;">
+        <button type="submit" class="btn-search" style="border-radius: 0 6px 6px 0; padding: 8px 16px; background: #534bc4; color: white; border: none; cursor: pointer; font-weight: 500;">
+          Search
+        </button>
       </form>
 
       <button type="button" class="btn-refresh" id="refreshBtn" onclick="syncOrders(false)">
