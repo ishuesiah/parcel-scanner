@@ -660,6 +660,58 @@ def normalize_table_collations():
     pass
 
 
+def init_tracking_groups():
+    """
+    Initialize tracking_groups tables for CS ticket tracking feature.
+    """
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Create tracking_groups table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tracking_groups (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tracking_groups_name ON tracking_groups(name)")
+
+        # Create tracking_group_orders table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tracking_group_orders (
+                id SERIAL PRIMARY KEY,
+                group_id INTEGER NOT NULL REFERENCES tracking_groups(id) ON DELETE CASCADE,
+                order_number TEXT NOT NULL,
+                tracking_number TEXT,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                notes TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_group_orders_group ON tracking_group_orders(group_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_group_orders_order ON tracking_group_orders(order_number)")
+
+        # Add unique constraint if not exists
+        try:
+            cursor.execute("""
+                ALTER TABLE tracking_group_orders
+                ADD CONSTRAINT tracking_group_orders_unique UNIQUE (group_id, order_number)
+            """)
+        except Exception:
+            pass  # Constraint already exists
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✓ Tracking groups tables initialized")
+    except Exception as e:
+        print(f"❌ Error initializing tracking groups: {e}")
+
+
 def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
     """
     Update UPS tracking cache for given tracking numbers.
@@ -890,6 +942,7 @@ def update_canadapost_tracking_cache(tracking_numbers, force_refresh=False):
 # Initialize cache tables on startup
 init_shipments_cache()
 init_tracking_status_cache()
+init_tracking_groups()
 init_orders_tables(get_db_connection)
 normalize_table_collations()
 
@@ -3889,7 +3942,7 @@ def check_shipments():
     Live Tracking page with tabs for Recent Batches and All Shipments.
     """
     # Tab handling
-    current_tab = request.args.get("tab", "batches")  # Default to batches tab
+    current_tab = request.args.get("tab", "shipments")  # Default to All Shipments tab
     search_query = request.args.get("search", "").strip()
     page = int(request.args.get("page", 1))
     # Configurable items per page (default 100, max 500)
@@ -3911,7 +3964,29 @@ def check_shipments():
     total_shipments = 0
     total_pages = 1
 
+    # Tracking groups data
+    tracking_groups = []
+    selected_group_id = request.args.get("group_id", type=int)
+    selected_group = None
+    group_orders = []
+
     try:
+        # ══════════════════════════════════════════════════════════════════════
+        # FETCH TRACKING GROUPS (always needed for tab display)
+        # ══════════════════════════════════════════════════════════════════════
+        conn_groups = get_mysql_connection()
+        cursor_groups = conn_groups.cursor()
+        cursor_groups.execute("""
+            SELECT g.id, g.name, g.description, g.created_by, g.created_at,
+                   COUNT(o.id) as order_count
+            FROM tracking_groups g
+            LEFT JOIN tracking_group_orders o ON o.group_id = g.id
+            GROUP BY g.id, g.name, g.description, g.created_by, g.created_at
+            ORDER BY g.created_at DESC
+        """)
+        tracking_groups = cursor_groups.fetchall()
+        cursor_groups.close()
+        conn_groups.close()
         # ══════════════════════════════════════════════════════════════════════
         # FETCH BATCHES DATA (for batches tab)
         # ══════════════════════════════════════════════════════════════════════
@@ -4250,6 +4325,9 @@ def check_shipments():
             has_next=has_next,
             prev_url=prev_url,
             next_url=next_url,
+            # Tracking groups data
+            tracking_groups=tracking_groups,
+            selected_group_id=selected_group_id,
             # Shopify
             shop_url=shop_url,
             version=__version__,
@@ -4279,6 +4357,8 @@ def check_shipments():
             has_next=False,
             prev_url="#",
             next_url="#",
+            tracking_groups=tracking_groups,
+            selected_group_id=None,
             version=__version__,
             active_page="check_shipments"
         )
@@ -6892,6 +6972,344 @@ def api_save_customs_defaults(order_number):
             "message": f"Saved customs defaults for {saved_count} product(s)"
         })
 
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tracking Groups API - CS Ticket Tracking Feature
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/tracking-groups", methods=["GET"])
+def api_get_tracking_groups():
+    """Get all tracking groups."""
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT g.id, g.name, g.description, g.created_by, g.created_at,
+                   COUNT(o.id) as order_count
+            FROM tracking_groups g
+            LEFT JOIN tracking_group_orders o ON o.group_id = g.id
+            GROUP BY g.id, g.name, g.description, g.created_by, g.created_at
+            ORDER BY g.created_at DESC
+        """)
+        groups = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "groups": [{
+                "id": g["id"],
+                "name": g["name"],
+                "description": g.get("description"),
+                "created_by": g.get("created_by"),
+                "created_at": g["created_at"].isoformat() if g["created_at"] else None,
+                "order_count": g["order_count"]
+            } for g in groups]
+        })
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/tracking-groups", methods=["POST"])
+def api_create_tracking_group():
+    """Create a new tracking group."""
+    conn = get_mysql_connection()
+    try:
+        data = request.json or {}
+        name = data.get("name", "CS Ticket Tracking").strip()
+        description = data.get("description", "").strip()
+        created_by = data.get("created_by", "").strip()
+
+        if not name:
+            return jsonify({"success": False, "error": "Group name is required"}), 400
+
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO tracking_groups (name, description, created_by)
+            VALUES (%s, %s, %s)
+            RETURNING id
+        """, (name, description or None, created_by or None))
+        group_id = cursor.fetchone()["id"]
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"success": True, "group_id": group_id, "name": name})
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/tracking-groups/<int:group_id>", methods=["GET"])
+def api_get_tracking_group(group_id):
+    """Get a specific tracking group with its orders and live tracking data."""
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get group info
+        cursor.execute("""
+            SELECT id, name, description, created_by, created_at
+            FROM tracking_groups WHERE id = %s
+        """, (group_id,))
+        group = cursor.fetchone()
+
+        if not group:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Group not found"}), 404
+
+        # Get orders in this group with tracking info
+        cursor.execute("""
+            SELECT
+                tgo.id as entry_id,
+                tgo.order_number,
+                tgo.tracking_number as group_tracking,
+                tgo.notes,
+                tgo.added_at,
+                o.customer_name,
+                o.customer_email,
+                o.tracking_number,
+                o.shopify_created_at,
+                o.fulfillment_status,
+                o.total_price,
+                sc.carrier_code,
+                sc.ship_date,
+                sc.shipstation_batch_number,
+                tc.status as tracking_status,
+                tc.status_description,
+                tc.last_location,
+                tc.last_activity_date,
+                tc.is_delivered
+            FROM tracking_group_orders tgo
+            LEFT JOIN orders o ON o.order_number = tgo.order_number
+            LEFT JOIN shipments_cache sc ON sc.order_number = tgo.order_number
+            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = COALESCE(tgo.tracking_number, o.tracking_number, sc.tracking_number)
+            WHERE tgo.group_id = %s
+            ORDER BY tgo.added_at DESC
+        """, (group_id,))
+        orders = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        # Format tracking status for display
+        def format_status(row):
+            if row.get("is_delivered"):
+                return {"status": "delivered", "text": "Delivered", "severity": "ok"}
+            status = row.get("tracking_status") or ""
+            if status.lower() in ["in_transit", "intransit"]:
+                return {"status": "in_transit", "text": "In Transit", "severity": "ok"}
+            if status.lower() in ["label_created", "pre_transit"]:
+                return {"status": "label_created", "text": "Label Created", "severity": "warning"}
+            if status.lower() in ["exception", "alert"]:
+                return {"status": "exception", "text": "Exception", "severity": "critical"}
+            if not row.get("tracking_number") and not row.get("group_tracking"):
+                return {"status": "not_shipped", "text": "Not Shipped", "severity": "warning"}
+            return {"status": "unknown", "text": status or "Unknown", "severity": "warning"}
+
+        return jsonify({
+            "success": True,
+            "group": {
+                "id": group["id"],
+                "name": group["name"],
+                "description": group.get("description"),
+                "created_by": group.get("created_by"),
+                "created_at": group["created_at"].isoformat() if group["created_at"] else None
+            },
+            "orders": [{
+                "entry_id": o["entry_id"],
+                "order_number": o["order_number"],
+                "customer_name": o.get("customer_name"),
+                "customer_email": o.get("customer_email"),
+                "tracking_number": o.get("group_tracking") or o.get("tracking_number"),
+                "carrier": o.get("carrier_code"),
+                "ship_date": o["ship_date"].isoformat() if o.get("ship_date") else None,
+                "batch_number": o.get("shipstation_batch_number"),
+                "fulfillment_status": o.get("fulfillment_status"),
+                "total_price": o.get("total_price"),
+                "tracking_status": format_status(o),
+                "last_location": o.get("last_location"),
+                "last_activity": o.get("last_activity_date"),
+                "notes": o.get("notes"),
+                "added_at": o["added_at"].isoformat() if o.get("added_at") else None
+            } for o in orders]
+        })
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/tracking-groups/<int:group_id>", methods=["PUT"])
+def api_update_tracking_group(group_id):
+    """Update a tracking group."""
+    conn = get_mysql_connection()
+    try:
+        data = request.json or {}
+        name = data.get("name", "").strip()
+        description = data.get("description", "").strip()
+
+        if not name:
+            return jsonify({"success": False, "error": "Group name is required"}), 400
+
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE tracking_groups
+            SET name = %s, description = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        """, (name, description or None, group_id))
+
+        if cursor.rowcount == 0:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Group not found"}), 404
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"success": True})
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/tracking-groups/<int:group_id>", methods=["DELETE"])
+def api_delete_tracking_group(group_id):
+    """Delete a tracking group."""
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tracking_groups WHERE id = %s", (group_id,))
+
+        if cursor.rowcount == 0:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Group not found"}), 404
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"success": True})
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/tracking-groups/<int:group_id>/orders", methods=["POST"])
+def api_add_orders_to_group(group_id):
+    """Add orders to a tracking group."""
+    conn = get_mysql_connection()
+    try:
+        data = request.json or {}
+        order_numbers = data.get("order_numbers", [])
+
+        if not order_numbers:
+            return jsonify({"success": False, "error": "No order numbers provided"}), 400
+
+        # Handle both string and list inputs
+        if isinstance(order_numbers, str):
+            # Split by comma, newline, or space
+            import re
+            order_numbers = [o.strip().lstrip('#') for o in re.split(r'[,\n\s]+', order_numbers) if o.strip()]
+
+        cursor = conn.cursor()
+
+        # Verify group exists
+        cursor.execute("SELECT id FROM tracking_groups WHERE id = %s", (group_id,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Group not found"}), 404
+
+        added = 0
+        skipped = 0
+        for order_num in order_numbers:
+            order_num = str(order_num).strip().lstrip('#')
+            if not order_num:
+                continue
+            try:
+                cursor.execute("""
+                    INSERT INTO tracking_group_orders (group_id, order_number)
+                    VALUES (%s, %s)
+                    ON CONFLICT (group_id, order_number) DO NOTHING
+                """, (group_id, order_num))
+                if cursor.rowcount > 0:
+                    added += 1
+                else:
+                    skipped += 1
+            except Exception:
+                skipped += 1
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "added": added,
+            "skipped": skipped,
+            "message": f"Added {added} order(s)" + (f", {skipped} already in group" if skipped else "")
+        })
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/tracking-groups/<int:group_id>/orders/<order_number>", methods=["DELETE"])
+def api_remove_order_from_group(group_id, order_number):
+    """Remove an order from a tracking group."""
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            DELETE FROM tracking_group_orders
+            WHERE group_id = %s AND order_number = %s
+        """, (group_id, order_number))
+
+        if cursor.rowcount == 0:
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Order not found in group"}), 404
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"success": True})
     except Exception as e:
         try:
             conn.rollback()

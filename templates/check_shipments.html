@@ -2,7 +2,103 @@
 
 {% block title %}Live Tracking - H&O Parcel Scans{% endblock %}
 
-{% block extra_styles %}{% endblock %}
+{% block extra_styles %}
+<style>
+  /* Tracking Groups Styles */
+  .groups-container {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  .group-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px 20px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 180px;
+  }
+  .group-card:hover {
+    border-color: var(--secondary);
+    box-shadow: 0 2px 8px rgba(81, 106, 236, 0.1);
+  }
+  .group-card.selected {
+    border-color: var(--secondary);
+    background: rgba(81, 106, 236, 0.05);
+  }
+  .group-card h4 {
+    margin: 0 0 4px 0;
+    font-size: 1rem;
+  }
+  .group-card .order-count {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+  .btn-new-group {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 16px 24px;
+    cursor: pointer;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s;
+  }
+  .btn-new-group:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }
+  .add-orders-box {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .add-orders-box textarea {
+    width: 100%;
+    min-height: 80px;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    font-family: inherit;
+    resize: vertical;
+    margin-bottom: 8px;
+  }
+  .group-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .group-header h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .group-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .tracking-status-badge {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+  .tracking-status-badge.ok { background: #e8f5e9; color: #2e7d32; }
+  .tracking-status-badge.warning { background: #fff8e1; color: #f57c00; }
+  .tracking-status-badge.critical { background: #ffebee; color: #c62828; }
+</style>
+{% endblock %}
 
 {% block content %}
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
@@ -13,8 +109,14 @@
 
     <!-- Tabs -->
     <div class="tabs">
-      <button class="tab-btn {{ 'active' if current_tab == 'batches' else '' }}" onclick="switchTab('batches')">Recent Batches</button>
       <button class="tab-btn {{ 'active' if current_tab == 'shipments' else '' }}" onclick="switchTab('shipments')">All Shipments</button>
+      <button class="tab-btn {{ 'active' if current_tab == 'batches' else '' }}" onclick="switchTab('batches')">ShipStation Batches</button>
+      <button class="tab-btn {{ 'active' if current_tab == 'groups' else '' }}" onclick="switchTab('groups')">
+        Ticket Tracking
+        {% if tracking_groups|length > 0 %}
+          <span style="background: var(--secondary); color: white; padding: 2px 6px; border-radius: 10px; font-size: 0.75rem; margin-left: 4px;">{{ tracking_groups|length }}</span>
+        {% endif %}
+      </button>
     </div>
 
     <!-- Tab: Recent Batches -->
@@ -271,6 +373,80 @@
       {% endif %}
     </div>
 
+    <!-- Tab: Ticket Tracking (Groups) -->
+    <div id="tab-groups" class="tab-content {{ 'active' if current_tab == 'groups' else '' }}">
+      <p style="margin-bottom: 16px; color: #666;">
+        Create tracking groups to monitor multiple orders together. Great for CS tickets or special tracking needs.
+      </p>
+
+      <!-- Groups List -->
+      <div class="groups-container">
+        <button class="btn-new-group" onclick="createNewGroup()">
+          <span style="font-size: 1.2em;">+</span> New Tracking Group
+        </button>
+
+        {% for group in tracking_groups %}
+          <div class="group-card {{ 'selected' if selected_group_id == group.id else '' }}"
+               onclick="selectGroup({{ group.id }})" data-group-id="{{ group.id }}">
+            <h4>{{ group.name }}</h4>
+            <div class="order-count">{{ group.order_count }} order{{ 's' if group.order_count != 1 else '' }}</div>
+          </div>
+        {% endfor %}
+
+        {% if not tracking_groups %}
+          <p style="color: #999; padding: 20px;">No tracking groups yet. Create one to get started!</p>
+        {% endif %}
+      </div>
+
+      <!-- Selected Group Details -->
+      <div id="groupDetails" style="display: none;">
+        <div class="group-header">
+          <h3>
+            <span id="groupName">Group Name</span>
+            <button onclick="editGroupName()" style="background: none; border: none; cursor: pointer; font-size: 0.85rem; color: #666;">Edit</button>
+          </h3>
+          <div class="group-actions">
+            <button onclick="refreshGroupTracking()" class="btn btn-search" style="font-size: 0.85rem;">🔄 Refresh</button>
+            <button onclick="deleteGroup()" class="btn-delete-small">Delete Group</button>
+          </div>
+        </div>
+
+        <!-- Add Orders Box -->
+        <div class="add-orders-box">
+          <label style="font-weight: 500; margin-bottom: 8px; display: block;">Add Orders to Group</label>
+          <textarea id="addOrdersInput" placeholder="Enter order numbers (comma or line separated, e.g., 61234, 61235, 61236)"></textarea>
+          <div style="display: flex; gap: 8px;">
+            <button onclick="addOrdersToGroup()" class="btn btn-search">Add Orders</button>
+            <span id="addOrdersStatus" style="color: #666; font-size: 0.9rem; align-self: center;"></span>
+          </div>
+        </div>
+
+        <!-- Group Orders Table -->
+        <div id="groupOrdersTable">
+          <p style="text-align: center; color: #666; padding: 40px;">Select a group to view orders</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Create Group Modal -->
+    <div id="createGroupModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;">
+      <div style="background: white; border-radius: 12px; max-width: 400px; width: 90%; padding: 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+        <h3 style="margin: 0 0 16px 0;">Create New Tracking Group</h3>
+        <div style="margin-bottom: 16px;">
+          <label style="display: block; font-weight: 500; margin-bottom: 6px;">Group Name</label>
+          <input type="text" id="newGroupName" value="CS Ticket Tracking" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px;">
+        </div>
+        <div style="margin-bottom: 16px;">
+          <label style="display: block; font-weight: 500; margin-bottom: 6px;">Description (optional)</label>
+          <input type="text" id="newGroupDesc" placeholder="e.g., Ticket #12345 - Lost package investigation" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px;">
+        </div>
+        <div style="display: flex; gap: 8px; justify-content: flex-end;">
+          <button onclick="closeCreateGroupModal()" style="padding: 10px 20px; background: #666; color: white; border: none; border-radius: 6px; cursor: pointer;">Cancel</button>
+          <button onclick="submitCreateGroup()" style="padding: 10px 20px; background: var(--accent); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">Create Group</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Order Details Modal -->
     <div id="orderModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;">
       <div style="background: white; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; position: relative; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
@@ -459,5 +635,258 @@
         form.submit();
       }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Tracking Groups Functions
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    let currentGroupId = null;
+
+    function createNewGroup() {
+      document.getElementById('createGroupModal').style.display = 'flex';
+      document.getElementById('newGroupName').value = 'CS Ticket Tracking';
+      document.getElementById('newGroupDesc').value = '';
+      document.getElementById('newGroupName').focus();
+    }
+
+    function closeCreateGroupModal() {
+      document.getElementById('createGroupModal').style.display = 'none';
+    }
+
+    async function submitCreateGroup() {
+      const name = document.getElementById('newGroupName').value.trim();
+      const description = document.getElementById('newGroupDesc').value.trim();
+
+      if (!name) {
+        alert('Please enter a group name');
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/tracking-groups', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, description })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+          closeCreateGroupModal();
+          // Reload page to show new group
+          window.location.href = '{{ url_for("check_shipments") }}?tab=groups&group_id=' + data.group_id;
+        } else {
+          alert('Error creating group: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error creating group: ' + err.message);
+      }
+    }
+
+    async function selectGroup(groupId) {
+      currentGroupId = groupId;
+
+      // Update selected state
+      document.querySelectorAll('.group-card').forEach(card => {
+        card.classList.toggle('selected', card.dataset.groupId == groupId);
+      });
+
+      // Show details section
+      document.getElementById('groupDetails').style.display = 'block';
+      document.getElementById('groupOrdersTable').innerHTML = '<p style="text-align: center; color: #666; padding: 40px;">Loading...</p>';
+
+      try {
+        const response = await fetch(`/api/tracking-groups/${groupId}`);
+        const data = await response.json();
+
+        if (data.success) {
+          document.getElementById('groupName').textContent = data.group.name;
+          renderGroupOrders(data.orders);
+        } else {
+          document.getElementById('groupOrdersTable').innerHTML = `<p style="text-align: center; color: #c62828; padding: 40px;">Error: ${data.error}</p>`;
+        }
+      } catch (err) {
+        document.getElementById('groupOrdersTable').innerHTML = `<p style="text-align: center; color: #c62828; padding: 40px;">Error loading group: ${err.message}</p>`;
+      }
+    }
+
+    function renderGroupOrders(orders) {
+      if (!orders || orders.length === 0) {
+        document.getElementById('groupOrdersTable').innerHTML = '<p style="text-align: center; color: #666; padding: 40px;">No orders in this group yet. Add some above!</p>';
+        return;
+      }
+
+      let html = `
+        <table>
+          <thead>
+            <tr>
+              <th>Order #</th>
+              <th>Customer</th>
+              <th>Tracking #</th>
+              <th>Carrier</th>
+              <th>Ship Date</th>
+              <th>Status</th>
+              <th>Last Activity</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      orders.forEach(order => {
+        const statusClass = order.tracking_status.severity;
+        const statusText = order.tracking_status.text;
+
+        html += `
+          <tr>
+            <td>
+              <a href="#" onclick="showOrderDetails('${order.order_number}'); return false;" class="customer-link">${order.order_number}</a>
+            </td>
+            <td>${order.customer_name || '-'}</td>
+            <td style="font-family: monospace; font-size: 0.85rem;">
+              ${order.tracking_number ? `<a href="https://www.ups.com/track?tracknum=${order.tracking_number}" target="_blank">${order.tracking_number}</a>` : '-'}
+            </td>
+            <td>${order.carrier || '-'}</td>
+            <td>${order.ship_date || '-'}</td>
+            <td>
+              <span class="tracking-status-badge ${statusClass}">${statusText}</span>
+            </td>
+            <td style="font-size: 0.85rem;">${order.last_activity || '-'}</td>
+            <td>
+              <button onclick="removeOrderFromGroup('${order.order_number}')" class="btn-delete-small" style="font-size: 0.8rem;">Remove</button>
+            </td>
+          </tr>
+        `;
+      });
+
+      html += '</tbody></table>';
+      document.getElementById('groupOrdersTable').innerHTML = html;
+    }
+
+    async function addOrdersToGroup() {
+      if (!currentGroupId) {
+        alert('Please select a group first');
+        return;
+      }
+
+      const input = document.getElementById('addOrdersInput').value.trim();
+      if (!input) {
+        alert('Please enter some order numbers');
+        return;
+      }
+
+      const statusEl = document.getElementById('addOrdersStatus');
+      statusEl.textContent = 'Adding...';
+
+      try {
+        const response = await fetch(`/api/tracking-groups/${currentGroupId}/orders`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ order_numbers: input })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+          statusEl.textContent = data.message;
+          document.getElementById('addOrdersInput').value = '';
+          // Refresh the group view
+          selectGroup(currentGroupId);
+          // Update group card count
+          setTimeout(() => { statusEl.textContent = ''; }, 3000);
+        } else {
+          statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+        }
+      } catch (err) {
+        statusEl.textContent = 'Error: ' + err.message;
+      }
+    }
+
+    async function removeOrderFromGroup(orderNumber) {
+      if (!currentGroupId) return;
+
+      if (!confirm(`Remove order #${orderNumber} from this group?`)) return;
+
+      try {
+        const response = await fetch(`/api/tracking-groups/${currentGroupId}/orders/${orderNumber}`, {
+          method: 'DELETE'
+        });
+        const data = await response.json();
+
+        if (data.success) {
+          selectGroup(currentGroupId);
+        } else {
+          alert('Error removing order: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error removing order: ' + err.message);
+      }
+    }
+
+    async function deleteGroup() {
+      if (!currentGroupId) return;
+
+      if (!confirm('Delete this tracking group? This cannot be undone.')) return;
+
+      try {
+        const response = await fetch(`/api/tracking-groups/${currentGroupId}`, {
+          method: 'DELETE'
+        });
+        const data = await response.json();
+
+        if (data.success) {
+          window.location.href = '{{ url_for("check_shipments") }}?tab=groups';
+        } else {
+          alert('Error deleting group: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error deleting group: ' + err.message);
+      }
+    }
+
+    async function editGroupName() {
+      if (!currentGroupId) return;
+
+      const currentName = document.getElementById('groupName').textContent;
+      const newName = prompt('Enter new group name:', currentName);
+
+      if (!newName || newName === currentName) return;
+
+      try {
+        const response = await fetch(`/api/tracking-groups/${currentGroupId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+          document.getElementById('groupName').textContent = newName;
+          // Update the card too
+          const card = document.querySelector(`.group-card[data-group-id="${currentGroupId}"] h4`);
+          if (card) card.textContent = newName;
+        } else {
+          alert('Error updating group: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error updating group: ' + err.message);
+      }
+    }
+
+    function refreshGroupTracking() {
+      if (currentGroupId) {
+        selectGroup(currentGroupId);
+      }
+    }
+
+    // Handle create group modal escape key
+    document.getElementById('createGroupModal').addEventListener('click', function(e) {
+      if (e.target === this) closeCreateGroupModal();
+    });
+
+    // Auto-select group if group_id in URL
+    {% if selected_group_id %}
+      document.addEventListener('DOMContentLoaded', function() {
+        selectGroup({{ selected_group_id }});
+      });
+    {% endif %}
   </script>
 {% endblock %}
