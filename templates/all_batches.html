@@ -16,10 +16,10 @@
 
       {% if active_batches %}
         {% for b in active_batches %}
-          <div class="active-batch-card">
+          <div class="active-batch-card" onclick="window.location.href='{{ url_for('edit_batch', batch_id=b.id) }}'" style="cursor: pointer;">
             <div class="batch-card-info" style="flex: 1;">
               <h3>
-                <a href="{{ url_for('edit_batch', batch_id=b.id) }}" title="Click to resume scanning">
+                <a href="{{ url_for('edit_batch', batch_id=b.id) }}" title="Click to resume scanning" onclick="event.stopPropagation();">
                   Batch #{{ b.id }}
                 </a>
               </h3>
@@ -32,12 +32,12 @@
                 {% endif %}
               </div>
             </div>
-            <div class="batch-card-actions">
+            <div class="batch-card-actions" onclick="event.stopPropagation();">
               <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="btn-resume">
                 Resume
               </a>
               <button type="button" class="btn-delete-small"
-                      onclick="if(confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.')) { deleteBatch({{ b.id }}); }">
+                      onclick="event.stopPropagation(); if(confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.')) { deleteBatch({{ b.id }}); }">
                 Delete
               </button>
             </div>
