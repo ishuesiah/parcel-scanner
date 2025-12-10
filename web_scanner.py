@@ -6234,18 +6234,28 @@ def api_update_customs_info(order_number):
 
     Request body:
     {
-        "items": [
+        "contents_type": "merchandise",
+        "if_undeliverable": "return",
+        "export_declaration_number": "",
+        "invoice_number": "60430",
+        "line_items": [
             {
-                "id": 123,
+                "idx": 0,
                 "hs_code": "4901.99",
                 "country_of_origin": "CA",
-                "customs_description": "Printed paper planner"
+                "customs_description": "Printed paper planner",
+                "quantity": 1,
+                "value": 45.00,
+                "weight_grams": 500
             }
         ]
     }
     """
     data = request.get_json()
-    if not data or 'items' not in data:
+
+    # Accept both 'items' and 'line_items' keys for compatibility
+    items_data = data.get('line_items') or data.get('items') or []
+    if not items_data:
         return jsonify({"success": False, "error": "Missing items data"}), 400
 
     conn = get_mysql_connection()
@@ -6260,24 +6270,53 @@ def api_update_customs_info(order_number):
             conn.close()
             return jsonify({"success": False, "error": "Order not found"}), 404
 
-        # Update each line item
+        order_id = order['id']
+
+        # Get current line items for this order in order (to match by index)
+        cursor.execute("""
+            SELECT id, sku, product_title
+            FROM order_line_items
+            WHERE order_id = %s
+            ORDER BY id
+        """, (order_id,))
+        db_items = cursor.fetchall()
+
+        # Ensure grams column exists (migration)
+        try:
+            cursor.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                                   WHERE table_name = 'order_line_items' AND column_name = 'grams') THEN
+                        ALTER TABLE order_line_items ADD COLUMN grams INTEGER DEFAULT 0;
+                    END IF;
+                END $$;
+            """)
+        except Exception:
+            pass
+
+        # Update each line item by matching index
         updated_count = 0
-        for item in data['items']:
-            if 'id' not in item:
+        for item in items_data:
+            idx = item.get('idx', 0)
+            if idx < 0 or idx >= len(db_items):
                 continue
 
+            db_item = db_items[idx]
             cursor.execute("""
                 UPDATE order_line_items
                 SET hs_code = %s,
                     country_of_origin = %s,
-                    customs_description = %s
+                    customs_description = %s,
+                    grams = %s
                 WHERE id = %s AND order_id = %s
             """, (
                 item.get('hs_code') or None,
                 item.get('country_of_origin') or 'CA',
                 item.get('customs_description') or None,
-                item['id'],
-                order['id']
+                item.get('weight_grams') or 0,
+                db_item['id'],
+                order_id
             ))
             updated_count += cursor.rowcount
 
