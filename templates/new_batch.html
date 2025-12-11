@@ -119,7 +119,37 @@
                 <td>
                   <input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="{{ row.id }}">
                 </td>
-                <td style="font-weight: 500;">{{ row.tracking_number }}</td>
+                <td style="font-weight: 500;">
+                  {% if row.tracking_number %}
+                    {% set c = (row.carrier or '')|lower %}
+                
+                    {# Pick correct tracking URL based on carrier #}
+                    {% if 'ups' in c %}
+                      {% set base_url = 'https://www.ups.com/track?tracknum=' %}
+                    {% elif 'canada post' in c or 'canadapost' in c %}
+                      {% set base_url = 'https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor=' %}
+                    {% elif 'dhl' in c %}
+                      {% set base_url = 'https://www.dhl.com/en/express/tracking.html?AWB=' %}
+                    {% elif 'purolator' in c %}
+                      {% set base_url = 'https://www.purolator.com/en/shipping/tracker?pin=' %}
+                    {% else %}
+                      {% set base_url = '' %}
+                    {% endif %}
+                
+                    {% if base_url %}
+                      <a href="{{ base_url }}{{ row.tracking_number | urlencode }}"
+                         target="_blank"
+                         rel="noopener"
+                         class="tracking-number-link">
+                        {{ row.tracking_number }}
+                      </a>
+                    {% else %}
+                      {{ row.tracking_number }}
+                    {% endif %}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
                 <td>{{ row.carrier }}</td>
                 <td>
                   {% if row.order_number and row.order_number not in ['Processing...', 'N/A', ''] %}
