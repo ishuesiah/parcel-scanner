@@ -41,7 +41,39 @@
                 data-order="{{ s.order_number or '' }}"
                 data-customer="{{ s.customer_name or '' }}"
                 data-scanned="{{ s.scan_date.isoformat() if s.scan_date else '' }}">
-              <td><span class="tracking-number">{{ s.tracking_number }}</span></td>
+              <td>
+                  {% if s.tracking_number %}
+                    {% set c = (s.carrier or '')|lower %}
+                
+                    {# Decide which carrier URL to use #}
+                    {% if 'ups' in c %}
+                      {% set base_url = 'https://www.ups.com/track?tracknum=' %}
+                    {% elif 'canada post' in c or 'canadapost' in c %}
+                      {% set base_url = 'https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor=' %}
+                    {% elif 'dhl' in c %}
+                      {# DHL Express tracking #}
+                      {% set base_url = 'https://www.dhl.com/en/express/tracking.html?AWB=' %}
+                    {% elif 'purolator' in c %}
+                      {% set base_url = 'https://www.purolator.com/en/shipping/tracker?pin=' %}
+                    {% else %}
+                      {# Unknown carrier: no link, just show the tracking number #}
+                      {% set base_url = '' %}
+                    {% endif %}
+                
+                    {% if base_url %}
+                      <a href="{{ base_url }}{{ s.tracking_number | urlencode }}"
+                         target="_blank"
+                         rel="noopener"
+                         class="tracking-number-link">
+                        <span class="tracking-number">{{ s.tracking_number }}</span>
+                      </a>
+                    {% else %}
+                      <span class="tracking-number">{{ s.tracking_number }}</span>
+                    {% endif %}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
               <td>{{ s.carrier or '—' }}</td>
               <td>
                 {% if s.order_number and s.order_number not in ['Processing...', 'N/A', ''] %}
