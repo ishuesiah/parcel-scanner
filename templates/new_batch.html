@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import tracking_link %}
 
 {% block title %}H&O Parcel Scans{% endblock %}
 
@@ -119,37 +120,7 @@
                 <td>
                   <input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="{{ row.id }}">
                 </td>
-                <td style="font-weight: 500;">
-                  {% if row.tracking_number %}
-                    {% set c = (row.carrier or '')|lower %}
-                
-                    {# Pick correct tracking URL based on carrier #}
-                    {% if 'ups' in c %}
-                      {% set base_url = 'https://www.ups.com/track?tracknum=' %}
-                    {% elif 'canada post' in c or 'canadapost' in c %}
-                      {% set base_url = 'https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor=' %}
-                    {% elif 'dhl' in c %}
-                      {% set base_url = 'https://www.dhl.com/en/express/tracking.html?AWB=' %}
-                    {% elif 'purolator' in c %}
-                      {% set base_url = 'https://www.purolator.com/en/shipping/tracker?pin=' %}
-                    {% else %}
-                      {% set base_url = '' %}
-                    {% endif %}
-                
-                    {% if base_url %}
-                      <a href="{{ base_url }}{{ row.tracking_number | urlencode }}"
-                         target="_blank"
-                         rel="noopener"
-                         class="tracking-number-link">
-                        {{ row.tracking_number }}
-                      </a>
-                    {% else %}
-                      {{ row.tracking_number }}
-                    {% endif %}
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
+<td style="font-weight: 500;">{{ tracking_link(row.tracking_number, row.carrier) }}</td>
                 <td>{{ row.carrier }}</td>
                 <td>
                   {% if row.order_number and row.order_number not in ['Processing...', 'N/A', ''] %}
@@ -212,6 +183,22 @@
 
 {% block scripts %}
   <script>
+    // ── Helper: Generate clickable tracking link ──
+    function trackingLink(trackingNumber, carrier) {
+      if (!trackingNumber) return '<span style="color: #999;">—</span>';
+      const isUps = carrier === 'UPS' || (trackingNumber && trackingNumber.startsWith('1Z'));
+      const isCanadaPost = carrier && carrier.toLowerCase().includes('canada');
+      let url;
+      if (isUps) {
+        url = `https://www.ups.com/track?loc=en_US&tracknum=${trackingNumber}`;
+      } else if (isCanadaPost) {
+        url = `https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor=${trackingNumber}`;
+      } else {
+        url = `https://www.google.com/search?q=${trackingNumber}+tracking`;
+      }
+      return `<a href="${url}" target="_blank" rel="noopener" style="color: #1976d2; text-decoration: none; font-family: monospace; font-size: 0.85rem;" title="Track ${trackingNumber}">${trackingNumber}</a>`;
+    }
+
     // ── Auto-refresh order details every 5 seconds ──
     let autoRefreshInterval;
 
@@ -495,7 +482,7 @@
 
       row.innerHTML = `
         <td><input type="checkbox" class="scan-checkbox" name="delete_scan_ids" value="${scan.id}"></td>
-        <td style="font-weight: 500;">${scan.tracking_number}</td>
+        <td style="font-weight: 500;">${trackingLink(scan.tracking_number, scan.carrier)}</td>
         <td>${scan.carrier}</td>
         <td>${orderLink}</td>
         <td>${customerLink}</td>

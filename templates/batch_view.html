@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import tracking_link %}
 
 {% block title %}Batch #{{ batch.id }} - H&O Parcel Scans{% endblock %}
 
@@ -32,39 +33,7 @@
       <tbody>
         {% for row in scans %}
           <tr class="{{ 'duplicate-row' if row.status.startswith('Duplicate') else '' }}">
-            <td>
-              {% if row.tracking_number %}
-                {% set c = (row.carrier or '')|lower %}
-            
-                {# Decide which carrier URL to use #}
-                {% if 'ups' in c %}
-                  {% set base_url = 'https://www.ups.com/track?tracknum=' %}
-                {% elif 'canada post' in c or 'canadapost' in c %}
-                  {% set base_url = 'https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor=' %}
-                {% elif 'dhl' in c %}
-                  {# DHL Express tracking #}
-                  {% set base_url = 'https://www.dhl.com/en/express/tracking.html?AWB=' %}
-                {% elif 'purolator' in c %}
-                  {% set base_url = 'https://www.purolator.com/en/shipping/tracker?pin=' %}
-                {% else %}
-                  {# Unknown carrier: no link, just show tracking text #}
-                  {% set base_url = '' %}
-                {% endif %}
-            
-                {% if base_url %}
-                  <a href="{{ base_url }}{{ row.tracking_number | urlencode }}"
-                     target="_blank"
-                     rel="noopener"
-                     class="tracking-number-link">
-                    {{ row.tracking_number }}
-                  </a>
-                {% else %}
-                  {{ row.tracking_number }}
-                {% endif %}
-              {% else %}
-                —
-              {% endif %}
-            </td>
+<td>{{ tracking_link(row.tracking_number, row.carrier) }}</td>
             <td>{{ row.carrier }}</td>
             <td>{{ row.shipstation_batch_number or '' }}</td>
             <td>

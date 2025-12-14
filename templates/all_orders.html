@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import tracking_link, carrier_icon %}
 
 {% block title %}All Orders - H&O Parcel Scans{% endblock %}
 
@@ -315,11 +316,7 @@
                   {% endif %}
                 </td>
                 <td data-col="tracking">
-                  {% if order.tracking_number %}
-                    <span class="tracking-number">{{ order.tracking_number }}</span>
-                  {% else %}
-                    <span style="color: #999;">—</span>
-                  {% endif %}
+                  {{ tracking_link(order.tracking_number, order.carrier_code) }}
                 </td>
                 <td data-col="status">
                   {% set status = order.fulfillment_status or 'unfulfilled' %}

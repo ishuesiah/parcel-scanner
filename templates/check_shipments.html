@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import tracking_link %}
 
 {% block title %}Live Tracking - H&O Parcel Scans{% endblock %}
 
@@ -266,13 +267,7 @@
                     —
                   {% endif %}
                 </td>
-                <td style="font-family: monospace; font-size: 0.85rem;">
-                  {% if ship.tracking_url %}
-                    <a href="{{ ship.tracking_url }}" target="_blank" title="View tracking">{{ ship.tracking_number }}</a>
-                  {% else %}
-                    {{ ship.tracking_number }}
-                  {% endif %}
-                </td>
+                <td>{{ tracking_link(ship.tracking_number, ship.carrier) }}</td>
                 <td>{{ ship.carrier }}</td>
                 <td>{{ ship.ship_date }}</td>
                 <td>
@@ -473,6 +468,28 @@
 
 {% block scripts %}
   <script>
+    // ── Tracking Link Helper ──
+    function trackingLink(trackingNumber, carrier) {
+      if (!trackingNumber) return '<span style="color: #999;">—</span>';
+      const isUps = carrier === 'UPS' || (trackingNumber && trackingNumber.startsWith('1Z'));
+      const isCanadaPost = carrier && carrier.toLowerCase().includes('canada');
+      const isFedex = carrier && carrier.toLowerCase().includes('fedex');
+      const isUsps = carrier && carrier.toLowerCase().includes('usps');
+      let url;
+      if (isUps) {
+        url = `https://www.ups.com/track?loc=en_US&tracknum=${trackingNumber}`;
+      } else if (isCanadaPost) {
+        url = `https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor=${trackingNumber}`;
+      } else if (isFedex) {
+        url = `https://www.fedex.com/fedextrack/?trknbr=${trackingNumber}`;
+      } else if (isUsps) {
+        url = `https://tools.usps.com/go/TrackConfirmAction?tLabels=${trackingNumber}`;
+      } else {
+        url = `https://www.google.com/search?q=${trackingNumber}+tracking`;
+      }
+      return `<a href="${url}" target="_blank" rel="noopener" style="color: #1976d2; text-decoration: none; font-family: monospace; font-size: 0.85rem;" title="Track ${trackingNumber}">${trackingNumber}</a>`;
+    }
+
     // ── Order Details Modal ──
     async function showOrderDetails(orderNumber) {
       const modal = document.getElementById('orderModal');
@@ -747,9 +764,6 @@
       orders.forEach(order => {
         const statusClass = order.tracking_status?.severity || 'ok';
         const statusText = order.tracking_status?.text || 'Unknown';
-        const trackingUrl = order.tracking_number?.startsWith('1Z')
-          ? `https://www.ups.com/track?tracknum=${order.tracking_number}`
-          : (order.tracking_number ? `https://www.google.com/search?q=${order.tracking_number}+tracking` : '#');
 
         // Format last activity date
         let lastActivity = order.last_activity || '';
@@ -772,9 +786,7 @@
             <td>
               <a href="#" onclick="showOrderDetails('${order.order_number}'); return false;" class="customer-link">${order.customer_name || '-'}</a>
             </td>
-            <td style="font-family: monospace; font-size: 0.85rem;">
-              ${order.tracking_number ? `<a href="${trackingUrl}" target="_blank" style="color: #1976d2;">${order.tracking_number}</a>` : '-'}
-            </td>
+            <td>${trackingLink(order.tracking_number, order.carrier || 'UPS')}</td>
             <td>${order.carrier || 'UPS'}</td>
             <td>${order.ship_date || '-'}</td>
             <td style="text-align: center;">${order.fulfillment_status === 'fulfilled' ? '<span style="color: #199b76;">&#10003;</span>' : '-'}</td>
@@ -786,7 +798,7 @@
             <td style="font-size: 0.85rem;">${lastActivity || '-'}</td>
             <td>
               <button onclick="removeOrderFromGroup(${groupId}, '${order.order_number}')" class="btn-delete-small" style="font-size: 0.75rem; padding: 4px 8px;">
-                &#10060; Cancel
+                &#10060; Remove
               </button>
             </td>
           </tr>
