@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import tracking_link %}
 
 {% block title %}Batch {{ batch_id }} - H&O Parcel Scans{% endblock %}
 
@@ -60,15 +61,7 @@
         <tbody>
           {% for s in shipments %}
             <tr>
-              <td>
-                {% if s.carrier_code == 'UPS' or s.tracking_number.startswith('1Z') %}
-                  <a class="tracking-link" href="https://www.ups.com/track?loc=en_US&tracknum={{ s.tracking_number }}" target="_blank">{{ s.tracking_number or '-' }}</a>
-                {% elif 'canada' in (s.carrier_code or '')|lower %}
-                  <a class="tracking-link" href="https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor={{ s.tracking_number }}" target="_blank">{{ s.tracking_number or '-' }}</a>
-                {% else %}
-                  {{ s.tracking_number or '-' }}
-                {% endif %}
-              </td>
+              <td>{{ tracking_link(s.tracking_number, s.carrier_code) }}</td>
               <td>
                 {% if s.order_number %}
                   <a href="#" onclick="showOrderDetails('{{ s.order_number }}'); return false;" class="customer-link">{{ s.order_number }}</a>

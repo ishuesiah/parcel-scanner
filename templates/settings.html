@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Settings - Packing Slip Builder{% endblock %}
+{% block title %}Settings - Parcel Scanner{% endblock %}
 
 {% block extra_styles %}
 <style>
@@ -352,6 +352,181 @@
       position: static;
     }
   }
+
+  /* Settings Tabs */
+  .settings-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0;
+  }
+
+  .settings-tab {
+    padding: 12px 24px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .settings-tab:hover {
+    color: var(--text-main);
+  }
+
+  .settings-tab.active {
+    color: var(--secondary);
+    border-bottom-color: var(--secondary);
+  }
+
+  .settings-section {
+    display: none;
+  }
+
+  .settings-section.active {
+    display: block;
+  }
+
+  /* Carrier Accounts */
+  .carrier-card {
+    background: var(--bg-main);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+
+  .carrier-card.expanded {
+    background: var(--bg-surface);
+  }
+
+  .carrier-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+  }
+
+  .carrier-logo {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: white;
+    border-radius: 8px;
+    font-size: 1.5rem;
+    font-weight: bold;
+  }
+
+  .carrier-logo.ups { color: #351c15; background: #ffb500; }
+  .carrier-logo.canada-post { color: white; background: #e31837; }
+  .carrier-logo.fedex { color: white; background: #4d148c; }
+
+  .carrier-info {
+    flex: 1;
+  }
+
+  .carrier-info h4 {
+    margin: 0 0 4px 0;
+    font-size: 1rem;
+  }
+
+  .carrier-info .status {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+
+  .carrier-info .status.connected {
+    color: #199b76;
+  }
+
+  .carrier-info .status.error {
+    color: #c62828;
+  }
+
+  .carrier-toggle {
+    font-size: 1.2rem;
+    color: var(--text-muted);
+    transition: transform 0.2s;
+  }
+
+  .carrier-card.expanded .carrier-toggle {
+    transform: rotate(180deg);
+  }
+
+  .carrier-form {
+    display: none;
+    padding-top: 16px;
+    margin-top: 16px;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .carrier-card.expanded .carrier-form {
+    display: block;
+  }
+
+  .carrier-form .form-group input[type="text"],
+  .carrier-form .form-group input[type="password"] {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 0.9rem;
+    background: var(--bg-main);
+  }
+
+  .carrier-form .form-group input:focus {
+    outline: none;
+    border-color: var(--secondary);
+    box-shadow: 0 0 0 3px rgba(81, 106, 236, 0.1);
+  }
+
+  .carrier-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+  }
+
+  .form-section-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 20px 0 12px 0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .form-section-title:first-child {
+    margin-top: 0;
+  }
+
+  .test-result {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    margin-top: 12px;
+  }
+
+  .test-result.success {
+    background: #e8f5e9;
+    color: #2e7d32;
+  }
+
+  .test-result.error {
+    background: #ffebee;
+    color: #c62828;
+  }
+
+  .test-result.loading {
+    background: #e3f2fd;
+    color: #1976d2;
+  }
 </style>
 {% endblock %}
 
@@ -360,10 +535,178 @@
   <h2>Settings</h2>
   <div style="display: flex; gap: 12px; align-items: center;">
     <span id="saveStatus" class="save-status"></span>
-    <button class="btn btn-primary" onclick="saveAllSettings()">Save All Settings</button>
   </div>
 </div>
 
+<!-- Settings Tabs -->
+<div class="settings-tabs">
+  <button class="settings-tab active" onclick="switchSettingsTab('carriers')">Carrier Accounts</button>
+  <button class="settings-tab" onclick="switchSettingsTab('packing')">Packing Slips</button>
+</div>
+
+<!-- Carrier Accounts Section -->
+<div id="carriers-section" class="settings-section active">
+  <div class="settings-card" style="max-width: 800px;">
+    <div class="card-header">
+      <h3>Shipping Carrier Accounts</h3>
+      <span style="font-size: 0.8rem; color: var(--text-muted);">Connect carrier accounts to create labels directly</span>
+    </div>
+    <div class="card-body">
+      <!-- UPS Card -->
+      <div class="carrier-card" id="ups-card" data-carrier="ups">
+        <div class="carrier-header" onclick="toggleCarrierCard('ups')">
+          <div class="carrier-logo ups">UPS</div>
+          <div class="carrier-info">
+            <h4>UPS</h4>
+            <div class="status" id="ups-status">Not configured</div>
+          </div>
+          <span class="carrier-toggle">&#9660;</span>
+        </div>
+        <div class="carrier-form">
+          <div class="form-section-title">API Credentials</div>
+          <div class="form-group">
+            <label>Client ID</label>
+            <input type="text" id="ups-client-id" placeholder="Your UPS OAuth Client ID">
+          </div>
+          <div class="form-group">
+            <label>Client Secret</label>
+            <input type="password" id="ups-client-secret" placeholder="Your UPS OAuth Client Secret">
+          </div>
+          <div class="form-group">
+            <label>Account Number</label>
+            <input type="text" id="ups-account-number" placeholder="Your UPS Account Number (6 characters)">
+          </div>
+
+          <div class="form-section-title">Shipper Address (Return Address)</div>
+          <div class="form-group">
+            <label>Company/Name</label>
+            <input type="text" id="ups-shipper-name" placeholder="Hemlock & Oak Stationery Inc.">
+          </div>
+          <div class="form-group">
+            <label>Phone</label>
+            <input type="text" id="ups-shipper-phone" placeholder="(604) 555-1234">
+          </div>
+          <div class="form-group">
+            <label>Address Line 1</label>
+            <input type="text" id="ups-shipper-address1" placeholder="123 Warehouse Way">
+          </div>
+          <div class="form-group">
+            <label>Address Line 2</label>
+            <input type="text" id="ups-shipper-address2" placeholder="Unit 5">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>City</label>
+              <input type="text" id="ups-shipper-city" placeholder="Vancouver">
+            </div>
+            <div class="form-group">
+              <label>Province</label>
+              <input type="text" id="ups-shipper-province" placeholder="BC">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Postal Code</label>
+              <input type="text" id="ups-shipper-postal" placeholder="V6B 1A1">
+            </div>
+            <div class="form-group">
+              <label>Country</label>
+              <input type="text" id="ups-shipper-country" value="CA" placeholder="CA">
+            </div>
+          </div>
+
+          <div id="ups-test-result"></div>
+
+          <div class="carrier-actions">
+            <button class="btn btn-secondary" onclick="testCarrierAccount('ups')">Test Connection</button>
+            <button class="btn btn-primary" onclick="saveCarrierAccount('ups')">Save UPS Settings</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Canada Post Card -->
+      <div class="carrier-card" id="canada-post-card" data-carrier="canada_post">
+        <div class="carrier-header" onclick="toggleCarrierCard('canada_post')">
+          <div class="carrier-logo canada-post">CP</div>
+          <div class="carrier-info">
+            <h4>Canada Post</h4>
+            <div class="status" id="canada_post-status">Not configured</div>
+          </div>
+          <span class="carrier-toggle">&#9660;</span>
+        </div>
+        <div class="carrier-form">
+          <div class="form-section-title">API Credentials</div>
+          <div class="form-group">
+            <label>Username (API Key)</label>
+            <input type="text" id="canada_post-client-id" placeholder="Your Canada Post API Username">
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="canada_post-client-secret" placeholder="Your Canada Post API Password">
+          </div>
+          <div class="form-group">
+            <label>Customer Number</label>
+            <input type="text" id="canada_post-account-number" placeholder="Your Canada Post Customer Number">
+          </div>
+
+          <div class="form-section-title">Shipper Address (Return Address)</div>
+          <div class="form-group">
+            <label>Company/Name</label>
+            <input type="text" id="canada_post-shipper-name" placeholder="Hemlock & Oak Stationery Inc.">
+          </div>
+          <div class="form-group">
+            <label>Phone</label>
+            <input type="text" id="canada_post-shipper-phone" placeholder="(604) 555-1234">
+          </div>
+          <div class="form-group">
+            <label>Address Line 1</label>
+            <input type="text" id="canada_post-shipper-address1" placeholder="123 Warehouse Way">
+          </div>
+          <div class="form-group">
+            <label>Address Line 2</label>
+            <input type="text" id="canada_post-shipper-address2" placeholder="Unit 5">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>City</label>
+              <input type="text" id="canada_post-shipper-city" placeholder="Vancouver">
+            </div>
+            <div class="form-group">
+              <label>Province</label>
+              <input type="text" id="canada_post-shipper-province" placeholder="BC">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Postal Code</label>
+              <input type="text" id="canada_post-shipper-postal" placeholder="V6B 1A1">
+            </div>
+            <div class="form-group">
+              <label>Country</label>
+              <input type="text" id="canada_post-shipper-country" value="CA" placeholder="CA">
+            </div>
+          </div>
+
+          <div id="canada_post-test-result"></div>
+
+          <div class="carrier-actions">
+            <button class="btn btn-secondary" onclick="testCarrierAccount('canada_post')">Test Connection</button>
+            <button class="btn btn-primary" onclick="saveCarrierAccount('canada_post')">Save Canada Post Settings</button>
+          </div>
+        </div>
+      </div>
+
+      <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 16px;">
+        These credentials allow Parcel Scanner to create shipping labels directly without ShipStation.
+        Get your UPS API credentials from the <a href="https://developer.ups.com/" target="_blank">UPS Developer Portal</a>.
+        Get Canada Post credentials from <a href="https://www.canadapost-postescanada.ca/information/app/drc/home" target="_blank">Canada Post Developer Program</a>.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- Packing Slips Section -->
+<div id="packing-section" class="settings-section">
 <div class="settings-container">
   <!-- Left Panel: Editors -->
   <div class="settings-panel">
@@ -490,6 +833,7 @@
     </div>
   </div>
 </div>
+</div><!-- End packing-section -->
 
 {% raw %}
 <script>
@@ -499,12 +843,193 @@
 
   let previewTimeout = null;
   let sampleData = null;
+  let carrierAccounts = {};
 
   // Initialize on page load
   document.addEventListener('DOMContentLoaded', function() {
     loadVariables();
     loadPreviewData();
+    loadCarrierAccounts();
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Settings Tab Switching
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  function switchSettingsTab(tab) {
+    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.settings-section').forEach(s => s.classList.remove('active'));
+
+    document.querySelector(`.settings-tab[onclick*="${tab}"]`).classList.add('active');
+    document.getElementById(tab + '-section').classList.add('active');
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Carrier Accounts Functions
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  function toggleCarrierCard(carrier) {
+    const card = document.getElementById(carrier === 'canada_post' ? 'canada-post-card' : carrier + '-card');
+    card.classList.toggle('expanded');
+  }
+
+  function loadCarrierAccounts() {
+    fetch('/api/carrier-accounts')
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          data.accounts.forEach(account => {
+            carrierAccounts[account.carrier_code] = account;
+            populateCarrierForm(account);
+            updateCarrierStatus(account);
+          });
+        }
+      })
+      .catch(err => console.error('Error loading carrier accounts:', err));
+  }
+
+  function populateCarrierForm(account) {
+    const c = account.carrier_code;
+    const prefix = c;
+
+    // API credentials
+    const clientIdEl = document.getElementById(`${prefix}-client-id`);
+    const accountNumEl = document.getElementById(`${prefix}-account-number`);
+    if (clientIdEl) clientIdEl.value = account.client_id || '';
+    if (accountNumEl) accountNumEl.value = account.account_number || '';
+
+    // Shipper address
+    const fields = ['name', 'phone', 'address1', 'address2', 'city', 'province', 'postal', 'country'];
+    fields.forEach(field => {
+      const el = document.getElementById(`${prefix}-shipper-${field}`);
+      if (el) {
+        const key = field === 'postal' ? 'shipper_postal_code' : `shipper_${field}`;
+        el.value = account[key] || (field === 'country' ? 'CA' : '');
+      }
+    });
+  }
+
+  function updateCarrierStatus(account) {
+    const statusEl = document.getElementById(`${account.carrier_code}-status`);
+    if (!statusEl) return;
+
+    if (account.last_tested_at && !account.last_error) {
+      statusEl.textContent = 'Connected';
+      statusEl.className = 'status connected';
+    } else if (account.last_error) {
+      statusEl.textContent = 'Error: ' + account.last_error.substring(0, 50);
+      statusEl.className = 'status error';
+    } else if (account.client_id) {
+      statusEl.textContent = 'Configured - not tested';
+      statusEl.className = 'status';
+    } else {
+      statusEl.textContent = 'Not configured';
+      statusEl.className = 'status';
+    }
+  }
+
+  function getCarrierFormData(carrier) {
+    const prefix = carrier;
+    return {
+      carrier_code: carrier,
+      carrier_name: carrier === 'ups' ? 'UPS' : 'Canada Post',
+      client_id: document.getElementById(`${prefix}-client-id`)?.value || '',
+      client_secret: document.getElementById(`${prefix}-client-secret`)?.value || null,
+      account_number: document.getElementById(`${prefix}-account-number`)?.value || '',
+      shipper_name: document.getElementById(`${prefix}-shipper-name`)?.value || '',
+      shipper_phone: document.getElementById(`${prefix}-shipper-phone`)?.value || '',
+      shipper_address1: document.getElementById(`${prefix}-shipper-address1`)?.value || '',
+      shipper_address2: document.getElementById(`${prefix}-shipper-address2`)?.value || '',
+      shipper_city: document.getElementById(`${prefix}-shipper-city`)?.value || '',
+      shipper_province: document.getElementById(`${prefix}-shipper-province`)?.value || '',
+      shipper_postal_code: document.getElementById(`${prefix}-shipper-postal`)?.value || '',
+      shipper_country: document.getElementById(`${prefix}-shipper-country`)?.value || 'CA',
+      enabled: true
+    };
+  }
+
+  function saveCarrierAccount(carrier) {
+    const data = getCarrierFormData(carrier);
+
+    // Don't send empty password (keep existing)
+    if (!data.client_secret) {
+      delete data.client_secret;
+    }
+
+    const resultEl = document.getElementById(`${carrier}-test-result`);
+    resultEl.innerHTML = '<div class="test-result loading">Saving...</div>';
+
+    fetch('/api/carrier-accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    .then(r => r.json())
+    .then(response => {
+      if (response.success) {
+        resultEl.innerHTML = '<div class="test-result success">Settings saved successfully!</div>';
+        // Clear password field after save
+        const secretEl = document.getElementById(`${carrier}-client-secret`);
+        if (secretEl) secretEl.value = '';
+        // Reload to update status
+        loadCarrierAccounts();
+        setTimeout(() => { resultEl.innerHTML = ''; }, 3000);
+      } else {
+        resultEl.innerHTML = `<div class="test-result error">Error: ${response.error}</div>`;
+      }
+    })
+    .catch(err => {
+      resultEl.innerHTML = `<div class="test-result error">Error: ${err.message}</div>`;
+    });
+  }
+
+  function testCarrierAccount(carrier) {
+    const resultEl = document.getElementById(`${carrier}-test-result`);
+
+    // First save the current form data
+    const data = getCarrierFormData(carrier);
+    if (!data.client_secret) {
+      delete data.client_secret;
+    }
+
+    resultEl.innerHTML = '<div class="test-result loading">Saving and testing connection...</div>';
+
+    // Save first, then test
+    fetch('/api/carrier-accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    .then(r => r.json())
+    .then(saveResponse => {
+      if (!saveResponse.success) {
+        throw new Error(saveResponse.error || 'Failed to save');
+      }
+
+      // Clear password field after save
+      const secretEl = document.getElementById(`${carrier}-client-secret`);
+      if (secretEl) secretEl.value = '';
+
+      // Now test
+      return fetch(`/api/carrier-accounts/${carrier}/test`, { method: 'POST' });
+    })
+    .then(r => r.json())
+    .then(testResponse => {
+      if (testResponse.success) {
+        resultEl.innerHTML = `<div class="test-result success">${testResponse.message || 'Connection successful!'}</div>`;
+      } else {
+        resultEl.innerHTML = `<div class="test-result error">Test failed: ${testResponse.error}</div>`;
+      }
+      loadCarrierAccounts();
+    })
+    .catch(err => {
+      resultEl.innerHTML = `<div class="test-result error">Error: ${err.message}</div>`;
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Packing Slip Editor Functions
+  // ═══════════════════════════════════════════════════════════════════════════
 
   // Tab switching
   function switchTab(tab) {

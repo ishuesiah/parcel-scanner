@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import tracking_link %}
 
 {% block title %}Fix Stuck Orders - H&O Parcel Scans{% endblock %}
 
@@ -42,7 +43,7 @@
         <tbody>
           {% for s in stuck_scans %}
             <tr class="stuck-row" id="row-{{ s.id }}">
-              <td id="tracking-{{ s.id }}">{{ s.tracking_number }}</td>
+              <td id="tracking-{{ s.id }}">{{ tracking_link(s.tracking_number, s.carrier) }}</td>
               <td id="carrier-{{ s.id }}">{{ s.carrier }}</td>
               <td id="ss-batch-{{ s.id }}">{{ s.shipstation_batch_number or '' }}</td>
               <td id="order-{{ s.id }}">

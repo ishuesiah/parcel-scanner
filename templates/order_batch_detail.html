@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import tracking_link %}
 
 {% block title %}{{ batch.name }} - Order Batch{% endblock %}
 
@@ -84,7 +85,7 @@
             {{ (order.fulfillment_status or 'unfulfilled')|capitalize }}
           </span>
           {% if order.tracking_number %}
-            <span class="tracking-badge">{{ order.tracking_number }}</span>
+            {{ tracking_link(order.tracking_number, '', 'background: #e3f2fd; padding: 4px 10px; border-radius: 6px;') }}
           {% endif %}
         </div>
       </div>

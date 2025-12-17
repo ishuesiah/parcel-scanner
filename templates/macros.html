@@ -1,0 +1,120 @@
+{# ═══════════════════════════════════════════════════════════════════════════
+   Reusable Macros for Parcel Scanner Templates
+   Import with: {% from "macros.html" import tracking_link, status_badge, progress_bar %}
+   ═══════════════════════════════════════════════════════════════════════════ #}
+
+{# ─────────────────────────────────────────────────────────────────────────────
+   TRACKING LINK - Clickable tracking number with auto-detected carrier URL
+
+   Usage: {{ tracking_link(tracking_number, carrier_code) }}
+   Example: {{ tracking_link("1Z999AA10123456784", "UPS") }}
+   ───────────────────────────────────────────────────────────────────────────── #}
+{% macro tracking_link(tracking_number, carrier_code='', style='') %}
+  {%- if tracking_number -%}
+    {%- set is_ups = carrier_code == 'UPS' or tracking_number.startswith('1Z') -%}
+    {%- set is_canada_post = carrier_code and 'canada' in carrier_code|lower -%}
+    {%- set is_fedex = carrier_code and 'fedex' in carrier_code|lower -%}
+    {%- set is_usps = carrier_code and 'usps' in carrier_code|lower -%}
+
+    {%- if is_ups -%}
+      {%- set url = 'https://www.ups.com/track?loc=en_US&tracknum=' ~ tracking_number -%}
+    {%- elif is_canada_post -%}
+      {%- set url = 'https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor=' ~ tracking_number -%}
+    {%- elif is_fedex -%}
+      {%- set url = 'https://www.fedex.com/fedextrack/?trknbr=' ~ tracking_number -%}
+    {%- elif is_usps -%}
+      {%- set url = 'https://tools.usps.com/go/TrackConfirmAction?tLabels=' ~ tracking_number -%}
+    {%- else -%}
+      {%- set url = 'https://www.google.com/search?q=' ~ tracking_number ~ '+tracking' -%}
+    {%- endif -%}
+    <a href="{{ url }}" target="_blank" rel="noopener"
+       style="color: #1976d2; text-decoration: none; font-family: monospace; font-size: 0.85rem; {{ style }}"
+       title="Track {{ tracking_number }}">{{ tracking_number }}</a>
+  {%- else -%}
+    <span style="color: #999;">—</span>
+  {%- endif -%}
+{% endmacro %}
+
+
+{# ─────────────────────────────────────────────────────────────────────────────
+   STATUS BADGE - Colored status badge with optional link
+
+   Usage: {{ status_badge(status, status_text, tracking_url) }}
+   Example: {{ status_badge("delivered", "Delivered", tracking_url) }}
+   ───────────────────────────────────────────────────────────────────────────── #}
+{% macro status_badge(status, status_text, tracking_url='') %}
+  {%- set badge_html -%}
+    <span class="status-badge status-{{ status }}" style="white-space: nowrap;">
+      {{ status_text }}
+    </span>
+  {%- endset -%}
+
+  {%- if tracking_url -%}
+    <a href="{{ tracking_url }}" target="_blank" rel="noopener" style="text-decoration: none;">
+      {{ badge_html }}
+    </a>
+  {%- else -%}
+    {{ badge_html }}
+  {%- endif -%}
+{% endmacro %}
+
+
+{# ─────────────────────────────────────────────────────────────────────────────
+   PROGRESS BAR - Shipping progress visualization
+
+   Usage: {{ progress_bar(status) }}
+   Example: {{ progress_bar("in_transit") }}
+   ───────────────────────────────────────────────────────────────────────────── #}
+{% macro progress_bar(status) %}
+  {%- set progress_class = {
+    'delivered': 'progress-100',
+    'almost_there': 'progress-90',
+    'in_transit': 'progress-50',
+    'checking': 'progress-25',
+    'hasnt_moved': 'progress-25',
+    'label_created': 'progress-10',
+    'exception': 'progress-exception',
+    'unknown': 'progress-0'
+  }.get(status, 'progress-0') -%}
+  <div class="progress-bar">
+    <div class="progress-bar-fill {{ progress_class }}"></div>
+  </div>
+{% endmacro %}
+
+
+{# ─────────────────────────────────────────────────────────────────────────────
+   CARRIER ICON - Small carrier logo/text
+
+   Usage: {{ carrier_icon(carrier_code) }}
+   Example: {{ carrier_icon("UPS") }}
+   ───────────────────────────────────────────────────────────────────────────── #}
+{% macro carrier_icon(carrier_code) %}
+  {%- if carrier_code == 'UPS' or (carrier_code and '1Z' in carrier_code) -%}
+    <span style="background: #351c15; color: #ffb500; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold;">UPS</span>
+  {%- elif carrier_code and 'canada' in carrier_code|lower -%}
+    <span style="background: #e31837; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold;">CP</span>
+  {%- elif carrier_code and 'fedex' in carrier_code|lower -%}
+    <span style="background: #4d148c; color: #ff6600; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold;">FedEx</span>
+  {%- else -%}
+    <span style="color: #666; font-size: 0.85rem;">{{ carrier_code or '—' }}</span>
+  {%- endif -%}
+{% endmacro %}
+
+
+{# ─────────────────────────────────────────────────────────────────────────────
+   FLAG ICON - Status flag (checkmark, warning, error)
+
+   Usage: {{ flag_icon(severity) }}
+   Example: {{ flag_icon("ok") }}
+   ───────────────────────────────────────────────────────────────────────────── #}
+{% macro flag_icon(severity) %}
+  {%- if severity == 'ok' -%}
+    <span style="color: #199b76; font-size: 1.2rem;">&#10003;</span>
+  {%- elif severity == 'warning' -%}
+    <span style="color: #f57c00; font-size: 1.2rem;">&#9888;</span>
+  {%- elif severity == 'critical' or severity == 'error' -%}
+    <span style="color: #c62828; font-size: 1.2rem;">&#10060;</span>
+  {%- else -%}
+    <span style="color: #999;">—</span>
+  {%- endif -%}
+{% endmacro %}
