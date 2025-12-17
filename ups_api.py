@@ -632,6 +632,305 @@ class UPSShippingAPI:
         }
         return services.get(code, f"UPS Service {code}")
 
+    def create_label(
+        self,
+        shipper: Dict[str, str],
+        ship_to: Dict[str, str],
+        packages: list,
+        service_code: str = "11",  # Default: UPS Standard
+        customs_items: list = None,
+        reference1: str = None,
+        reference2: str = None
+    ) -> Dict[str, Any]:
+        """
+        Create a UPS shipping label with optional customs for international shipments.
+
+        Args:
+            shipper: {
+                "name": "Company Name",
+                "attention_name": "Contact Name",
+                "phone": "1234567890",
+                "address_line1": "123 Main St",
+                "address_line2": "",
+                "city": "Vancouver",
+                "state": "BC",
+                "postal_code": "V6B1A1",
+                "country_code": "CA"
+            }
+            ship_to: {
+                "name": "Customer Name",
+                "attention_name": "Customer Name",
+                "phone": "0987654321",
+                "address_line1": "456 Customer Ave",
+                "city": "New York",
+                "state": "NY",
+                "postal_code": "10001",
+                "country_code": "US"
+            }
+            packages: [{
+                "weight_kg": 0.5,
+                "length_cm": 25,
+                "width_cm": 18,
+                "height_cm": 5,
+                "description": "Planner"
+            }]
+            service_code: UPS service code (e.g., "11" for Standard, "08" for Expedited)
+            customs_items: (for international) [{
+                "description": "Planner agenda",
+                "hs_code": "4820102010",
+                "country_of_origin": "CA",
+                "quantity": 1,
+                "value": 74.10,
+                "weight_kg": 0.3
+            }]
+            reference1: Order number or reference
+            reference2: Additional reference
+
+        Returns:
+            {
+                "success": True,
+                "tracking_number": "1Z...",
+                "label_image": "base64_encoded_gif_or_pdf",
+                "label_format": "GIF",
+                "total_charge": 25.43,
+                "currency": "CAD",
+                "service_code": "11",
+                "service_name": "UPS Standard"
+            }
+        """
+        if not self.rating_enabled:
+            return {"success": False, "error": "UPS Shipping API not configured"}
+
+        token = self._get_oauth_token()
+        if not token:
+            return {"success": False, "error": "Failed to get UPS OAuth token"}
+
+        is_international = ship_to.get("country_code", "CA").upper() != shipper.get("country_code", "CA").upper()
+
+        # Build package objects
+        ups_packages = []
+        for i, pkg in enumerate(packages):
+            ups_package = {
+                "Description": pkg.get("description", "Merchandise")[:35],
+                "Packaging": {"Code": "02", "Description": "Package"},
+                "Dimensions": {
+                    "UnitOfMeasurement": {"Code": "CM", "Description": "Centimeters"},
+                    "Length": str(int(pkg.get("length_cm", 25))),
+                    "Width": str(int(pkg.get("width_cm", 18))),
+                    "Height": str(int(pkg.get("height_cm", 5)))
+                },
+                "PackageWeight": {
+                    "UnitOfMeasurement": {"Code": "KGS", "Description": "Kilograms"},
+                    "Weight": str(round(pkg.get("weight_kg", 0.5), 2))
+                }
+            }
+
+            # Add reference numbers to first package
+            if i == 0 and (reference1 or reference2):
+                refs = []
+                if reference1:
+                    refs.append({"Code": "00", "Value": str(reference1)[:35]})
+                if reference2:
+                    refs.append({"Code": "00", "Value": str(reference2)[:35]})
+                if refs:
+                    ups_package["ReferenceNumber"] = refs
+
+            ups_packages.append(ups_package)
+
+        # Build shipper address
+        shipper_lines = [shipper.get("address_line1", "")]
+        if shipper.get("address_line2"):
+            shipper_lines.append(shipper["address_line2"])
+
+        # Build ship-to address
+        ship_to_lines = [ship_to.get("address_line1", "")]
+        if ship_to.get("address_line2"):
+            ship_to_lines.append(ship_to["address_line2"])
+
+        # Build shipment request
+        shipment_request = {
+            "ShipmentRequest": {
+                "Request": {
+                    "SubVersion": "2205",
+                    "RequestOption": "nonvalidate",
+                    "TransactionReference": {"CustomerContext": f"Label_{reference1 or 'order'}"}
+                },
+                "Shipment": {
+                    "Description": "Stationery products",
+                    "Shipper": {
+                        "Name": shipper.get("name", "Shipper")[:35],
+                        "AttentionName": shipper.get("attention_name", shipper.get("name", ""))[:35],
+                        "Phone": {"Number": shipper.get("phone", "")[:15]},
+                        "ShipperNumber": self.account_number,
+                        "Address": {
+                            "AddressLine": shipper_lines,
+                            "City": shipper.get("city", "")[:30],
+                            "StateProvinceCode": shipper.get("state", "")[:5],
+                            "PostalCode": shipper.get("postal_code", "").replace(" ", ""),
+                            "CountryCode": shipper.get("country_code", "CA")
+                        }
+                    },
+                    "ShipTo": {
+                        "Name": ship_to.get("name", "Customer")[:35],
+                        "AttentionName": ship_to.get("attention_name", ship_to.get("name", ""))[:35],
+                        "Phone": {"Number": ship_to.get("phone", "")[:15] or "0000000000"},
+                        "Address": {
+                            "AddressLine": ship_to_lines,
+                            "City": ship_to.get("city", "")[:30],
+                            "StateProvinceCode": ship_to.get("state", "")[:5],
+                            "PostalCode": ship_to.get("postal_code", "").replace(" ", ""),
+                            "CountryCode": ship_to.get("country_code", "CA")
+                        }
+                    },
+                    "ShipFrom": {
+                        "Name": shipper.get("name", "Shipper")[:35],
+                        "AttentionName": shipper.get("attention_name", shipper.get("name", ""))[:35],
+                        "Phone": {"Number": shipper.get("phone", "")[:15]},
+                        "Address": {
+                            "AddressLine": shipper_lines,
+                            "City": shipper.get("city", "")[:30],
+                            "StateProvinceCode": shipper.get("state", "")[:5],
+                            "PostalCode": shipper.get("postal_code", "").replace(" ", ""),
+                            "CountryCode": shipper.get("country_code", "CA")
+                        }
+                    },
+                    "PaymentInformation": {
+                        "ShipmentCharge": [{
+                            "Type": "01",
+                            "BillShipper": {"AccountNumber": self.account_number}
+                        }]
+                    },
+                    "Service": {
+                        "Code": service_code,
+                        "Description": self._get_service_name(service_code)
+                    },
+                    "Package": ups_packages
+                },
+                "LabelSpecification": {
+                    "LabelImageFormat": {"Code": "GIF", "Description": "GIF"},
+                    "LabelStockSize": {"Height": "6", "Width": "4"}
+                }
+            }
+        }
+
+        # Add international customs documentation
+        if is_international and customs_items:
+            total_value = sum(
+                (item.get("value", 0) or 0) * (item.get("quantity", 1) or 1)
+                for item in customs_items
+            )
+
+            products = []
+            for item in customs_items:
+                product = {
+                    "Description": item.get("description", "Merchandise")[:35],
+                    "Unit": {
+                        "Number": str(item.get("quantity", 1)),
+                        "Value": str(round(item.get("value", 0), 2)),
+                        "UnitOfMeasurement": {"Code": "PCS", "Description": "Pieces"}
+                    },
+                    "CommodityCode": item.get("hs_code", "4820102010")[:15],
+                    "OriginCountryCode": item.get("country_of_origin", "CA"),
+                    "ProductWeight": {
+                        "UnitOfMeasurement": {"Code": "KGS"},
+                        "Weight": str(round(item.get("weight_kg", 0.1), 2))
+                    }
+                }
+                products.append(product)
+
+            # International forms
+            shipment_request["ShipmentRequest"]["Shipment"]["ShipmentServiceOptions"] = {
+                "InternationalForms": {
+                    "FormType": ["01"],  # Invoice
+                    "InvoiceNumber": str(reference1 or "INV001")[:35],
+                    "InvoiceDate": time.strftime("%Y%m%d"),
+                    "ReasonForExport": "SALE",
+                    "CurrencyCode": "CAD",
+                    "Product": products,
+                    "Contacts": {
+                        "SoldTo": {
+                            "Name": ship_to.get("name", "Customer")[:35],
+                            "AttentionName": ship_to.get("attention_name", ship_to.get("name", ""))[:35],
+                            "Phone": {"Number": ship_to.get("phone", "0000000000")[:15]},
+                            "Address": {
+                                "AddressLine": ship_to_lines,
+                                "City": ship_to.get("city", "")[:30],
+                                "StateProvinceCode": ship_to.get("state", "")[:5],
+                                "PostalCode": ship_to.get("postal_code", "").replace(" ", ""),
+                                "CountryCode": ship_to.get("country_code", "US")
+                            }
+                        }
+                    }
+                }
+            }
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/shipments/v2205/ship",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "transId": f"ship_{int(time.time())}",
+                    "transactionSrc": "HO-ParcelScanner"
+                },
+                json=shipment_request,
+                timeout=60
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                shipment_results = data.get("ShipmentResponse", {}).get("ShipmentResults", {})
+
+                tracking_number = shipment_results.get("ShipmentIdentificationNumber", "")
+                package_results = shipment_results.get("PackageResults", [])
+                if isinstance(package_results, dict):
+                    package_results = [package_results]
+
+                # Get label image from first package
+                label_image = ""
+                if package_results:
+                    label = package_results[0].get("ShippingLabel", {})
+                    graphic_image = label.get("GraphicImage", "")
+                    label_image = graphic_image
+
+                # Get charges
+                shipment_charges = shipment_results.get("ShipmentCharges", {})
+                total_charges = shipment_charges.get("TotalCharges", {})
+                total_amount = float(total_charges.get("MonetaryValue", 0))
+                currency = total_charges.get("CurrencyCode", "CAD")
+
+                return {
+                    "success": True,
+                    "tracking_number": tracking_number,
+                    "label_image": label_image,
+                    "label_format": "GIF",
+                    "total_charge": total_amount,
+                    "currency": currency,
+                    "service_code": service_code,
+                    "service_name": self._get_service_name(service_code),
+                    "raw_response": data
+                }
+            else:
+                error_msg = response.text[:1000]
+                print(f"UPS Shipping error: {response.status_code} - {error_msg}")
+
+                # Try to parse error details
+                try:
+                    error_data = response.json()
+                    errors = error_data.get("response", {}).get("errors", [])
+                    if errors:
+                        error_msg = "; ".join([e.get("message", "") for e in errors])
+                except:
+                    pass
+
+                return {"success": False, "error": f"UPS API error: {error_msg}"}
+
+        except Exception as e:
+            print(f"UPS Shipping exception: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
+
 
 # Singleton instances
 _ups_api = None

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros.html" import tracking_link %}
 
 {% block title %}All Scans - H&O Parcel Scans{% endblock %}
 
@@ -41,7 +42,7 @@
                 data-order="{{ s.order_number or '' }}"
                 data-customer="{{ s.customer_name or '' }}"
                 data-scanned="{{ s.scan_date.isoformat() if s.scan_date else '' }}">
-              <td><span class="tracking-number">{{ s.tracking_number }}</span></td>
+<td>{{ tracking_link(s.tracking_number, s.carrier) }}</td>
               <td>{{ s.carrier or '—' }}</td>
               <td>
                 {% if s.order_number and s.order_number not in ['Processing...', 'N/A', ''] %}

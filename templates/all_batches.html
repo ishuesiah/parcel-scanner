@@ -2,7 +2,58 @@
 
 {% block title %}All Batches - H&O Parcel Scans{% endblock %}
 
-{% block extra_styles %}{% endblock %}
+{% block extra_styles %}
+<style>
+  /* Batch card hover actions - hidden by default, shown on hover */
+  .batch-card-actions {
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+  .batch-card:hover .batch-card-actions,
+  .active-batch-card:hover .batch-card-actions {
+    opacity: 1;
+  }
+
+  /* Completed batch card styling */
+  .batch-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .batch-card:hover {
+    background: var(--bg-main);
+    border-color: var(--secondary);
+    box-shadow: 0 2px 8px rgba(81, 106, 236, 0.1);
+  }
+
+  /* Status badge styling */
+  .batch-status {
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 12px;
+  }
+  .batch-status.notified {
+    background: rgba(25, 155, 118, 0.1);
+    color: #199b76;
+  }
+  .batch-status.recorded {
+    background: rgba(243, 156, 18, 0.1);
+    color: #f39c12;
+  }
+  .batch-status.in-progress {
+    background: var(--bg-main);
+    color: var(--text-muted);
+  }
+</style>
+{% endblock %}
 
 {% block content %}
     <!-- Active Batches Section -->
@@ -16,7 +67,7 @@
 
       {% if active_batches %}
         {% for b in active_batches %}
-          <div class="active-batch-card" onclick="window.location.href='{{ url_for('edit_batch', batch_id=b.id) }}'" style="cursor: pointer;">
+          <div class="active-batch-card" onclick="window.location.href='{{ url_for('edit_batch', batch_id=b.id) }}'">
             <div class="batch-card-info" style="flex: 1;">
               <h3>
                 <a href="{{ url_for('edit_batch', batch_id=b.id) }}" title="Click to resume scanning" onclick="event.stopPropagation();">
@@ -28,16 +79,14 @@
                 <span>{{ b.pkg_count }} packages</span>
                 <span>{{ b.created_at|friendly_date }}</span>
                 {% if b.notes %}
-                  <span style="color: #534bc4;">{{ b.notes }}</span>
+                  <span style="color: var(--secondary);">{{ b.notes }}</span>
                 {% endif %}
               </div>
             </div>
             <div class="batch-card-actions" onclick="event.stopPropagation();">
-              <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="btn-resume">
-                Resume
-              </a>
+              <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="btn-resume">Resume</a>
               <button type="button" class="btn-delete-small"
-                      onclick="event.stopPropagation(); if(confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.')) { deleteBatch({{ b.id }}); }">
+                      onclick="if(confirm('Delete batch #{{ b.id }}? This removes all scans.')) deleteBatch({{ b.id }});">
                 Delete
               </button>
             </div>
@@ -58,54 +107,42 @@
     <div class="completed-batches-section">
       <h2>Completed Batches</h2>
       {% if completed_batches %}
-        <table>
-          <thead>
-            <tr>
-              <th>Batch ID</th>
-              <th>Carrier</th>
-              <th>Created At</th>
-              <th>Pkg Count</th>
-              <th>Status</th>
-              <th>Notes</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for b in completed_batches %}
-              <tr>
-                <td>
-                  <a class="batch-link" href="{{ url_for('edit_batch', batch_id=b.id) }}">
-                    Batch {{ b.id }}
-                  </a>
-                </td>
-                <td>{{ b.carrier }}</td>
-                <td>{{ b.created_at|friendly_date }}</td>
-                <td>{{ b.pkg_count }}</td>
-                <td>
-                  {% set batch_status = b.get('status', 'in_progress') %}
-                  {% if batch_status == 'notified' %}
-                    <span style="color: #199b76; font-weight: 500;">✉ Notified</span>
-                  {% elif batch_status == 'recorded' %}
-                    <span style="color: #f39c12; font-weight: 500;">✓ Picked Up</span>
-                  {% else %}
-                    <span style="color: #666;">⏳ In Progress</span>
-                  {% endif %}
-                </td>
-                <td>{{ b.notes or '—' }}</td>
-                <td>
-                  <a href="{{ url_for('edit_batch', batch_id=b.id) }}" style="color: #2d85f8; text-decoration: none; margin-right: 12px;">Edit</a>
-                  <form action="{{ url_for('delete_batch') }}" method="post" style="display: inline;"
-                        onsubmit="return confirm('Are you sure you want to delete batch #{{ b.id }}? This will remove all associated scans.');">
-                    <input type="hidden" name="batch_id" value="{{ b.id }}">
-                    <button type="submit" class="btn-delete-small">Delete</button>
-                  </form>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+        {% for b in completed_batches %}
+          {% set batch_status = b.get('status', 'in_progress') %}
+          <div class="batch-card" onclick="window.location.href='{{ url_for('edit_batch', batch_id=b.id) }}'">
+            <div class="batch-card-info" style="flex: 1;">
+              <h3 style="margin: 0 0 6px 0;">
+                <a href="{{ url_for('edit_batch', batch_id=b.id) }}" onclick="event.stopPropagation();" style="color: var(--text-main); text-decoration: none;">
+                  Batch #{{ b.id }}
+                </a>
+              </h3>
+              <div class="batch-card-meta">
+                <span>{{ b.carrier }}</span>
+                <span>{{ b.pkg_count }} packages</span>
+                <span>{{ b.created_at|friendly_date }}</span>
+                {% if batch_status == 'notified' %}
+                  <span class="batch-status notified">✉ Notified</span>
+                {% elif batch_status == 'recorded' %}
+                  <span class="batch-status recorded">✓ Picked Up</span>
+                {% else %}
+                  <span class="batch-status in-progress">⏳ In Progress</span>
+                {% endif %}
+                {% if b.notes %}
+                  <span style="color: var(--secondary);">{{ b.notes }}</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="batch-card-actions" onclick="event.stopPropagation();">
+              <a href="{{ url_for('edit_batch', batch_id=b.id) }}" class="btn-resume">Edit</a>
+              <button type="button" class="btn-delete-small"
+                      onclick="if(confirm('Delete batch #{{ b.id }}? This removes all scans.')) deleteBatch({{ b.id }});">
+                Delete
+              </button>
+            </div>
+          </div>
+        {% endfor %}
       {% else %}
-        <p style="color: #999; padding: 20px 0;">No completed batches yet.</p>
+        <p style="color: var(--text-muted); padding: 20px 0;">No completed batches yet.</p>
       {% endif %}
     </div>
 
