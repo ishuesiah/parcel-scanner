@@ -20,7 +20,7 @@
   }
   /* Move toolbar */
   .move-toolbar {
-    display: none;
+    display: flex;
     align-items: center;
     gap: 12px;
     padding: 12px 16px;
@@ -29,8 +29,9 @@
     border-radius: 8px;
     margin-bottom: 16px;
   }
-  .move-toolbar.visible {
-    display: flex;
+  .move-toolbar.no-selection .selected-count,
+  .move-toolbar.no-selection .btn-clear-selection {
+    opacity: 0.5;
   }
   .move-toolbar .selected-count {
     font-weight: 600;
@@ -95,22 +96,27 @@
       <em>Tracking Numbers: {{ batch.tracking_numbers }}</em>
     </p>
 
-    <!-- Move Toolbar (appears when items are selected) -->
-    <div id="moveToolbar" class="move-toolbar">
+    <!-- Move Toolbar -->
+    <div id="moveToolbar" class="move-toolbar no-selection">
       <span class="selected-count"><span id="selectedCount">0</span> selected</span>
       <span style="color: var(--text-muted);">Move to →</span>
       <select id="targetBatchSelect">
         <option value="">Select batch...</option>
-        {% for b in all_batches %}
-          {% if b.id != batch.id %}
-            <option value="{{ b.id }}">Batch #{{ b.id }} ({{ b.carrier }}) - {{ b.pkg_count }} pkgs</option>
-          {% endif %}
-        {% endfor %}
+        {% if all_batches %}
+          {% for b in all_batches %}
+            {% if b.id != batch.id %}
+              <option value="{{ b.id }}">Batch #{{ b.id }} ({{ b.carrier }}) - {{ b.pkg_count }} pkgs</option>
+            {% endif %}
+          {% endfor %}
+        {% endif %}
       </select>
       <button type="button" class="btn-move" id="moveBtn" onclick="moveSelectedScans()" disabled>
         Move →
       </button>
       <button type="button" class="btn-clear-selection" onclick="clearSelection()">Clear Selection</button>
+      {% if not all_batches or all_batches|length <= 1 %}
+        <span style="color: var(--text-muted); font-size: 0.85rem; margin-left: auto;">(No other batches available)</span>
+      {% endif %}
     </div>
 
     <h3>All Scans in Batch {{ batch.id }}</h3>
@@ -135,7 +141,7 @@
         {% for row in scans %}
           <tr class="scan-row {{ 'duplicate-row' if row.status.startswith('Duplicate') else '' }}" data-scan-id="{{ row.id }}" data-index="{{ loop.index0 }}">
             <td>
-              <input type="checkbox" class="select-checkbox scan-checkbox" data-scan-id="{{ row.id }}" onclick="handleCheckboxClick(event, {{ loop.index0 }})">
+              <input type="checkbox" class="select-checkbox scan-checkbox" data-scan-id="{{ row.id }}" data-index="{{ loop.index0 }}">
             </td>
             <td>{{ tracking_link(row.tracking_number, row.carrier) }}</td>
             <td>{{ row.carrier }}</td>
@@ -201,26 +207,43 @@
   const selectedScanIds = new Set();
   const currentBatchId = {{ batch.id }};
 
+  // ── Initialize Checkbox Event Listeners ──
+  document.addEventListener('DOMContentLoaded', function() {
+    const tableBody = document.getElementById('scansTableBody');
+
+    // Use event delegation for checkbox clicks
+    tableBody.addEventListener('click', function(event) {
+      if (event.target.classList.contains('scan-checkbox')) {
+        handleCheckboxClick(event);
+      }
+    });
+  });
+
   // ── Checkbox Click Handler with Shift-Select Support ──
-  function handleCheckboxClick(event, index) {
+  function handleCheckboxClick(event) {
     const checkbox = event.target;
     const scanId = checkbox.dataset.scanId;
+    const index = parseInt(checkbox.dataset.index);
     const row = checkbox.closest('tr');
 
-    if (event.shiftKey && lastCheckedIndex !== null) {
+    if (event.shiftKey && lastCheckedIndex !== null && lastCheckedIndex !== index) {
       // Shift-click: select range
-      const checkboxes = document.querySelectorAll('.scan-checkbox');
+      event.preventDefault();
+
+      const checkboxes = Array.from(document.querySelectorAll('.scan-checkbox'));
       const start = Math.min(lastCheckedIndex, index);
       const end = Math.max(lastCheckedIndex, index);
 
       for (let i = start; i <= end; i++) {
         const cb = checkboxes[i];
-        cb.checked = true;
-        selectedScanIds.add(cb.dataset.scanId);
-        cb.closest('tr').classList.add('selected');
+        if (cb) {
+          cb.checked = true;
+          selectedScanIds.add(cb.dataset.scanId);
+          cb.closest('tr').classList.add('selected');
+        }
       }
     } else {
-      // Regular click
+      // Regular click - checkbox state already toggled by browser
       if (checkbox.checked) {
         selectedScanIds.add(scanId);
         row.classList.add('selected');
@@ -228,9 +251,9 @@
         selectedScanIds.delete(scanId);
         row.classList.remove('selected');
       }
+      lastCheckedIndex = index;
     }
 
-    lastCheckedIndex = index;
     updateSelectionUI();
   }
 
@@ -274,9 +297,9 @@
     countSpan.textContent = count;
 
     if (count > 0) {
-      toolbar.classList.add('visible');
+      toolbar.classList.remove('no-selection');
     } else {
-      toolbar.classList.remove('visible');
+      toolbar.classList.add('no-selection');
     }
 
     // Enable move button only if selection exists and target batch is selected
@@ -354,8 +377,8 @@
         // Show success message
         const toolbar = document.getElementById('moveToolbar');
         toolbar.innerHTML = `<span style="color: #199b76; font-weight: 500;">✓ ${data.moved_count} scan(s) moved to Batch #${targetBatchId}</span>
-          <a href="{{ url_for('view_batch', batch_id=0) }}".replace('/0', '/${targetBatchId}') style="color: var(--secondary); margin-left: 12px;">View Batch →</a>`;
-        toolbar.classList.add('visible');
+          <a href="/view_batch/${targetBatchId}" style="color: var(--secondary); margin-left: 12px;">View Batch →</a>`;
+        toolbar.classList.remove('no-selection');
 
         // Reload after delay to refresh counts
         setTimeout(() => window.location.reload(), 2000);
