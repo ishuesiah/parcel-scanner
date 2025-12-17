@@ -4284,6 +4284,122 @@ def check_shipments():
         )
 
 
+@app.route("/api/tracking/status", methods=["POST"])
+def api_get_tracking_status():
+    """
+    Get current tracking status for a list of tracking numbers.
+    Returns cached status from the database.
+    """
+    try:
+        data = request.get_json()
+        tracking_numbers = data.get('tracking_numbers', [])
+
+        if not tracking_numbers:
+            return jsonify({"success": False, "error": "No tracking numbers provided"}), 400
+
+        # Limit to 100 tracking numbers per request
+        tracking_numbers = tracking_numbers[:100]
+
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Get cached tracking status
+        placeholders = ','.join(['%s'] * len(tracking_numbers))
+        cursor.execute(f"""
+            SELECT tracking_number, status, status_description, estimated_delivery,
+                   last_location, last_activity_date, is_delivered, updated_at
+            FROM tracking_status_cache
+            WHERE tracking_number IN ({placeholders})
+        """, tracking_numbers)
+
+        results = {}
+        for row in cursor.fetchall():
+            tracking = row['tracking_number']
+            status = row['status'] or 'unknown'
+            status_text = row['status_description'] or ''
+
+            # Format status display
+            if status == 'delivered':
+                status_text = '✅ Delivered'
+            elif status == 'in_transit':
+                status_lower = status_text.lower() if status_text else ''
+                if 'out for delivery' in status_lower:
+                    status_text = '🏃 Almost There!'
+                    status = 'almost_there'
+                else:
+                    status_text = '🚚 On the Way'
+                    if row['estimated_delivery']:
+                        status_text += f" - Est: {row['estimated_delivery']}"
+            elif status == 'label_created':
+                status_text = '📦 Label Created'
+            elif status == 'exception':
+                status_text = '⚠️ Exception/Delay'
+            elif not status_text:
+                status_text = '🔄 Loading...'
+
+            results[tracking] = {
+                'status': status,
+                'status_text': status_text,
+                'estimated_delivery': row['estimated_delivery'] or '',
+                'last_location': row['last_location'] or '',
+                'is_delivered': row['is_delivered'] or False,
+                'updated_at': row['updated_at'].isoformat() if row['updated_at'] else None
+            }
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "tracking": results
+        })
+
+    except Exception as e:
+        print(f"Error getting tracking status: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/tracking/refresh", methods=["POST"])
+def api_refresh_tracking():
+    """
+    Force refresh tracking status for specified tracking numbers.
+    Triggers immediate API calls to carriers.
+    """
+    try:
+        data = request.get_json()
+        tracking_numbers = data.get('tracking_numbers', [])
+
+        if not tracking_numbers:
+            return jsonify({"success": False, "error": "No tracking numbers provided"}), 400
+
+        # Limit to 30 tracking numbers per refresh request
+        tracking_numbers = tracking_numbers[:30]
+
+        # Split into UPS and Canada Post
+        ups_tracking = [t for t in tracking_numbers if t.startswith("1Z")]
+        cp_tracking = [t for t in tracking_numbers if not t.startswith("1Z")]
+
+        refreshed = 0
+
+        if ups_tracking:
+            update_ups_tracking_cache(ups_tracking, force_refresh=True)
+            refreshed += len(ups_tracking)
+
+        if cp_tracking:
+            update_canadapost_tracking_cache(cp_tracking, force_refresh=True)
+            refreshed += len(cp_tracking)
+
+        return jsonify({
+            "success": True,
+            "refreshed": refreshed,
+            "message": f"Refreshed {refreshed} tracking numbers"
+        })
+
+    except Exception as e:
+        print(f"Error refreshing tracking: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/cancel_order", methods=["POST"])
 def cancel_order():
     """
@@ -5099,6 +5215,16 @@ def view_order_batch(batch_id):
             flash("Batch not found", "error")
             return redirect(url_for('order_batches'))
 
+        # Get all batches for the move dropdown (with order counts)
+        cursor.execute("""
+            SELECT ob.id, ob.name, ob.status, COUNT(obi.id) as order_count
+            FROM order_batches ob
+            LEFT JOIN order_batch_items obi ON ob.id = obi.batch_id
+            GROUP BY ob.id
+            ORDER BY ob.created_at DESC
+        """)
+        all_batches = cursor.fetchall()
+
         # Get all orders in this batch with their line items
         cursor.execute("""
             SELECT obi.*, o.customer_name, o.customer_email, o.shipping_address,
@@ -5143,6 +5269,7 @@ def view_order_batch(batch_id):
             'order_batch_detail.html',
             batch=batch,
             orders=orders_with_items,
+            all_batches=all_batches,
             version=__version__,
             active_page='order_batches'
         )
@@ -5169,6 +5296,149 @@ def delete_order_batch(batch_id):
     except Exception as e:
         flash(f"Error deleting batch: {str(e)}", "error")
     return redirect(url_for('order_batches'))
+
+
+@app.route("/api/order_batch/move_orders", methods=["POST"])
+def api_move_orders_between_batches():
+    """
+    Move orders from one batch to another.
+    Expects JSON: { source_batch_id, target_batch_id, order_ids: [] }
+    """
+    try:
+        data = request.get_json()
+        source_batch_id = data.get('source_batch_id')
+        target_batch_id = data.get('target_batch_id')
+        order_ids = data.get('order_ids', [])
+
+        if not source_batch_id or not target_batch_id:
+            return jsonify({"success": False, "error": "Missing batch IDs"}), 400
+
+        if not order_ids:
+            return jsonify({"success": False, "error": "No orders selected"}), 400
+
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Verify target batch exists
+        cursor.execute("SELECT id FROM order_batches WHERE id = %s", (target_batch_id,))
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify({"success": False, "error": "Target batch not found"}), 404
+
+        moved_count = 0
+        for order_id in order_ids:
+            # Get order number for the order
+            cursor.execute("SELECT order_number FROM orders WHERE id = %s", (order_id,))
+            order_row = cursor.fetchone()
+            if not order_row:
+                continue
+
+            order_number = order_row['order_number']
+
+            # Delete from source batch
+            cursor.execute(
+                "DELETE FROM order_batch_items WHERE batch_id = %s AND order_id = %s",
+                (source_batch_id, order_id)
+            )
+
+            # Insert into target batch (ignore if already exists)
+            cursor.execute("""
+                INSERT INTO order_batch_items (batch_id, order_id, order_number)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (batch_id, order_id) DO NOTHING
+            """, (target_batch_id, order_id, order_number))
+            moved_count += 1
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "moved_count": moved_count,
+            "message": f"Moved {moved_count} orders to batch"
+        })
+
+    except Exception as e:
+        print(f"Error moving orders: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/order_batch/create_and_move", methods=["POST"])
+def api_create_batch_and_move_orders():
+    """
+    Create a new batch and move orders to it.
+    Expects JSON: { source_batch_id, new_batch_name, order_ids: [] }
+    """
+    try:
+        data = request.get_json()
+        source_batch_id = data.get('source_batch_id')
+        new_batch_name = data.get('new_batch_name', '').strip()
+        order_ids = data.get('order_ids', [])
+
+        if not source_batch_id:
+            return jsonify({"success": False, "error": "Missing source batch ID"}), 400
+
+        if not new_batch_name:
+            new_batch_name = f"Batch {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+        if not order_ids:
+            return jsonify({"success": False, "error": "No orders selected"}), 400
+
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Create the new batch
+        cursor.execute("""
+            INSERT INTO order_batches (name, status, created_by)
+            VALUES (%s, 'pending', %s)
+            RETURNING id
+        """, (new_batch_name, session.get('user_email', 'unknown')))
+        new_batch_id = cursor.fetchone()['id']
+
+        moved_count = 0
+        for order_id in order_ids:
+            # Get order number for the order
+            cursor.execute("SELECT order_number FROM orders WHERE id = %s", (order_id,))
+            order_row = cursor.fetchone()
+            if not order_row:
+                continue
+
+            order_number = order_row['order_number']
+
+            # Delete from source batch
+            cursor.execute(
+                "DELETE FROM order_batch_items WHERE batch_id = %s AND order_id = %s",
+                (source_batch_id, order_id)
+            )
+
+            # Insert into new batch
+            cursor.execute("""
+                INSERT INTO order_batch_items (batch_id, order_id, order_number)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (batch_id, order_id) DO NOTHING
+            """, (new_batch_id, order_id, order_number))
+            moved_count += 1
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "new_batch_id": new_batch_id,
+            "moved_count": moved_count,
+            "message": f"Created batch and moved {moved_count} orders"
+        })
+
+    except Exception as e:
+        print(f"Error creating batch and moving orders: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -14,6 +14,52 @@
   </div>
 </div>
 
+<!-- Selection Action Bar (hidden by default) -->
+<div id="selectionBar" class="selection-bar" style="display: none;">
+  <div class="selection-info">
+    <input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" title="Select all">
+    <span id="selectedCount">0</span> orders selected
+  </div>
+  <div class="selection-actions">
+    <button type="button" class="btn-clear-selection" onclick="clearSelection()">Clear</button>
+    <button type="button" class="btn-move-batch" onclick="openMoveModal()">
+      Move to Batch
+    </button>
+  </div>
+</div>
+
+<!-- Move to Batch Modal -->
+<div id="moveModal" class="modal" style="display: none;">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>Move Orders to Another Batch</h3>
+      <button type="button" class="modal-close" onclick="closeMoveModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="moveModalInfo">Moving <span id="moveCount">0</span> orders</p>
+      <div class="batch-select-container">
+        <label for="targetBatch">Select destination batch:</label>
+        <select id="targetBatch" class="batch-select">
+          <option value="">-- Select a batch --</option>
+          {% for b in all_batches %}
+            {% if b.id != batch.id %}
+              <option value="{{ b.id }}">{{ b.name }} ({{ b.order_count }} orders)</option>
+            {% endif %}
+          {% endfor %}
+        </select>
+        <div class="new-batch-option">
+          <span>or</span>
+          <button type="button" class="btn-new-batch" onclick="createNewBatchAndMove()">Create New Batch</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn-cancel-modal" onclick="closeMoveModal()">Cancel</button>
+      <button type="button" class="btn-confirm-move" onclick="confirmMoveOrders()">Move Orders</button>
+    </div>
+  </div>
+</div>
+
 {% if batch.notes %}
   <div class="batch-notes">
     <strong>Notes:</strong> {{ batch.notes }}
@@ -22,9 +68,11 @@
 
 <div class="orders-list">
   {% for order in orders %}
-    <div class="order-card" data-order="{{ order.order_number }}">
+    <div class="order-card" data-order="{{ order.order_number }}" data-order-id="{{ order.order_id }}">
       <div class="order-header">
         <div class="order-info">
+          <input type="checkbox" class="order-checkbox" value="{{ order.order_number }}"
+                 data-order-id="{{ order.order_id }}" data-index="{{ loop.index0 }}">
           <span class="order-number">#{{ order.order_number }}</span>
           <span class="customer-name">{{ order.customer_name or 'Unknown' }}</span>
           {% if order.note %}
@@ -347,5 +395,461 @@
     background: #e3f2fd;
     color: #1976d2;
   }
+
+  /* Selection Bar */
+  .selection-bar {
+    position: sticky;
+    top: 60px;
+    z-index: 100;
+    background: linear-gradient(135deg, #534bc4 0%, #6c63ff 100%);
+    color: white;
+    padding: 12px 20px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 2px 8px rgba(83, 75, 196, 0.3);
+  }
+
+  .selection-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 500;
+  }
+
+  .selection-info input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+  }
+
+  .selection-actions {
+    display: flex;
+    gap: 10px;
+  }
+
+  .btn-clear-selection {
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s;
+  }
+
+  .btn-clear-selection:hover {
+    background: rgba(255, 255, 255, 0.3);
+  }
+
+  .btn-move-batch {
+    padding: 8px 16px;
+    background: white;
+    color: #534bc4;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s;
+  }
+
+  .btn-move-batch:hover {
+    background: #f0f0ff;
+    transform: translateY(-1px);
+  }
+
+  /* Order checkbox styling */
+  .order-checkbox {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    margin-right: 8px;
+    accent-color: #534bc4;
+  }
+
+  .order-card.selected {
+    border-color: #534bc4;
+    box-shadow: 0 0 0 2px rgba(83, 75, 196, 0.2);
+  }
+
+  /* Modal styles */
+  .modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .modal-content {
+    background: white;
+    border-radius: 12px;
+    width: 90%;
+    max-width: 500px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  }
+
+  .modal-header {
+    padding: 20px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .modal-header h3 {
+    margin: 0;
+    color: #333;
+  }
+
+  .modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: #666;
+    padding: 0;
+    line-height: 1;
+  }
+
+  .modal-close:hover {
+    color: #333;
+  }
+
+  .modal-body {
+    padding: 20px;
+  }
+
+  .modal-body p {
+    margin: 0 0 16px 0;
+    color: #666;
+  }
+
+  .batch-select-container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .batch-select-container label {
+    font-weight: 500;
+    color: #333;
+  }
+
+  .batch-select {
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 1rem;
+    width: 100%;
+  }
+
+  .batch-select:focus {
+    border-color: #534bc4;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(83, 75, 196, 0.1);
+  }
+
+  .new-batch-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+  }
+
+  .new-batch-option span {
+    color: #999;
+  }
+
+  .btn-new-batch {
+    padding: 8px 16px;
+    background: #f5f5f5;
+    color: #534bc4;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s;
+  }
+
+  .btn-new-batch:hover {
+    background: #eee;
+  }
+
+  .modal-footer {
+    padding: 15px 20px;
+    border-top: 1px solid #eee;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    background: #f9f9f9;
+    border-radius: 0 0 12px 12px;
+  }
+
+  .btn-cancel-modal {
+    padding: 10px 20px;
+    background: #f5f5f5;
+    color: #666;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+
+  .btn-cancel-modal:hover {
+    background: #eee;
+  }
+
+  .btn-confirm-move {
+    padding: 10px 20px;
+    background: #534bc4;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s;
+  }
+
+  .btn-confirm-move:hover {
+    background: #4339a8;
+  }
+
+  .btn-confirm-move:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
 </style>
+
+<script>
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Order Selection with Shift+Click support
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  let lastCheckedIndex = null;
+  const currentBatchId = {{ batch.id }};
+
+  function toggleSelectAll(checkbox) {
+    const checkboxes = document.querySelectorAll('.order-checkbox');
+    checkboxes.forEach(cb => {
+      cb.checked = checkbox.checked;
+      updateCardSelection(cb);
+    });
+    lastCheckedIndex = null;
+    updateSelection();
+  }
+
+  function updateSelection() {
+    const checkboxes = document.querySelectorAll('.order-checkbox:checked');
+    const count = checkboxes.length;
+    const selectionBar = document.getElementById('selectionBar');
+    const selectedCount = document.getElementById('selectedCount');
+    const selectAllCheckbox = document.getElementById('selectAll');
+    const allCheckboxes = document.querySelectorAll('.order-checkbox');
+
+    selectedCount.textContent = count;
+    selectionBar.style.display = count > 0 ? 'flex' : 'none';
+
+    // Update "select all" checkbox state
+    if (count === 0) {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = false;
+    } else if (count === allCheckboxes.length) {
+      selectAllCheckbox.checked = true;
+      selectAllCheckbox.indeterminate = false;
+    } else {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = true;
+    }
+  }
+
+  function updateCardSelection(checkbox) {
+    const card = checkbox.closest('.order-card');
+    if (checkbox.checked) {
+      card.classList.add('selected');
+    } else {
+      card.classList.remove('selected');
+    }
+  }
+
+  function clearSelection() {
+    document.querySelectorAll('.order-checkbox').forEach(cb => {
+      cb.checked = false;
+      updateCardSelection(cb);
+    });
+    document.getElementById('selectAll').checked = false;
+    document.getElementById('selectAll').indeterminate = false;
+    lastCheckedIndex = null;
+    updateSelection();
+  }
+
+  // Handle checkbox click with shift-select support
+  function handleCheckboxClick(event) {
+    const checkboxes = Array.from(document.querySelectorAll('.order-checkbox'));
+    const clickedIndex = parseInt(event.target.dataset.index);
+
+    if (event.shiftKey && lastCheckedIndex !== null && clickedIndex !== lastCheckedIndex) {
+      // Shift+click: select range between last clicked and current
+      const start = Math.min(lastCheckedIndex, clickedIndex);
+      const end = Math.max(lastCheckedIndex, clickedIndex);
+      const shouldCheck = checkboxes[lastCheckedIndex].checked;
+
+      for (let i = start; i <= end; i++) {
+        checkboxes[i].checked = shouldCheck;
+        updateCardSelection(checkboxes[i]);
+      }
+    }
+
+    updateCardSelection(event.target);
+    lastCheckedIndex = clickedIndex;
+    updateSelection();
+  }
+
+  // Initialize shift-click handlers on page load
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.order-checkbox').forEach(function(checkbox) {
+      checkbox.addEventListener('click', handleCheckboxClick);
+    });
+  });
+
+  function getSelectedOrders() {
+    const checkboxes = document.querySelectorAll('.order-checkbox:checked');
+    return Array.from(checkboxes).map(cb => ({
+      order_number: cb.value,
+      order_id: cb.dataset.orderId
+    }));
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Move to Batch Modal
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  function openMoveModal() {
+    const selected = getSelectedOrders();
+    if (selected.length === 0) {
+      alert('Please select at least one order');
+      return;
+    }
+    document.getElementById('moveCount').textContent = selected.length;
+    document.getElementById('moveModal').style.display = 'flex';
+  }
+
+  function closeMoveModal() {
+    document.getElementById('moveModal').style.display = 'none';
+  }
+
+  async function confirmMoveOrders() {
+    const targetBatchId = document.getElementById('targetBatch').value;
+    if (!targetBatchId) {
+      alert('Please select a destination batch');
+      return;
+    }
+
+    const selected = getSelectedOrders();
+    if (selected.length === 0) {
+      alert('No orders selected');
+      return;
+    }
+
+    const btn = document.querySelector('.btn-confirm-move');
+    btn.disabled = true;
+    btn.textContent = 'Moving...';
+
+    try {
+      const response = await fetch('/api/order_batch/move_orders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          source_batch_id: currentBatchId,
+          target_batch_id: parseInt(targetBatchId),
+          order_ids: selected.map(o => parseInt(o.order_id))
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Refresh the page to show updated batch
+        window.location.reload();
+      } else {
+        alert('Error moving orders: ' + (data.error || 'Unknown error'));
+        btn.disabled = false;
+        btn.textContent = 'Move Orders';
+      }
+    } catch (error) {
+      console.error('Error:', error);
+      alert('Error moving orders: ' + error.message);
+      btn.disabled = false;
+      btn.textContent = 'Move Orders';
+    }
+  }
+
+  async function createNewBatchAndMove() {
+    const selected = getSelectedOrders();
+    if (selected.length === 0) {
+      alert('No orders selected');
+      return;
+    }
+
+    const batchName = prompt('Enter name for new batch:', 'Batch ' + new Date().toLocaleString());
+    if (!batchName) return;
+
+    const btn = document.querySelector('.btn-new-batch');
+    btn.disabled = true;
+    btn.textContent = 'Creating...';
+
+    try {
+      const response = await fetch('/api/order_batch/create_and_move', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          source_batch_id: currentBatchId,
+          new_batch_name: batchName,
+          order_ids: selected.map(o => parseInt(o.order_id))
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Redirect to the new batch
+        window.location.href = '/order_batch/' + data.new_batch_id;
+      } else {
+        alert('Error creating batch: ' + (data.error || 'Unknown error'));
+        btn.disabled = false;
+        btn.textContent = 'Create New Batch';
+      }
+    } catch (error) {
+      console.error('Error:', error);
+      alert('Error creating batch: ' + error.message);
+      btn.disabled = false;
+      btn.textContent = 'Create New Batch';
+    }
+  }
+
+  // Close modal on escape key or clicking outside
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      closeMoveModal();
+    }
+  });
+
+  document.getElementById('moveModal').addEventListener('click', function(e) {
+    if (e.target === this) {
+      closeMoveModal();
+    }
+  });
+</script>
 {% endblock %}

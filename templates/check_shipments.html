@@ -7,8 +7,10 @@
 {% block content %}
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
       <h2>📦 Live Tracking</h2>
-      <a href="{{ url_for('check_shipments', page=page, tab=current_tab, status=batch_status, search=search_query, refresh='1') }}"
-         class="btn btn-search" style="text-decoration: none;">🔄 Refresh Tracking</a>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <span id="lastUpdate" style="font-size: 0.85rem; color: #666;"></span>
+        <button type="button" onclick="forceRefreshTracking()" class="btn btn-search btn-refresh">🔄 Refresh Tracking</button>
+      </div>
     </div>
 
     <!-- Tabs -->
@@ -136,7 +138,7 @@
           </thead>
           <tbody>
             {% for ship in shipments %}
-              <tr {% if ship.is_cancelled %}class="cancelled-row"{% endif %}>
+              <tr data-tracking="{{ ship.tracking_number }}" {% if ship.is_cancelled %}class="cancelled-row"{% endif %}>
                 <td>
                   {% if ship.is_cancelled %}
                     <span style="color: #952746; font-size: 1.3rem;" title="ORDER CANCELLED">🚫</span>
@@ -177,7 +179,7 @@
                     <span style="color: #666;">—</span>
                   {% endif %}
                 </td>
-                <td>
+                <td class="status-cell">
                   {% if ship.tracking_url %}
                     <a href="{{ ship.tracking_url }}" target="_blank" style="text-decoration: none;">
                       <span class="status-badge status-{{ ship.ups_status }}">
@@ -202,7 +204,7 @@
                   }.get(ship.ups_status, 'progress-0') %}
                   <div class="progress-bar"><div class="progress-bar-fill {{ progress_class }}"></div></div>
                 </td>
-                <td style="font-size: 0.85rem;">{{ ship.ups_last_activity }}</td>
+                <td class="activity-cell" style="font-size: 0.85rem;">{{ ship.ups_last_activity }}</td>
                 <td>
                   {% if ship.is_cancelled %}
                     <form method="post" action="{{ url_for('uncancel_order') }}" style="display:inline;">
@@ -292,7 +294,171 @@
 
 {% block scripts %}
   <script>
-    // ── Order Details Modal ──
+    // ══════════════════════════════════════════════════════════════════════════
+    // Live Tracking Auto-Refresh
+    // ══════════════════════════════════════════════════════════════════════════
+
+    let trackingPollInterval = null;
+    const POLL_INTERVAL = 30000; // Poll every 30 seconds
+    const trackingNumbers = [];
+
+    // Collect all tracking numbers on the page
+    function collectTrackingNumbers() {
+      const rows = document.querySelectorAll('tbody tr[data-tracking]');
+      rows.forEach(row => {
+        const tracking = row.dataset.tracking;
+        if (tracking && !trackingNumbers.includes(tracking)) {
+          trackingNumbers.push(tracking);
+        }
+      });
+      return trackingNumbers;
+    }
+
+    // Update tracking status in the UI
+    function updateTrackingUI(trackingData) {
+      Object.keys(trackingData).forEach(tracking => {
+        const data = trackingData[tracking];
+        const row = document.querySelector(`tr[data-tracking="${tracking}"]`);
+        if (!row) return;
+
+        // Update status badge
+        const statusCell = row.querySelector('.status-cell');
+        if (statusCell) {
+          const badge = statusCell.querySelector('.status-badge');
+          if (badge) {
+            // Remove old status class and add new one
+            badge.className = 'status-badge status-' + data.status;
+            badge.textContent = data.status_text;
+          }
+
+          // Update progress bar
+          const progressFill = statusCell.querySelector('.progress-bar-fill');
+          if (progressFill) {
+            const progressClasses = {
+              'delivered': 'progress-100',
+              'almost_there': 'progress-90',
+              'in_transit': 'progress-50',
+              'checking': 'progress-25',
+              'hasnt_moved': 'progress-25',
+              'label_created': 'progress-10',
+              'exception': 'progress-exception',
+              'unknown': 'progress-0'
+            };
+            progressFill.className = 'progress-bar-fill ' + (progressClasses[data.status] || 'progress-0');
+          }
+        }
+
+        // Update last activity
+        const activityCell = row.querySelector('.activity-cell');
+        if (activityCell && data.last_location) {
+          activityCell.textContent = data.last_location;
+        }
+      });
+    }
+
+    // Poll for tracking updates
+    async function pollTrackingStatus() {
+      if (trackingNumbers.length === 0) return;
+
+      try {
+        const response = await fetch('/api/tracking/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tracking_numbers: trackingNumbers })
+        });
+
+        const data = await response.json();
+        if (data.success && data.tracking) {
+          updateTrackingUI(data.tracking);
+          updateLastRefreshTime();
+        }
+      } catch (error) {
+        console.error('Error polling tracking status:', error);
+      }
+    }
+
+    // Update the "last updated" timestamp
+    function updateLastRefreshTime() {
+      const lastUpdate = document.getElementById('lastUpdate');
+      if (lastUpdate) {
+        const now = new Date();
+        lastUpdate.textContent = 'Updated: ' + now.toLocaleTimeString();
+      }
+    }
+
+    // Start polling when on shipments tab
+    function startTrackingPoll() {
+      if (trackingPollInterval) return;
+      collectTrackingNumbers();
+      if (trackingNumbers.length > 0) {
+        trackingPollInterval = setInterval(pollTrackingStatus, POLL_INTERVAL);
+        // Also poll immediately on start
+        pollTrackingStatus();
+      }
+    }
+
+    // Stop polling
+    function stopTrackingPoll() {
+      if (trackingPollInterval) {
+        clearInterval(trackingPollInterval);
+        trackingPollInterval = null;
+      }
+    }
+
+    // Initialize polling on page load if on shipments tab
+    document.addEventListener('DOMContentLoaded', function() {
+      const shipmentsTab = document.getElementById('tab-shipments');
+      if (shipmentsTab && shipmentsTab.classList.contains('active')) {
+        startTrackingPoll();
+      }
+
+      // Handle visibility change - pause polling when tab not visible
+      document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+          stopTrackingPoll();
+        } else {
+          const shipmentsTab = document.getElementById('tab-shipments');
+          if (shipmentsTab && shipmentsTab.classList.contains('active')) {
+            startTrackingPoll();
+          }
+        }
+      });
+    });
+
+    // Force refresh tracking for visible shipments
+    async function forceRefreshTracking() {
+      const btn = document.querySelector('.btn-refresh');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '🔄 Refreshing...';
+      }
+
+      try {
+        const response = await fetch('/api/tracking/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tracking_numbers: trackingNumbers.slice(0, 30) })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+          // Wait a moment for cache to update, then poll
+          setTimeout(pollTrackingStatus, 2000);
+        }
+      } catch (error) {
+        console.error('Error refreshing tracking:', error);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '🔄 Refresh Tracking';
+        }
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Order Details Modal
+    // ══════════════════════════════════════════════════════════════════════════
+
     async function showOrderDetails(orderNumber) {
       const modal = document.getElementById('orderModal');
       const modalContent = document.getElementById('modalContent');
