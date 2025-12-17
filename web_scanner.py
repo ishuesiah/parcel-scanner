@@ -1819,10 +1819,22 @@ def index():
         """, (batch_id,))
         scans = cursor.fetchall()
 
+        # Fetch all batches for the move dropdown
+        cursor.execute("""
+          SELECT b.id, b.carrier, b.created_at, b.status,
+                 COUNT(s.id) as pkg_count
+            FROM batches b
+            LEFT JOIN scans s ON s.batch_id = b.id
+           GROUP BY b.id, b.carrier, b.created_at, b.status
+           ORDER BY b.id DESC
+        """)
+        all_batches = cursor.fetchall()
+
         return render_template(
             "new_batch.html",
             current_batch=batch_row,
             scans=scans,
+            all_batches=all_batches,
             shop_url=SHOP_URL,
             version=__version__,
             active_page="current_batch"
