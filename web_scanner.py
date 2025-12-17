@@ -3275,14 +3275,90 @@ def view_batch(batch_id):
         """, (batch_id,))
         scans = cursor.fetchall()
 
+        # Fetch all batches for the move dropdown (excluding current batch)
+        cursor.execute("""
+          SELECT b.id, b.carrier, b.created_at, b.status,
+                 COUNT(s.id) as pkg_count
+            FROM batches b
+            LEFT JOIN scans s ON s.batch_id = b.id
+           GROUP BY b.id, b.carrier, b.created_at, b.status
+           ORDER BY b.id DESC
+        """)
+        all_batches = cursor.fetchall()
+
         return render_template(
             "batch_view.html",
             batch=batch,
             scans=scans,
+            all_batches=all_batches,
             shop_url=SHOP_URL,
             version=__version__,
             active_page="all_batches"
         )
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@app.route("/api/scans/move", methods=["POST"])
+def move_scans_to_batch():
+    """
+    API endpoint to move selected scans from one batch to another.
+    Expects JSON body with: scan_ids (list), target_batch_id (int), source_batch_id (int)
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "No data provided"}), 400
+
+    scan_ids = data.get("scan_ids", [])
+    target_batch_id = data.get("target_batch_id")
+    source_batch_id = data.get("source_batch_id")
+
+    if not scan_ids:
+        return jsonify({"success": False, "error": "No scans selected"}), 400
+    if not target_batch_id:
+        return jsonify({"success": False, "error": "No target batch specified"}), 400
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Verify target batch exists
+        cursor.execute("SELECT id, carrier FROM batches WHERE id = %s", (target_batch_id,))
+        target_batch = cursor.fetchone()
+        if not target_batch:
+            return jsonify({"success": False, "error": f"Target batch #{target_batch_id} not found"}), 404
+
+        # Convert scan_ids to integers for safety
+        scan_ids = [int(sid) for sid in scan_ids]
+
+        # Update scans to new batch
+        placeholders = ",".join(["%s"] * len(scan_ids))
+        cursor.execute(f"""
+            UPDATE scans
+               SET batch_id = %s
+             WHERE id IN ({placeholders})
+               AND batch_id = %s
+        """, [target_batch_id] + scan_ids + [source_batch_id])
+
+        moved_count = cursor.rowcount
+        conn.commit()
+
+        print(f"📦 Moved {moved_count} scan(s) from batch #{source_batch_id} to batch #{target_batch_id}")
+
+        return jsonify({
+            "success": True,
+            "moved_count": moved_count,
+            "target_batch_id": target_batch_id,
+            "message": f"Successfully moved {moved_count} scan(s) to batch #{target_batch_id}"
+        })
+
+    except Exception as e:
+        print(f"❌ Error moving scans: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
     finally:
         try:
             cursor.close()
@@ -4441,6 +4517,164 @@ def check_shipments():
             version=__version__,
             active_page="check_shipments"
         )
+
+
+@app.route("/api/tracking/status", methods=["POST"])
+def api_tracking_status():
+    """
+    API endpoint for fetching tracking status updates.
+    Used by frontend for live tracking polling.
+
+    Request body:
+    {
+        "tracking_numbers": ["1Z...", "1Z..."],
+        "force_refresh": false  // Optional: force refresh from carrier API
+    }
+
+    Returns tracking status for each tracking number from cache.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "No data provided"}), 400
+
+    tracking_numbers = data.get("tracking_numbers", [])
+    force_refresh = data.get("force_refresh", False)
+
+    if not tracking_numbers:
+        return jsonify({"success": True, "statuses": {}})
+
+    # Limit to prevent abuse
+    tracking_numbers = tracking_numbers[:100]
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get current tracking status from cache
+        placeholders = ",".join(["%s"] * len(tracking_numbers))
+        cursor.execute(f"""
+            SELECT tracking_number, status, status_description, estimated_delivery,
+                   last_location, last_activity_date, is_delivered, updated_at
+            FROM tracking_status_cache
+            WHERE tracking_number IN ({placeholders})
+        """, tracking_numbers)
+
+        cached = {row["tracking_number"]: row for row in cursor.fetchall()}
+        cursor.close()
+        conn.close()
+
+        # Format response
+        statuses = {}
+        stale_tracking = []
+
+        for tn in tracking_numbers:
+            cached_data = cached.get(tn)
+            if cached_data:
+                status = cached_data.get("status") or "unknown"
+                status_text = cached_data.get("status_description") or ""
+                is_delivered = cached_data.get("is_delivered") or False
+                last_location = cached_data.get("last_location") or ""
+                estimated_delivery = cached_data.get("estimated_delivery") or ""
+                updated_at = cached_data.get("updated_at")
+
+                # Check if cache is stale (older than 2 hours)
+                is_stale = False
+                if updated_at:
+                    now = datetime.now()
+                    if hasattr(updated_at, 'tzinfo') and updated_at.tzinfo is not None:
+                        updated_at = updated_at.replace(tzinfo=None)
+                    if (now - updated_at).total_seconds() > 7200:
+                        is_stale = True
+                        stale_tracking.append(tn)
+                else:
+                    is_stale = True
+                    stale_tracking.append(tn)
+
+                # Format status for display
+                if status == "delivered" or is_delivered:
+                    display_status = "delivered"
+                    display_text = "✅ Delivered"
+                    severity = "ok"
+                elif status == "in_transit":
+                    display_status = "in_transit"
+                    if "out for delivery" in status_text.lower():
+                        display_text = "🏃 Almost There!"
+                        display_status = "almost_there"
+                    else:
+                        display_text = "🚚 On the Way"
+                        if estimated_delivery:
+                            display_text += f" - Est: {estimated_delivery}"
+                    severity = "ok"
+                elif status == "label_created":
+                    display_status = "label_created"
+                    display_text = "📦 Label Created"
+                    severity = "warning"
+                elif status == "exception":
+                    display_status = "exception"
+                    display_text = "⚠️ Exception/Delay"
+                    severity = "critical"
+                else:
+                    display_status = status
+                    display_text = status_text or "Unknown"
+                    severity = "warning"
+
+                statuses[tn] = {
+                    "status": display_status,
+                    "status_text": display_text,
+                    "last_location": last_location,
+                    "estimated_delivery": estimated_delivery,
+                    "is_delivered": is_delivered,
+                    "is_stale": is_stale,
+                    "severity": severity
+                }
+            else:
+                # Not in cache
+                statuses[tn] = {
+                    "status": "unknown",
+                    "status_text": "🔄 Loading...",
+                    "last_location": "",
+                    "estimated_delivery": "",
+                    "is_delivered": False,
+                    "is_stale": True,
+                    "severity": "warning"
+                }
+                stale_tracking.append(tn)
+
+        # Trigger background refresh for stale tracking if requested or if too many are stale
+        if (force_refresh or len(stale_tracking) > 0) and stale_tracking:
+            import threading
+            # Split into UPS and Canada Post
+            ups_tracking = [t for t in stale_tracking if t.startswith("1Z")]
+            cp_tracking = [t for t in stale_tracking if not t.startswith("1Z")]
+
+            # Limit background refresh
+            if force_refresh:
+                # Force refresh - update more
+                if ups_tracking:
+                    threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:50], True)).start()
+                if cp_tracking:
+                    threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:30], True)).start()
+            elif len(stale_tracking) <= 20:
+                # Auto-refresh only for small batches
+                if ups_tracking:
+                    threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:20], False)).start()
+                if cp_tracking:
+                    threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:15], False)).start()
+
+        return jsonify({
+            "success": True,
+            "statuses": statuses,
+            "stale_count": len(stale_tracking),
+            "refreshing": len(stale_tracking) > 0
+        })
+
+    except Exception as e:
+        print(f"❌ Error in tracking status API: {e}")
+        try:
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/cancel_order", methods=["POST"])
