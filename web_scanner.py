@@ -129,6 +129,245 @@ google = oauth.register(
     }
 )
 
+# ── WebSocket (Flask-SocketIO) Setup ──
+from websocket_manager import (
+    init_socketio, get_socketio, TrackingRooms, TrackingEvents,
+    socketio_login_required, socketio_rate_limit,
+    connection_limiter, get_client_ip,
+    validate_tracking_number, validate_batch_id,
+    broadcast_tracking_update, broadcast_batch_scan_update, broadcast_scans_moved
+)
+from flask_socketio import emit, join_room, leave_room, disconnect
+
+socketio = init_socketio(app)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WebSocket Event Handlers
+# ══════════════════════════════════════════════════════════════════════════════
+
+@socketio.on('connect')
+def handle_ws_connect():
+    """
+    Handle WebSocket connection.
+    Validates authentication and connection limits.
+    """
+    client_ip = get_client_ip()
+
+    # Check connection limit (DoS protection)
+    if not connection_limiter.can_connect(client_ip):
+        print(f"[WS] Connection limit exceeded for {client_ip}")
+        return False
+
+    # Check authentication
+    if not session.get("authenticated"):
+        print(f"[WS] Unauthorized connection attempt from {client_ip}")
+        return False
+
+    # Check session timeout
+    last_active = session.get("last_active", 0)
+    now = time.time()
+    if (now - last_active) > INACTIVITY_TIMEOUT:
+        print(f"[WS] Expired session from {client_ip}")
+        session.clear()
+        return False
+
+    # Update session activity
+    session["last_active"] = now
+
+    # Register connection
+    connection_limiter.add_connection(client_ip)
+    session['ws_client_ip'] = client_ip
+
+    auth_method = session.get("auth_method", "password")
+    user_email = session.get("user_email", "local")
+    print(f"[WS] Connected: {user_email} ({auth_method}) from {client_ip}")
+
+    emit(TrackingEvents.CONNECTION_SUCCESS, {
+        'message': 'Connected to live tracking',
+        'auth_method': auth_method
+    })
+
+    return True
+
+
+@socketio.on('disconnect')
+def handle_ws_disconnect():
+    """Handle WebSocket disconnection."""
+    client_ip = session.get('ws_client_ip')
+    if client_ip:
+        connection_limiter.remove_connection(client_ip)
+
+    user_email = session.get("user_email", "unknown")
+    print(f"[WS] Disconnected: {user_email}")
+
+
+@socketio.on('subscribe_batch')
+@socketio_rate_limit(max_requests=30, window_seconds=60)
+@socketio_login_required
+def handle_subscribe_batch(data):
+    """Subscribe to real-time updates for a batch."""
+    if not isinstance(data, dict):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid request'})
+        return
+
+    batch_id = data.get('batch_id')
+    is_valid, batch_id, error = validate_batch_id(batch_id)
+
+    if not is_valid:
+        emit(TrackingEvents.ERROR, {'message': error})
+        return
+
+    room = TrackingRooms.batch(batch_id)
+    join_room(room)
+
+    print(f"[WS] Subscribed to batch {batch_id}")
+    emit(TrackingEvents.SUBSCRIPTION_CONFIRMED, {
+        'type': 'batch',
+        'batch_id': batch_id
+    })
+
+
+@socketio.on('unsubscribe_batch')
+@socketio_login_required
+def handle_unsubscribe_batch(data):
+    """Unsubscribe from batch updates."""
+    if not isinstance(data, dict):
+        return
+
+    batch_id = data.get('batch_id')
+    is_valid, batch_id, _ = validate_batch_id(batch_id)
+
+    if is_valid:
+        room = TrackingRooms.batch(batch_id)
+        leave_room(room)
+        print(f"[WS] Unsubscribed from batch {batch_id}")
+
+
+@socketio.on('subscribe_tracking')
+@socketio_rate_limit(max_requests=100, window_seconds=60)
+@socketio_login_required
+def handle_subscribe_tracking(data):
+    """Subscribe to tracking number updates."""
+    if not isinstance(data, dict):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid request'})
+        return
+
+    tracking_numbers = data.get('tracking_numbers', [])
+
+    if isinstance(tracking_numbers, str):
+        tracking_numbers = [tracking_numbers]
+
+    if not isinstance(tracking_numbers, list):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid tracking numbers'})
+        return
+
+    # Limit subscriptions per request
+    tracking_numbers = tracking_numbers[:50]
+
+    subscribed = []
+    for tn in tracking_numbers:
+        is_valid, sanitized, _ = validate_tracking_number(tn)
+        if is_valid:
+            room = TrackingRooms.tracking_number(sanitized)
+            join_room(room)
+            subscribed.append(sanitized)
+
+    if subscribed:
+        print(f"[WS] Subscribed to {len(subscribed)} tracking numbers")
+        emit(TrackingEvents.SUBSCRIPTION_CONFIRMED, {
+            'type': 'tracking',
+            'count': len(subscribed),
+            'tracking_numbers': subscribed
+        })
+
+
+@socketio.on('subscribe_shipments_page')
+@socketio_rate_limit(max_requests=10, window_seconds=60)
+@socketio_login_required
+def handle_subscribe_shipments_page(data=None):
+    """Subscribe to the shipments/tracking page for all updates."""
+    room = TrackingRooms.shipments_page()
+    join_room(room)
+    print(f"[WS] Subscribed to shipments page")
+    emit(TrackingEvents.SUBSCRIPTION_CONFIRMED, {
+        'type': 'shipments_page'
+    })
+
+
+@socketio.on('subscribe_tracking_group')
+@socketio_rate_limit(max_requests=20, window_seconds=60)
+@socketio_login_required
+def handle_subscribe_tracking_group(data):
+    """Subscribe to tracking group updates."""
+    if not isinstance(data, dict):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid request'})
+        return
+
+    group_id = data.get('group_id')
+    try:
+        group_id = int(group_id)
+    except (TypeError, ValueError):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid group ID'})
+        return
+
+    room = TrackingRooms.tracking_group(group_id)
+    join_room(room)
+    print(f"[WS] Subscribed to tracking group {group_id}")
+    emit(TrackingEvents.SUBSCRIPTION_CONFIRMED, {
+        'type': 'tracking_group',
+        'group_id': group_id
+    })
+
+
+@socketio.on('request_tracking_refresh')
+@socketio_rate_limit(max_requests=10, window_seconds=60)
+@socketio_login_required
+def handle_request_tracking_refresh(data):
+    """
+    Request immediate tracking status refresh.
+    Triggers background job to fetch latest from carrier API.
+    """
+    if not isinstance(data, dict):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid request'})
+        return
+
+    tracking_numbers = data.get('tracking_numbers', [])
+
+    if isinstance(tracking_numbers, str):
+        tracking_numbers = [tracking_numbers]
+
+    if not isinstance(tracking_numbers, list) or len(tracking_numbers) == 0:
+        emit(TrackingEvents.ERROR, {'message': 'No tracking numbers provided'})
+        return
+
+    # Limit to prevent API abuse
+    tracking_numbers = tracking_numbers[:20]
+
+    # Validate and split by carrier
+    ups_tracking = []
+    cp_tracking = []
+
+    for tn in tracking_numbers:
+        is_valid, sanitized, _ = validate_tracking_number(tn)
+        if is_valid:
+            if sanitized.startswith("1Z"):
+                ups_tracking.append(sanitized)
+            else:
+                cp_tracking.append(sanitized)
+
+    # Trigger background refresh
+    import threading
+    if ups_tracking:
+        threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking, True)).start()
+    if cp_tracking:
+        threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking, True)).start()
+
+    emit('tracking_refresh_started', {
+        'count': len(ups_tracking) + len(cp_tracking),
+        'message': 'Refresh started, updates will be pushed automatically'
+    })
+
 
 # ── Jinja Template Filters ──
 @app.template_filter('friendly_date')
@@ -890,6 +1129,15 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
                 ))
                 conn.commit()
                 updated_count += 1
+
+                # Broadcast live update via WebSocket
+                broadcast_tracking_update(tracking_number, {
+                    'status': result.get("status", "unknown"),
+                    'status_text': result.get("status_description", ""),
+                    'last_location': result.get("location", ""),
+                    'estimated_delivery': result.get("estimated_delivery", ""),
+                    'is_delivered': result.get("status") == "delivered"
+                })
             except Exception as e:
                 print(f"⚠️ Error caching tracking for {tracking_number}: {e}")
                 error_count += 1
@@ -1004,6 +1252,15 @@ def update_canadapost_tracking_cache(tracking_numbers, force_refresh=False):
                 ))
                 conn.commit()
                 updated_count += 1
+
+                # Broadcast live update via WebSocket
+                broadcast_tracking_update(tracking_number, {
+                    'status': result.get("status", "unknown"),
+                    'status_text': result.get("status_description", ""),
+                    'last_location': result.get("location", ""),
+                    'estimated_delivery': result.get("estimated_delivery", ""),
+                    'is_delivered': result.get("status") == "delivered"
+                })
             except Exception as e:
                 print(f"⚠️ Error caching Canada Post tracking for {tracking_number}: {e}")
                 error_count += 1
@@ -2238,8 +2495,26 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
             (scan_carrier, order_number, customer_name, order_id, customer_email, shipstation_batch_number, scan_id)
         )
         conn.commit()
+
+        # Get batch_id for WebSocket broadcast
+        cursor.execute("SELECT batch_id FROM scans WHERE id = %s", (scan_id,))
+        scan_row = cursor.fetchone()
+        batch_id = scan_row.get('batch_id') if scan_row else None
         cursor.close()
+
         print(f"✓ Updated scan {scan_id}: {tracking_number} -> Order: {order_number}, Customer: {customer_name}")
+
+        # Broadcast update via WebSocket for real-time UI updates
+        if batch_id:
+            broadcast_batch_scan_update(batch_id, {
+                'id': scan_id,
+                'tracking_number': tracking_number,
+                'carrier': scan_carrier,
+                'order_number': order_number,
+                'customer_name': customer_name,
+                'customer_email': customer_email,
+                'status': 'Complete'
+            }, action='update')
 
         # NOTE: Klaviyo notifications are sent when batch is marked as picked up
         # See notify_customers() function - sends "Order Shipped" event for all unique customers in batch
@@ -3360,6 +3635,10 @@ def move_scans_to_batch():
         conn.commit()
 
         print(f"📦 Moved {moved_count} scan(s) from batch #{source_batch_id} to batch #{target_batch_id}")
+
+        # Broadcast move via WebSocket for real-time UI updates
+        if moved_count > 0:
+            broadcast_scans_moved(source_batch_id, target_batch_id, scan_ids, moved_count)
 
         return jsonify({
             "success": True,
@@ -8412,4 +8691,5 @@ if __name__ == "__main__":
     # Debug mode disabled by default to prevent auto-reloader from killing long-running syncs
     # Set FLASK_DEBUG=true in environment to enable debug mode for local development
     debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=debug_mode)
+    # Use socketio.run() for WebSocket support
+    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=debug_mode)

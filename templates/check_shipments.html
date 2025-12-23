@@ -921,12 +921,12 @@
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Live Tracking Auto-Refresh System
+    // WebSocket-Based Live Tracking System
     // ═══════════════════════════════════════════════════════════════════════════
 
-    let autoRefreshInterval = null;
-    let isRefreshing = false;
-    const AUTO_REFRESH_INTERVAL = 30000; // 30 seconds
+    let socket = null;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 10;
 
     // Collect all tracking numbers from the current page
     function getVisibleTrackingNumbers() {
@@ -944,170 +944,186 @@
       return trackingNumbers;
     }
 
-    // Update tracking status in the table
-    function updateTrackingStatusInTable(statuses) {
+    // Update a single tracking status in the table
+    function updateTrackingRow(data) {
+      const trackingNum = data.tracking_number;
       const rows = document.querySelectorAll('#tab-shipments tbody tr');
-      let updatedCount = 0;
 
       rows.forEach(row => {
         const trackingCell = row.querySelector('td:nth-child(5) a');
-        if (trackingCell) {
-          const tracking = trackingCell.textContent.trim();
-          const statusData = statuses[tracking];
+        if (trackingCell && trackingCell.textContent.trim() === trackingNum) {
+          // Update status badge
+          const statusCell = row.querySelector('td:nth-child(9)');
+          if (statusCell) {
+            const badge = statusCell.querySelector('.status-badge');
+            if (badge) {
+              badge.className = 'status-badge status-' + data.status;
+              badge.textContent = data.status_text;
 
-          if (statusData) {
-            // Update status badge
-            const statusCell = row.querySelector('td:nth-child(9)');
-            if (statusCell) {
-              const badge = statusCell.querySelector('.status-badge');
-              if (badge) {
-                // Update badge classes and text
-                badge.className = 'status-badge status-' + statusData.status;
-                badge.textContent = statusData.status_text;
-
-                // Visual feedback for update
-                badge.style.transition = 'background-color 0.3s';
-                badge.style.backgroundColor = '#e3f2fd';
-                setTimeout(() => {
-                  badge.style.backgroundColor = '';
-                }, 1000);
-
-                updatedCount++;
-              }
+              // Visual feedback for live update
+              row.style.transition = 'background-color 0.5s';
+              row.style.backgroundColor = '#e8f5e9';
+              setTimeout(() => {
+                row.style.backgroundColor = '';
+              }, 2000);
             }
+          }
 
-            // Update last activity
-            const activityCell = row.querySelector('td:nth-child(10)');
-            if (activityCell && statusData.last_location) {
-              activityCell.textContent = statusData.last_location;
-            }
+          // Update last activity
+          const activityCell = row.querySelector('td:nth-child(10)');
+          if (activityCell && data.last_location) {
+            activityCell.textContent = data.last_location;
           }
         }
       });
-
-      return updatedCount;
     }
 
-    // Fetch and update tracking statuses
-    async function refreshTrackingStatuses(forceRefresh = false) {
-      if (isRefreshing) return;
-
-      const trackingNumbers = getVisibleTrackingNumbers();
-      if (trackingNumbers.length === 0) return;
-
-      isRefreshing = true;
-      updateRefreshIndicator(true);
-
-      try {
-        const response = await fetch('/api/tracking/status', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            tracking_numbers: trackingNumbers,
-            force_refresh: forceRefresh
-          })
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-          const updatedCount = updateTrackingStatusInTable(data.statuses);
-
-          // Update refresh indicator
-          if (data.stale_count > 0 && data.refreshing) {
-            updateRefreshIndicator(true, `Updating ${data.stale_count} tracking statuses...`);
-            // Poll again sooner if data is being refreshed
-            setTimeout(() => refreshTrackingStatuses(false), 10000);
-          } else {
-            updateRefreshIndicator(false);
-          }
-        }
-      } catch (error) {
-        console.error('Error refreshing tracking:', error);
-        updateRefreshIndicator(false);
-      }
-
-      isRefreshing = false;
-    }
-
-    // Update the refresh indicator in the UI
-    function updateRefreshIndicator(isActive, message = '') {
-      let indicator = document.getElementById('liveRefreshIndicator');
+    // Create/update connection status indicator
+    function updateConnectionStatus(connected, message = '') {
+      let indicator = document.getElementById('wsStatusIndicator');
 
       if (!indicator) {
-        // Create indicator if it doesn't exist
         indicator = document.createElement('div');
-        indicator.id = 'liveRefreshIndicator';
+        indicator.id = 'wsStatusIndicator';
         indicator.style.cssText = `
           position: fixed;
           bottom: 20px;
           right: 20px;
-          padding: 10px 16px;
+          padding: 8px 14px;
           background: var(--bg-surface, #fff);
           border: 1px solid var(--border-color, #ddd);
-          border-radius: 8px;
+          border-radius: 20px;
           box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-          font-size: 0.85rem;
+          font-size: 0.8rem;
           z-index: 1000;
           display: flex;
           align-items: center;
           gap: 8px;
-          transition: opacity 0.3s, transform 0.3s;
+          transition: all 0.3s;
         `;
         document.body.appendChild(indicator);
-      }
 
-      if (isActive) {
-        indicator.innerHTML = `
-          <span style="display: inline-block; width: 12px; height: 12px; border: 2px solid #516aec; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></span>
-          <span>${message || 'Refreshing tracking...'}</span>
-        `;
-        indicator.style.opacity = '1';
-        indicator.style.transform = 'translateY(0)';
-      } else {
-        indicator.style.opacity = '0';
-        indicator.style.transform = 'translateY(10px)';
-      }
-
-      // Add spinner animation if not exists
-      if (!document.getElementById('spinnerStyle')) {
+        // Add pulse animation
         const style = document.createElement('style');
-        style.id = 'spinnerStyle';
-        style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+        style.textContent = `
+          @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+          @keyframes spin { to { transform: rotate(360deg); } }
+        `;
         document.head.appendChild(style);
       }
-    }
 
-    // Start auto-refresh when on shipments tab
-    function startAutoRefresh() {
-      if (autoRefreshInterval) return;
-
-      // Initial refresh after 5 seconds
-      setTimeout(() => refreshTrackingStatuses(false), 5000);
-
-      // Then refresh every 30 seconds
-      autoRefreshInterval = setInterval(() => {
-        refreshTrackingStatuses(false);
-      }, AUTO_REFRESH_INTERVAL);
-
-      console.log('📡 Live tracking auto-refresh started (every 30s)');
-    }
-
-    // Stop auto-refresh
-    function stopAutoRefresh() {
-      if (autoRefreshInterval) {
-        clearInterval(autoRefreshInterval);
-        autoRefreshInterval = null;
-        console.log('📡 Live tracking auto-refresh stopped');
+      if (connected) {
+        indicator.innerHTML = `
+          <span style="width: 8px; height: 8px; background: #4caf50; border-radius: 50%; animation: pulse 2s infinite;"></span>
+          <span style="color: #4caf50;">Live</span>
+        `;
+        indicator.title = 'Real-time updates active';
+      } else {
+        indicator.innerHTML = `
+          <span style="width: 10px; height: 10px; border: 2px solid #ff9800; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></span>
+          <span style="color: #ff9800;">${message || 'Connecting...'}</span>
+        `;
+        indicator.title = message || 'Connecting to live updates';
       }
     }
 
-    // Auto-refresh tracking groups
-    function startGroupAutoRefresh(groupId) {
-      // Refresh group data every 30 seconds
-      setInterval(() => {
-        loadGroupOrders(groupId);
-      }, AUTO_REFRESH_INTERVAL);
+    // Initialize WebSocket connection
+    function initWebSocket() {
+      // Load Socket.IO client dynamically
+      if (typeof io === 'undefined') {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.socket.io/4.7.2/socket.io.min.js';
+        script.onload = connectWebSocket;
+        document.head.appendChild(script);
+      } else {
+        connectWebSocket();
+      }
+    }
+
+    function connectWebSocket() {
+      updateConnectionStatus(false, 'Connecting...');
+
+      socket = io({
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 10000,
+        reconnectionAttempts: MAX_RECONNECT_ATTEMPTS,
+        timeout: 20000
+      });
+
+      // Connection established
+      socket.on('connect', () => {
+        console.log('WebSocket connected');
+        reconnectAttempts = 0;
+        updateConnectionStatus(true);
+
+        // Subscribe to shipments page updates
+        socket.emit('subscribe_shipments_page');
+
+        // Subscribe to visible tracking numbers
+        const trackingNumbers = getVisibleTrackingNumbers();
+        if (trackingNumbers.length > 0) {
+          socket.emit('subscribe_tracking', { tracking_numbers: trackingNumbers });
+        }
+      });
+
+      // Connection lost
+      socket.on('disconnect', (reason) => {
+        console.log('WebSocket disconnected:', reason);
+        updateConnectionStatus(false, 'Reconnecting...');
+      });
+
+      // Reconnection attempt
+      socket.on('reconnect_attempt', (attempt) => {
+        reconnectAttempts = attempt;
+        updateConnectionStatus(false, `Reconnecting (${attempt}/${MAX_RECONNECT_ATTEMPTS})...`);
+      });
+
+      // Reconnection failed
+      socket.on('reconnect_failed', () => {
+        updateConnectionStatus(false, 'Connection lost');
+        console.error('WebSocket reconnection failed');
+      });
+
+      // Receive tracking updates
+      socket.on('tracking_update', (data) => {
+        console.log('Live tracking update:', data);
+        updateTrackingRow(data);
+      });
+
+      // Subscription confirmed
+      socket.on('subscription_confirmed', (data) => {
+        console.log('Subscription confirmed:', data);
+      });
+
+      // Handle errors
+      socket.on('error', (data) => {
+        console.error('WebSocket error:', data);
+      });
+
+      // Rate limit warning
+      socket.on('rate_limit_exceeded', (data) => {
+        console.warn('Rate limit exceeded:', data);
+      });
+    }
+
+    // Request manual refresh (triggers background API fetch)
+    function requestTrackingRefresh() {
+      if (!socket || !socket.connected) {
+        alert('Not connected to live updates. Please refresh the page.');
+        return;
+      }
+
+      const trackingNumbers = getVisibleTrackingNumbers();
+      if (trackingNumbers.length === 0) return;
+
+      socket.emit('request_tracking_refresh', {
+        tracking_numbers: trackingNumbers.slice(0, 20)  // Limit to 20
+      });
+
+      updateConnectionStatus(true);
+      console.log('Requested tracking refresh for', trackingNumbers.length, 'numbers');
     }
 
     // Initialize based on current tab
@@ -1115,20 +1131,25 @@
       const currentTab = '{{ current_tab }}';
 
       if (currentTab === 'shipments') {
-        startAutoRefresh();
+        initWebSocket();
       } else if (currentTab.startsWith('group_')) {
-        const groupId = currentTab.replace('group_', '');
-        startGroupAutoRefresh(groupId);
+        // For tracking groups, also use WebSocket
+        initWebSocket();
       }
 
-      // Handle page visibility - pause refresh when tab is hidden
+      // Handle page visibility - reconnect when tab becomes visible
       document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-          stopAutoRefresh();
-        } else if ('{{ current_tab }}' === 'shipments') {
-          startAutoRefresh();
+        if (!document.hidden && socket && !socket.connected) {
+          socket.connect();
         }
       });
+    });
+
+    // Clean up on page unload
+    window.addEventListener('beforeunload', function() {
+      if (socket) {
+        socket.disconnect();
+      }
     });
   </script>
 {% endblock %}

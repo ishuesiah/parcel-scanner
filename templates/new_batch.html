@@ -209,7 +209,82 @@
 {% endblock %}
 
 {% block scripts %}
+  <!-- Socket.IO for real-time updates -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script>
+    // ── WebSocket connection for real-time updates ──
+    let socket = null;
+    let wsConnected = false;
+
+    {% if current_batch %}
+    function initWebSocket() {
+      if (socket) return; // Already initialized
+
+      socket = io({
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: 10,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000
+      });
+
+      socket.on('connect', function() {
+        console.log('WebSocket connected');
+        wsConnected = true;
+        // Subscribe to batch updates
+        socket.emit('subscribe_batch', { batch_id: {{ current_batch.id }} });
+      });
+
+      socket.on('subscription_confirmed', function(data) {
+        console.log('Subscribed to:', data.room);
+      });
+
+      socket.on('batch_scan_update', function(data) {
+        console.log('Scan update received:', data);
+        if (data.scan) {
+          updateScanRow(data.scan);
+        }
+      });
+
+      socket.on('batch_scan_moved', function(data) {
+        console.log('Scans moved:', data);
+        // If scans were removed from this batch, remove them from the table
+        if (data.action === 'removed' && data.scan_ids) {
+          data.scan_ids.forEach(scanId => {
+            const row = document.querySelector(`tr[data-scan-id="${scanId}"]`);
+            if (row) row.remove();
+          });
+          // Update scan count
+          updateScanCount();
+        }
+        // If scans were added, refresh the page to show them
+        if (data.action === 'added') {
+          location.reload();
+        }
+      });
+
+      socket.on('disconnect', function() {
+        console.log('WebSocket disconnected');
+        wsConnected = false;
+      });
+
+      socket.on('error', function(error) {
+        console.error('WebSocket error:', error);
+      });
+    }
+
+    function updateScanCount() {
+      const scanCount = document.getElementById('scan-count');
+      const tbody = document.getElementById('scans-tbody');
+      if (scanCount && tbody) {
+        scanCount.textContent = tbody.querySelectorAll('tr[data-scan-id]').length;
+      }
+    }
+
+    // Initialize WebSocket when page loads
+    initWebSocket();
+    {% endif %}
+
     // ── Helper: Generate clickable tracking link ──
     function trackingLink(trackingNumber, carrier) {
       if (!trackingNumber) return '<span style="color: #999;">—</span>';
@@ -226,13 +301,17 @@
       return `<a href="${url}" target="_blank" rel="noopener" style="color: #1976d2; text-decoration: none; font-family: monospace; font-size: 0.85rem;" title="Track ${trackingNumber}">${trackingNumber}</a>`;
     }
 
-    // ── Auto-refresh order details every 5 seconds ──
+    // ── Auto-refresh order details (fallback polling when WebSocket unavailable) ──
     let autoRefreshInterval;
 
     function startAutoRefresh() {
       {% if current_batch %}
-      // Poll every 5 seconds for updated order details
+      // Poll every 10 seconds as fallback (WebSocket handles real-time updates)
       autoRefreshInterval = setInterval(async function() {
+        // Skip polling if WebSocket is connected
+        if (wsConnected) {
+          return;
+        }
         try {
           const response = await fetch('{{ url_for("get_batch_updates", batch_id=current_batch.id) }}');
 
@@ -259,7 +338,7 @@
         } catch (error) {
           console.error('Auto-refresh error:', error);
         }
-      }, 5000); // Every 5 seconds
+      }, 10000); // Every 10 seconds (fallback only)
       {% endif %}
     }
 
