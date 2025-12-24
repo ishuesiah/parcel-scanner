@@ -806,6 +806,13 @@ def background_tracking_refresh():
             print(f"🔄 [Background] Refreshing {min(len(ups_tracking), 30)} UPS tracking numbers...")
             update_ups_tracking_cache(ups_tracking[:30], force_refresh=True)
 
+            # Resubscribe to Track Alert for packages older than 10 days
+            # (UPS Track Alert subscriptions expire after 14 days)
+            try:
+                subscribe_ups_track_alerts(ups_tracking[:30])
+            except Exception as sub_err:
+                print(f"⚠️ [Background] Track Alert resubscription error: {sub_err}")
+
         if cp_tracking:
             print(f"🔄 [Background] Refreshing {min(len(cp_tracking), 20)} Canada Post tracking numbers...")
             update_canadapost_tracking_cache(cp_tracking[:20], force_refresh=True)
@@ -1191,6 +1198,64 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
     finally:
         cursor.close()
         conn.close()
+
+
+def subscribe_ups_track_alerts(tracking_numbers: list):
+    """
+    Subscribe UPS tracking numbers to Track Alert webhooks.
+
+    This enables push notifications from UPS when tracking status changes,
+    eliminating the need for constant polling.
+
+    Requirements:
+    - UPS_WEBHOOK_SECRET env var (used to verify incoming webhooks)
+    - APP_URL env var (for constructing webhook URL)
+    - UPS API credentials (for OAuth)
+    """
+    if not tracking_numbers:
+        return
+
+    # Filter to UPS only
+    ups_tracking = [t for t in tracking_numbers if t and t.startswith("1Z")]
+    if not ups_tracking:
+        return
+
+    # Check if webhook is configured
+    webhook_secret = os.environ.get("UPS_WEBHOOK_SECRET", "")
+    app_url = os.environ.get("APP_URL", "")
+
+    if not webhook_secret:
+        print("⚠️ UPS_WEBHOOK_SECRET not set - skipping Track Alert subscription")
+        return
+
+    if not app_url:
+        print("⚠️ APP_URL not set - skipping Track Alert subscription")
+        return
+
+    webhook_url = f"{app_url.rstrip('/')}/api/webhooks/ups"
+
+    try:
+        ups_api = get_ups_api()
+        if not ups_api.enabled:
+            print("⚠️ UPS API not enabled - skipping Track Alert subscription")
+            return
+
+        # Subscribe in batches of 100 (UPS limit)
+        for i in range(0, len(ups_tracking), 100):
+            batch = ups_tracking[i:i + 100]
+            result = ups_api.subscribe_track_alerts(
+                tracking_numbers=batch,
+                webhook_url=webhook_url,
+                webhook_credential=webhook_secret
+            )
+
+            if result.get("success"):
+                print(f"📡 Subscribed {len(batch)} packages to UPS Track Alert")
+            else:
+                print(f"⚠️ Track Alert subscription failed: {result.get('error', 'Unknown error')}")
+
+    except Exception as e:
+        print(f"❌ Error subscribing to Track Alert: {e}")
 
 
 def update_canadapost_tracking_cache(tracking_numbers, force_refresh=False):
@@ -2557,6 +2622,14 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
                 'customer_email': customer_email,
                 'status': 'Complete'
             }, action='update')
+
+        # Subscribe UPS packages to Track Alert for push notifications
+        # This runs in background so it won't slow down scanning
+        if tracking_number.startswith("1Z"):
+            try:
+                subscribe_ups_track_alerts([tracking_number])
+            except Exception as sub_err:
+                print(f"⚠️ Track Alert subscription error (non-critical): {sub_err}")
 
         # NOTE: Klaviyo notifications are sent when batch is marked as picked up
         # See notify_customers() function - sends "Order Shipped" event for all unique customers in batch
@@ -5008,6 +5081,120 @@ def api_tracking_status():
         except:
             pass
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UPS Track Alert Webhook Endpoint
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/webhooks/ups", methods=["POST"])
+def ups_webhook():
+    """
+    Receive UPS Track Alert webhook notifications.
+
+    UPS sends POST requests here when tracking status changes for subscribed packages.
+    Updates the tracking cache and broadcasts via WebSocket for real-time UI updates.
+
+    Security:
+    - Verifies Bearer token from UPS matches our secret
+    - User-Agent must be 'UPSPubSubTrackingService'
+    """
+    # Verify UPS User-Agent header
+    user_agent = request.headers.get("User-Agent", "")
+    if user_agent != "UPSPubSubTrackingService":
+        print(f"⚠️ UPS webhook: Invalid User-Agent: {user_agent}")
+        # Don't reject - UPS might change this, just log it
+
+    # Verify Bearer token
+    webhook_secret = os.environ.get("UPS_WEBHOOK_SECRET", "")
+    if webhook_secret:
+        auth_header = request.headers.get("Authorization", "")
+        credential = request.headers.get("credential", "")
+        token = credential or (auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else "")
+
+        if token != webhook_secret:
+            print(f"⚠️ UPS webhook: Invalid credential/token")
+            return jsonify({"error": "Unauthorized"}), 401
+
+    # Parse the payload
+    try:
+        payload = request.get_json()
+        if not payload:
+            return jsonify({"error": "No payload"}), 400
+
+        tracking_number = payload.get("trackingNumber", "")
+        if not tracking_number:
+            return jsonify({"error": "No tracking number"}), 400
+
+        print(f"📡 UPS webhook received for: {tracking_number}")
+
+        # Parse the webhook payload
+        from ups_api import UPSAPI
+        parsed = UPSAPI.parse_webhook_payload(payload)
+
+        if parsed.get("status") == "error":
+            print(f"❌ Failed to parse UPS webhook: {parsed.get('error')}")
+            return jsonify({"received": True}), 200
+
+        # Update tracking cache
+        conn = get_mysql_connection()
+        try:
+            cursor = conn.cursor()
+
+            # Upsert into tracking_status_cache
+            cursor.execute("""
+                INSERT INTO tracking_status_cache
+                    (tracking_number, carrier, status, status_description,
+                     last_location, estimated_delivery, is_delivered, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (tracking_number) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    status_description = EXCLUDED.status_description,
+                    last_location = EXCLUDED.last_location,
+                    estimated_delivery = EXCLUDED.estimated_delivery,
+                    is_delivered = EXCLUDED.is_delivered,
+                    updated_at = NOW()
+            """, (
+                tracking_number,
+                "UPS",
+                parsed.get("status", "unknown"),
+                parsed.get("status_description", ""),
+                parsed.get("location", ""),
+                parsed.get("estimated_delivery", ""),
+                parsed.get("status") == "delivered"
+            ))
+
+            conn.commit()
+            cursor.close()
+            print(f"✅ UPS webhook: Updated cache for {tracking_number} -> {parsed.get('status')}")
+
+            # Broadcast via WebSocket for real-time UI update
+            broadcast_tracking_update(tracking_number, {
+                'status': parsed.get("status", "unknown"),
+                'status_text': parsed.get("status_description", ""),
+                'last_location': parsed.get("location", ""),
+                'estimated_delivery': parsed.get("estimated_delivery", ""),
+                'is_delivered': parsed.get("status") == "delivered"
+            })
+
+        except Exception as db_error:
+            print(f"❌ UPS webhook DB error: {db_error}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            try:
+                conn.close()
+            except:
+                pass
+
+        # Respond quickly - UPS requires fast acknowledgment
+        return jsonify({"received": True}), 200
+
+    except Exception as e:
+        print(f"❌ UPS webhook error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/cancel_order", methods=["POST"])

@@ -327,6 +327,179 @@ class UPSAPI:
                 "error": str(e)
             }
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # UPS Track Alert API (Webhooks)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def subscribe_track_alerts(
+        self,
+        tracking_numbers: list,
+        webhook_url: str,
+        webhook_credential: str,
+        locale: str = "en_US"
+    ) -> Dict[str, Any]:
+        """
+        Subscribe tracking numbers to UPS Track Alert for webhook notifications.
+
+        UPS will POST status updates to your webhook URL when tracking events occur.
+        Subscriptions are valid for 14 days.
+
+        Args:
+            tracking_numbers: List of 1Z or 1R tracking numbers (max 100)
+            webhook_url: HTTPS URL to receive webhook POSTs
+            webhook_credential: Auth token UPS will include in webhook requests
+            locale: Language/region code (default "en_US")
+
+        Returns:
+            Dict with subscription results per tracking number
+        """
+        if not self.enabled:
+            return {
+                "success": False,
+                "error": "UPS API not configured"
+            }
+
+        if not tracking_numbers:
+            return {
+                "success": False,
+                "error": "No tracking numbers provided"
+            }
+
+        # UPS allows max 100 per request
+        if len(tracking_numbers) > 100:
+            return {
+                "success": False,
+                "error": f"Too many tracking numbers ({len(tracking_numbers)}). Max is 100."
+            }
+
+        token = self.get_access_token()
+        if not token:
+            return {
+                "success": False,
+                "error": "Could not obtain UPS access token"
+            }
+
+        try:
+            url = "https://onlinetools.ups.com/api/track/v1/subscription/enhanced/package"
+
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "transId": str(int(time.time())),
+                "transactionSrc": "parcel_scanner"
+            }
+
+            payload = {
+                "locale": locale,
+                "trackingNumberList": tracking_numbers,
+                "destination": {
+                    "url": webhook_url,
+                    "credentialType": "Bearer",
+                    "credential": webhook_credential
+                },
+                # D=Delivery, I=In-Progress, M=Manifest, X=Exception
+                "eventPreferences": ["D", "I", "M", "X"]
+            }
+
+            print(f"📡 Subscribing {len(tracking_numbers)} tracking numbers to UPS Track Alert...")
+            response = requests.post(url, headers=headers, json=payload, timeout=15)
+
+            if response.status_code == 200:
+                data = response.json()
+                print(f"✅ UPS Track Alert subscription successful")
+                return {
+                    "success": True,
+                    "data": data
+                }
+            else:
+                print(f"❌ UPS Track Alert subscription failed: {response.status_code} - {response.text[:300]}")
+                return {
+                    "success": False,
+                    "status_code": response.status_code,
+                    "error": response.text[:300]
+                }
+
+        except Exception as e:
+            print(f"❌ UPS Track Alert subscription exception: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    @staticmethod
+    def parse_webhook_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Parse a UPS Track Alert webhook payload into a standardized format.
+
+        Args:
+            payload: Raw webhook JSON from UPS
+
+        Returns:
+            Parsed tracking status in same format as get_tracking_status()
+        """
+        try:
+            tracking_number = payload.get("trackingNumber", "")
+            activity_status = payload.get("activityStatus", {})
+
+            status_type = activity_status.get("type", "")
+            status_code = activity_status.get("code", "")
+            status_desc = activity_status.get("description", "")
+
+            # Parse location
+            location_data = payload.get("activityLocation", {})
+            city = location_data.get("city", "")
+            state = location_data.get("stateProvince", "")
+            country = location_data.get("country", "")
+            location = f"{city}, {state}, {country}".strip(", ")
+
+            # Parse dates
+            local_date = payload.get("localActivityDate", "")  # YYYYMMDD
+            local_time = payload.get("localActivityTime", "")  # HHMMSS
+            actual_delivery_date = payload.get("actualDeliveryDate", "")
+
+            # Determine status
+            status = "unknown"
+            if status_type == "D":
+                status = "delivered"
+            elif status_type == "I":
+                status = "in_transit"
+            elif status_type == "M":
+                status = "label_created"
+            elif status_type == "X":
+                status = "exception"
+
+            # Format estimated delivery
+            estimated_delivery = ""
+            scheduled = payload.get("scheduledDeliveryDate", "")
+            if scheduled:
+                try:
+                    from datetime import datetime
+                    dt = datetime.strptime(scheduled, "%Y%m%d")
+                    estimated_delivery = dt.strftime("%B %d")
+                except:
+                    estimated_delivery = scheduled
+
+            return {
+                "tracking_number": tracking_number,
+                "status": status,
+                "status_description": status_desc,
+                "location": location,
+                "local_date": local_date,
+                "local_time": local_time,
+                "delivered_date": actual_delivery_date if status == "delivered" else None,
+                "estimated_delivery": estimated_delivery,
+                "received_by": payload.get("receivedBy", ""),
+                "raw_status_code": status_code,
+                "raw_status_type": status_type
+            }
+
+        except Exception as e:
+            print(f"❌ Error parsing UPS webhook payload: {e}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+
 
 class UPSShippingAPI:
     """
