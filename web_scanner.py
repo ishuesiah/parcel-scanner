@@ -5,16 +5,18 @@
 # This enables async I/O for WebSocket support in production (gunicorn+eventlet)
 # ══════════════════════════════════════════════════════════════════════════════
 import os as _os
-_use_eventlet = _os.environ.get('DISABLE_EVENTLET', '').lower() != 'true'
 
-if _use_eventlet:
+# Flag used by websocket_manager.py to detect async mode
+EVENTLET_ENABLED = False
+
+if _os.environ.get('DISABLE_EVENTLET', '').lower() != 'true':
     try:
         import eventlet
         eventlet.monkey_patch()
+        EVENTLET_ENABLED = True
         print("✓ Eventlet monkey patch applied (production WebSocket mode)")
     except ImportError:
         print("⚠️ Eventlet not installed - WebSocket connections may be unstable")
-        _use_eventlet = False
 # ══════════════════════════════════════════════════════════════════════════════
 
 """
@@ -695,6 +697,10 @@ def init_background_scheduler():
     """
     Initialize background scheduler for automatic tracking updates.
     Runs every 30 minutes to refresh stale tracking statuses.
+
+    Note: When eventlet is monkey-patched, APScheduler's BackgroundScheduler
+    works correctly because eventlet patches the threading module. The scheduler
+    will use green threads instead of OS threads.
     """
     global _scheduler, _scheduler_initialized
 
@@ -705,8 +711,25 @@ def init_background_scheduler():
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.interval import IntervalTrigger
+        from apscheduler.executors.pool import ThreadPoolExecutor
 
-        _scheduler = BackgroundScheduler(daemon=True)
+        # Configure executor - limit to 1 thread for predictable behavior
+        # with eventlet's cooperative threading
+        executors = {
+            'default': ThreadPoolExecutor(1)
+        }
+
+        job_defaults = {
+            'coalesce': True,  # Combine missed runs into one
+            'max_instances': 1,  # Prevent overlapping executions
+            'misfire_grace_time': 300  # 5 min grace for misfires
+        }
+
+        _scheduler = BackgroundScheduler(
+            executors=executors,
+            job_defaults=job_defaults,
+            daemon=True
+        )
 
         # Schedule tracking refresh every 30 minutes
         _scheduler.add_job(
@@ -714,13 +737,13 @@ def init_background_scheduler():
             trigger=IntervalTrigger(minutes=30),
             id='tracking_refresh',
             name='Refresh stale tracking statuses',
-            replace_existing=True,
-            max_instances=1  # Prevent overlapping executions
+            replace_existing=True
         )
 
         _scheduler.start()
         _scheduler_initialized = True
-        print("✅ Background tracking scheduler started (30 min interval)")
+        mode = "eventlet" if EVENTLET_ENABLED else "threading"
+        print(f"✅ Background tracking scheduler started (30 min interval, {mode} mode)")
 
         # Shut down scheduler when app stops
         atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
@@ -729,6 +752,8 @@ def init_background_scheduler():
         print("⚠️ APScheduler not installed - background tracking disabled")
     except Exception as e:
         print(f"⚠️ Failed to start background scheduler: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def background_tracking_refresh():

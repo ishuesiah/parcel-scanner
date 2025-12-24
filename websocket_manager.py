@@ -41,15 +41,22 @@ def get_allowed_origins():
     """
     app_url = os.environ.get('APP_URL', '').rstrip('/')
     allowed = []
+    flask_env = os.environ.get('FLASK_ENV', 'production')
 
     if app_url:
         allowed.append(app_url)
         # Also allow https version if http provided
         if app_url.startswith('http://'):
             allowed.append(app_url.replace('http://', 'https://'))
+    elif flask_env != 'development':
+        # Production without APP_URL - log warning
+        logger.warning(
+            "⚠️ APP_URL not set in production! "
+            "WebSocket CORS will use same-origin only. "
+            "Set APP_URL environment variable for cross-origin support."
+        )
 
     # Development origins
-    flask_env = os.environ.get('FLASK_ENV', 'production')
     if flask_env == 'development':
         allowed.extend([
             'http://localhost:5005',
@@ -67,14 +74,19 @@ def get_allowed_origins():
 
 def _get_async_mode():
     """
-    Detect the best async mode for SocketIO.
-    Prefers eventlet (production) over threading (development).
+    Get the async mode for SocketIO.
+    Uses the EVENTLET_ENABLED flag from web_scanner.py (set during monkey patching).
+    This avoids duplicate detection and ensures consistency.
     """
+    # Import here to avoid circular dependency at module load time
     try:
-        import eventlet
-        return 'eventlet'
+        from web_scanner import EVENTLET_ENABLED
+        if EVENTLET_ENABLED:
+            return 'eventlet'
     except ImportError:
-        return 'threading'
+        pass
+
+    return 'threading'
 
 
 def init_socketio(app):
