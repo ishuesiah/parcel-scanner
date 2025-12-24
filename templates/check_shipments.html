@@ -944,6 +944,34 @@
       return trackingNumbers;
     }
 
+    // Get tracking numbers that need refreshing (Loading, Checking, stale)
+    function getStaleTrackingNumbers() {
+      const staleTracking = [];
+      const staleIndicators = ['Loading', 'Checking', 'Unknown', 'Error'];
+      const rows = document.querySelectorAll('#tab-shipments tbody tr');
+
+      rows.forEach(row => {
+        const trackingCell = row.querySelector('td:nth-child(5) a');
+        const statusCell = row.querySelector('td:nth-child(8)');
+
+        if (trackingCell && statusCell) {
+          const tracking = trackingCell.textContent.trim();
+          const statusText = statusCell.textContent.trim();
+
+          if (tracking && tracking !== '—') {
+            // Check if status indicates stale data
+            const isStale = staleIndicators.some(indicator =>
+              statusText.toLowerCase().includes(indicator.toLowerCase())
+            );
+            if (isStale) {
+              staleTracking.push(tracking);
+            }
+          }
+        }
+      });
+      return staleTracking;
+    }
+
     // Update a single tracking status in the table
     function updateTrackingRow(data) {
       const trackingNum = data.tracking_number;
@@ -1065,6 +1093,15 @@
         const trackingNumbers = getVisibleTrackingNumbers();
         if (trackingNumbers.length > 0) {
           socket.emit('subscribe_tracking', { tracking_numbers: trackingNumbers });
+        }
+
+        // Auto-refresh stale/loading items
+        const staleTracking = getStaleTrackingNumbers();
+        if (staleTracking.length > 0) {
+          console.log('Auto-refreshing', staleTracking.length, 'stale tracking numbers');
+          socket.emit('request_tracking_refresh', {
+            tracking_numbers: staleTracking.slice(0, 20)
+          });
         }
       });
 
