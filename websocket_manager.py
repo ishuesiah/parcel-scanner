@@ -75,13 +75,15 @@ def get_allowed_origins():
 def _get_async_mode():
     """
     Get the async mode for SocketIO.
-    Uses the EVENTLET_ENABLED flag from web_scanner.py (set during monkey patching).
-    This avoids duplicate detection and ensures consistency.
+    Detects if eventlet was monkey-patched by checking the socket module.
     """
-    # Import here to avoid circular dependency at module load time
     try:
-        from web_scanner import EVENTLET_ENABLED
-        if EVENTLET_ENABLED:
+        import eventlet
+        # Check if eventlet has monkey-patched the standard library
+        # This is more reliable than importing a flag from web_scanner
+        # (which could cause circular import issues)
+        from eventlet import patcher
+        if patcher.is_monkey_patched('socket'):
             return 'eventlet'
     except ImportError:
         pass
