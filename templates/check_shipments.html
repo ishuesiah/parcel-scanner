@@ -1125,13 +1125,18 @@
 
       // Receive tracking updates
       socket.on('tracking_update', (data) => {
-        console.log('Live tracking update:', data);
+        console.log('📦 Live tracking update:', data);
         updateTrackingRow(data);
+      });
+
+      // Refresh started confirmation
+      socket.on('tracking_refresh_started', (data) => {
+        console.log('🔄 Refresh started:', data.count, 'tracking numbers being fetched');
       });
 
       // Subscription confirmed
       socket.on('subscription_confirmed', (data) => {
-        console.log('Subscription confirmed:', data);
+        console.log('✓ Subscription confirmed:', data);
       });
 
       // Handle errors
