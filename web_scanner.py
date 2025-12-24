@@ -1,5 +1,22 @@
 # web_scanner.py
 
+# ══════════════════════════════════════════════════════════════════════════════
+# EVENTLET MONKEY PATCHING - MUST BE FIRST BEFORE ANY OTHER IMPORTS
+# This enables async I/O for WebSocket support in production (gunicorn+eventlet)
+# ══════════════════════════════════════════════════════════════════════════════
+import os as _os
+_use_eventlet = _os.environ.get('DISABLE_EVENTLET', '').lower() != 'true'
+
+if _use_eventlet:
+    try:
+        import eventlet
+        eventlet.monkey_patch()
+        print("✓ Eventlet monkey patch applied (production WebSocket mode)")
+    except ImportError:
+        print("⚠️ Eventlet not installed - WebSocket connections may be unstable")
+        _use_eventlet = False
+# ══════════════════════════════════════════════════════════════════════════════
+
 """
 Hemlock & Oak Parcel Scanner
 Version: 1.2.1

@@ -65,6 +65,18 @@ def get_allowed_origins():
     return allowed
 
 
+def _get_async_mode():
+    """
+    Detect the best async mode for SocketIO.
+    Prefers eventlet (production) over threading (development).
+    """
+    try:
+        import eventlet
+        return 'eventlet'
+    except ImportError:
+        return 'threading'
+
+
 def init_socketio(app):
     """
     Initialize SocketIO with the Flask app.
@@ -73,18 +85,19 @@ def init_socketio(app):
     global socketio
     with _init_lock:
         if socketio is None:
+            async_mode = _get_async_mode()
             socketio = SocketIO(
                 app,
                 cors_allowed_origins=get_allowed_origins(),
                 manage_session=True,
-                async_mode='threading',  # Works with existing Flask setup
+                async_mode=async_mode,
                 logger=False,
                 engineio_logger=False,
                 ping_timeout=60,
                 ping_interval=25,
                 max_http_buffer_size=100000,  # 100KB max message size
             )
-            logger.info("WebSocket server initialized")
+            logger.info(f"WebSocket server initialized (async_mode={async_mode})")
     return socketio
 
 
