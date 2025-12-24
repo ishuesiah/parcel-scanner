@@ -8692,4 +8692,6 @@ if __name__ == "__main__":
     # Set FLASK_DEBUG=true in environment to enable debug mode for local development
     debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
     # Use socketio.run() for WebSocket support
-    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=debug_mode)
+    # allow_unsafe_werkzeug=True needed for PaaS platforms that run via `python app.py`
+    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)),
+                 debug=debug_mode, allow_unsafe_werkzeug=True)
