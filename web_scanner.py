@@ -4689,15 +4689,48 @@ def check_shipments():
 
             # Check if tracking needs refresh (older than 2 hours or missing)
             if is_ups or is_canada_post:
+                needs_refresh = False
+
                 if not tracking_updated:
-                    tracking_to_refresh.append(tracking_number)
+                    needs_refresh = True
                 else:
                     # Handle timezone-aware timestamps from PostgreSQL
                     now = datetime.now()
-                    if hasattr(tracking_updated, 'tzinfo') and tracking_updated.tzinfo is not None:
-                        tracking_updated = tracking_updated.replace(tzinfo=None)
-                    if (now - tracking_updated).total_seconds() > 7200:
-                        tracking_to_refresh.append(tracking_number)
+                    tracking_updated_check = tracking_updated
+                    if hasattr(tracking_updated_check, 'tzinfo') and tracking_updated_check.tzinfo is not None:
+                        tracking_updated_check = tracking_updated_check.replace(tzinfo=None)
+
+                    # Stale if > 2 hours old
+                    if (now - tracking_updated_check).total_seconds() > 7200:
+                        needs_refresh = True
+
+                    # Also refresh if estimated delivery has PASSED but still shows in_transit
+                    # This catches packages where cache is stale but timestamp looks recent
+                    if ups_status == "in_transit" and estimated_delivery and not is_delivered:
+                        try:
+                            # Try to parse estimated delivery date
+                            est_str = estimated_delivery.split("(")[0].strip()  # Remove time window
+                            # Try common formats: "December 19", "Dec 19", "2024-12-19"
+                            parsed_est = None
+                            for fmt in ["%B %d", "%b %d", "%Y-%m-%d", "%m/%d/%Y"]:
+                                try:
+                                    parsed_est = datetime.strptime(est_str, fmt)
+                                    # Add current year if not present
+                                    if parsed_est.year == 1900:
+                                        parsed_est = parsed_est.replace(year=now.year)
+                                    break
+                                except ValueError:
+                                    continue
+
+                            if parsed_est and parsed_est.date() < now.date():
+                                # Estimated delivery has passed - force refresh
+                                needs_refresh = True
+                                print(f"⚠️ {tracking_number}: Est delivery {est_str} passed, forcing refresh")
+                        except Exception as e:
+                            pass  # Can't parse date, skip this check
+
+                if needs_refresh:
+                    tracking_to_refresh.append(tracking_number)
 
             # Save original status for flag logic (before we modify it for display)
             original_ups_status = ups_status
