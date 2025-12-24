@@ -43,22 +43,37 @@
 
   <div class="flex h-screen w-full overflow-hidden">
 
+    <!-- ── SIDEBAR TOGGLE BUTTON (visible when collapsed) ── -->
+    <button id="sidebarToggle" onclick="toggleSidebar()" class="fixed top-4 left-4 z-50 md:hidden p-2 bg-bg-surface rounded-lg border border-border-color shadow-lg hover:bg-bg-main transition-all">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+
     <!-- ── SIDEBAR ── -->
-    <div class="sidebar hidden md:flex w-64 flex-col justify-between flex-shrink-0 bg-bg-surface border-r border-border-color transition-colors duration-300">
+    <div id="sidebar" class="sidebar hidden md:flex w-64 flex-col justify-between flex-shrink-0 bg-bg-surface border-r border-border-color transition-all duration-300">
       <div class="overflow-y-auto">
         <!-- Logo Area -->
-        <div class="p-6 pb-8">
-          <div class="flex items-center gap-2.5 font-bold text-xl tracking-tight text-text-main">
-            <div class="relative flex items-center justify-center w-9 h-9 rounded-xl text-white shadow-lg bg-secondary">
-              <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                <path fill-rule="evenodd" d="m11.54 22.351.07.04.028.016a.76.76 0 0 0 .723 0l.028-.015.071-.041a16.975 16.975 0 0 0 1.144-.742 19.58 19.58 0 0 0 2.683-2.282c1.944-1.99 3.963-4.98 3.963-8.827a8.25 8.25 0 0 0-16.5 0c0 3.846 2.02 6.837 3.963 8.827a19.58 19.58 0 0 0 3.682 2.937l.145.083ZM12 13.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clip-rule="evenodd" />
-              </svg>
+        <div class="p-6 pb-8 flex items-center justify-between">
+          <div>
+            <div class="flex items-center gap-2.5 font-bold text-xl tracking-tight text-text-main">
+              <div class="relative flex items-center justify-center w-9 h-9 rounded-xl text-white shadow-lg bg-secondary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <path fill-rule="evenodd" d="m11.54 22.351.07.04.028.016a.76.76 0 0 0 .723 0l.028-.015.071-.041a16.975 16.975 0 0 0 1.144-.742 19.58 19.58 0 0 0 2.683-2.282c1.944-1.99 3.963-4.98 3.963-8.827a8.25 8.25 0 0 0-16.5 0c0 3.846 2.02 6.837 3.963 8.827a19.58 19.58 0 0 0 3.682 2.937l.145.083ZM12 13.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clip-rule="evenodd" />
+                </svg>
+              </div>
+              WAYPOST
             </div>
-            WAYPOST
+            <p class="text-[11px] font-medium mt-1.5 pl-1 uppercase tracking-wider text-text-muted opacity-70">
+              Logistics Dashboard
+            </p>
           </div>
-          <p class="text-[11px] font-medium mt-1.5 pl-1 uppercase tracking-wider text-text-muted opacity-70">
-            Logistics Dashboard
-          </p>
+          <!-- Collapse button (desktop) -->
+          <button onclick="toggleSidebar()" class="hidden md:flex p-1.5 rounded-lg hover:bg-bg-main transition-colors" title="Collapse sidebar">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-text-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/>
+            </svg>
+          </button>
         </div>
 
         <!-- Navigation -->
@@ -211,6 +226,78 @@
     <!-- ── END MAIN CONTENT ── -->
 
   </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       ORDER DETAIL SLIDE-OUT PANEL (Unified - used across all pages)
+       ══════════════════════════════════════════════════════════════════════════ -->
+  <div id="orderPanelOverlay" class="order-panel-overlay"></div>
+  <div id="orderDetailPanel" class="order-detail-panel">
+    <div class="panel-header">
+      <h3 id="orderPanelHeader">Order Details</h3>
+      <button onclick="OrderPanel.close()" class="panel-close" aria-label="Close">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div id="orderPanelContent" class="panel-content">
+      <!-- Content loaded dynamically by OrderPanel.open() -->
+    </div>
+    <div class="panel-footer">
+      <div class="panel-actions" id="panelFooterActions">
+        <button onclick="OrderPanel.printPackingSlip()" class="btn btn-secondary">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
+          </svg>
+          Packing Slip
+        </button>
+        <button id="panelCustomsBtn" onclick="OrderPanel.printCustomsForm()" class="btn btn-secondary" style="display: none;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+          Customs Form
+        </button>
+      </div>
+      <button onclick="OrderPanel.close()" class="btn btn-secondary">Close</button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       GLOBAL SCRIPTS
+       ══════════════════════════════════════════════════════════════════════════ -->
+  <script>
+    // ── SIDEBAR COLLAPSE TOGGLE ──
+    const SIDEBAR_KEY = 'sidebarCollapsed';
+
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const mainContent = document.querySelector('.main-content');
+      if (!sidebar) return;
+
+      const isCollapsed = sidebar.classList.toggle('collapsed');
+
+      // Persist state
+      localStorage.setItem(SIDEBAR_KEY, isCollapsed ? '1' : '0');
+
+      // Update main content margin
+      if (mainContent) mainContent.classList.toggle('sidebar-collapsed', isCollapsed);
+    }
+
+    // Restore sidebar state on page load
+    document.addEventListener('DOMContentLoaded', function() {
+      const sidebar = document.getElementById('sidebar');
+      const mainContent = document.querySelector('.main-content');
+      const savedState = localStorage.getItem(SIDEBAR_KEY);
+
+      if (savedState === '1' && sidebar) {
+        sidebar.classList.add('collapsed');
+        if (mainContent) mainContent.classList.add('sidebar-collapsed');
+      }
+    });
+  </script>
+
+  <!-- Unified Order Panel Controller -->
+  <script src="{{ url_for('static', filename='js/order-panel.js') }}"></script>
 
   {% block scripts %}{% endblock %}
 

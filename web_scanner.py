@@ -7192,6 +7192,49 @@ def api_get_order_details(order_number):
         # Calculate total weight
         total_weight = order.get('total_weight_grams') or sum(item.get('weight_grams', 0) * item.get('quantity', 1) for item in line_items_with_props)
 
+        # Get shipment and tracking data (JOIN shipments_cache + tracking_status_cache)
+        shipment_data = None
+        tracking_data = None
+        cursor.execute("""
+            SELECT sc.tracking_number, sc.carrier_code, sc.ship_date,
+                   sc.shipstation_batch_number,
+                   tc.status, tc.status_description, tc.estimated_delivery,
+                   tc.last_location, tc.last_activity_date, tc.is_delivered,
+                   tc.updated_at as tracking_updated
+            FROM shipments_cache sc
+            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+            WHERE sc.order_number = %s
+            ORDER BY sc.ship_date DESC
+            LIMIT 1
+        """, (order_number,))
+        ship_row = cursor.fetchone()
+
+        if ship_row:
+            shipment_data = {
+                "tracking_number": ship_row.get('tracking_number') or '',
+                "carrier": normalize_carrier(ship_row.get('carrier_code') or ''),
+                "carrier_code": ship_row.get('carrier_code') or '',
+                "ship_date": str(ship_row['ship_date']) if ship_row.get('ship_date') else '',
+                "batch_number": ship_row.get('shipstation_batch_number') or ''
+            }
+
+            # Build tracking data
+            status = ship_row.get('status') or 'unknown'
+            tracking_data = {
+                "status": status,
+                "status_text": ship_row.get('status_description') or status.replace('_', ' ').title(),
+                "estimated_delivery": ship_row.get('estimated_delivery') or '',
+                "last_location": ship_row.get('last_location') or '',
+                "last_activity": str(ship_row['last_activity_date']) if ship_row.get('last_activity_date') else '',
+                "is_delivered": ship_row.get('is_delivered') or False,
+                "progress_percent": {
+                    'delivered': 100, 'out_for_delivery': 90, 'almost_there': 85,
+                    'in_transit': 50, 'label_created': 10, 'exception': 50
+                }.get(status, 0)
+            }
+
+        cursor.close()
+
         return jsonify({
             "success": True,
             "order": {
@@ -7218,7 +7261,9 @@ def api_get_order_details(order_number):
                 "zone": rate_zone,
                 "detail": rate_zone_detail,
                 "is_international": rate_zone != "Domestic"
-            }
+            },
+            "shipment": shipment_data,
+            "tracking": tracking_data
         })
 
     except Exception as e:
