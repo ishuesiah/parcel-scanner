@@ -7131,8 +7131,7 @@ def api_get_order_details(order_number):
                 "properties": [{"name": p['name'], "value": p['value']} for p in properties]
             })
 
-        cursor.close()
-        conn.close()
+        # NOTE: Don't close cursor/conn yet - we still need to fetch shipment data below
 
         # Parse shipping address (stored as JSON string)
         shipping_address = {}
@@ -7250,6 +7249,7 @@ def api_get_order_details(order_number):
             }
 
         cursor.close()
+        conn.close()
 
         return jsonify({
             "success": True,
