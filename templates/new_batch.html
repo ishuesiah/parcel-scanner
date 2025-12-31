@@ -63,6 +63,7 @@
       <!-- Scan form with async capability -->
       <div class="scan-section">
         <form id="scan-form" class="scan-form" autocomplete="off">
+          <input type="hidden" name="batch_id" value="{{ current_batch.id }}">
           <div class="form-group">
             <label for="code"><strong>Scan Tracking Number:</strong></label><br>
             <input type="text" name="code" id="code" autofocus required>
@@ -471,6 +472,7 @@
       try {
         const formData = new FormData();
         formData.append('code', code);
+        formData.append('batch_id', '{{ current_batch.id }}');  // Explicit batch_id for multi-tab support
 
         const response = await fetch('{{ url_for("scan") }}', {
           method: 'POST',

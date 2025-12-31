@@ -2845,52 +2845,44 @@ body.panel-open {
    25. SIDEBAR COLLAPSE STATE
    ============================================================================ */
 
-/* Collapsed sidebar */
+/* Collapsed sidebar - completely hidden */
 .sidebar.collapsed {
-  width: 72px;
+  width: 0;
+  min-width: 0;
+  border: none;
   overflow: hidden;
+  padding: 0;
 }
 
-.sidebar.collapsed nav > div,
-.sidebar.collapsed ul span,
-.sidebar.collapsed > div:last-child a span,
-.sidebar.collapsed > div:last-child > div:last-child,
-.sidebar.collapsed > div:first-child p {
+/* Floating expand button - always visible when sidebar collapsed */
+.sidebar-expand-btn {
+  position: fixed;
+  top: 16px;
+  left: 12px;
+  z-index: 1001;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 10px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  transition: all 0.2s ease;
   display: none;
+  color: var(--text-main);
 }
 
-.sidebar.collapsed > div:first-child > div:first-child {
-  justify-content: center;
+.sidebar-expand-btn:hover {
+  background: var(--bg-main);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 
-.sidebar.collapsed > div:first-child > div:first-child > span:not(:first-child) {
-  display: none;
+.sidebar-expand-btn svg {
+  display: block;
 }
 
-.sidebar.collapsed .sidebar-item,
-.sidebar.collapsed ul a {
-  justify-content: center;
-  padding: 12px;
-}
-
-.sidebar.collapsed .sidebar-item svg,
-.sidebar.collapsed ul a svg {
-  margin: 0;
-}
-
-/* Logo area when collapsed */
-.sidebar.collapsed > div:first-child {
-  padding: 16px 12px;
-  flex-direction: column;
-}
-
-.sidebar.collapsed > div:first-child button {
-  display: none;
-}
-
-/* Expand button when collapsed - rotate chevrons */
-.sidebar.collapsed button[onclick="toggleSidebar()"] svg {
-  transform: rotate(180deg);
+/* Show expand button when sidebar is collapsed (controlled via JS) */
+.sidebar-expand-btn.visible {
+  display: flex;
 }
 
 /* Main content adjustment when sidebar collapsed */

@@ -43,10 +43,10 @@
 
   <div class="flex h-screen w-full overflow-hidden">
 
-    <!-- ── SIDEBAR TOGGLE BUTTON (visible when collapsed) ── -->
-    <button id="sidebarToggle" onclick="toggleSidebar()" class="fixed top-4 left-4 z-50 md:hidden p-2 bg-bg-surface rounded-lg border border-border-color shadow-lg hover:bg-bg-main transition-all">
+    <!-- ── SIDEBAR EXPAND BUTTON (visible when collapsed) ── -->
+    <button id="sidebarExpandBtn" onclick="toggleSidebar()" class="sidebar-expand-btn" title="Expand sidebar">
       <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        <polyline points="9 18 15 12 9 6"/>
       </svg>
     </button>
 
@@ -272,6 +272,7 @@
     function toggleSidebar() {
       const sidebar = document.getElementById('sidebar');
       const mainContent = document.querySelector('.main-content');
+      const expandBtn = document.getElementById('sidebarExpandBtn');
       if (!sidebar) return;
 
       const isCollapsed = sidebar.classList.toggle('collapsed');
@@ -279,19 +280,22 @@
       // Persist state
       localStorage.setItem(SIDEBAR_KEY, isCollapsed ? '1' : '0');
 
-      // Update main content margin
+      // Update main content margin and expand button visibility
       if (mainContent) mainContent.classList.toggle('sidebar-collapsed', isCollapsed);
+      if (expandBtn) expandBtn.classList.toggle('visible', isCollapsed);
     }
 
     // Restore sidebar state on page load
     document.addEventListener('DOMContentLoaded', function() {
       const sidebar = document.getElementById('sidebar');
       const mainContent = document.querySelector('.main-content');
+      const expandBtn = document.getElementById('sidebarExpandBtn');
       const savedState = localStorage.getItem(SIDEBAR_KEY);
 
       if (savedState === '1' && sidebar) {
         sidebar.classList.add('collapsed');
         if (mainContent) mainContent.classList.add('sidebar-collapsed');
+        if (expandBtn) expandBtn.classList.add('visible');
       }
     });
   </script>

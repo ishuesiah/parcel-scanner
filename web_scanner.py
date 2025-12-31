@@ -2653,14 +2653,34 @@ def scan():
 
     ✨ NEW: Automatically detects and splits concatenated tracking numbers
     (e.g., two UPS numbers stuck together like 1ZAC508867380623021ZAC50882034286504)
+
+    ✨ NEW: Accepts batch_id explicitly via form data for multi-tab support.
+    Falls back to session for backwards compatibility.
     """
     code = request.form.get("code", "").strip()
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+    # Get batch_id explicitly from form (multi-tab support), fallback to session
+    batch_id = request.form.get("batch_id")
+    if batch_id:
+        try:
+            batch_id = int(batch_id)
+        except (ValueError, TypeError):
+            batch_id = None
+    if not batch_id:
+        batch_id = session.get("batch_id")
 
     if not code:
         if is_ajax:
             return jsonify({"success": False, "error": "No code received."}), 400
         flash("No code received.", "error")
+        return redirect(url_for("index"))
+
+    # Validate batch_id early
+    if not batch_id:
+        if is_ajax:
+            return jsonify({"success": False, "error": "No batch open."}), 400
+        flash("No batch open. Please start a new batch first.", "error")
         return redirect(url_for("index"))
 
     # ═══════════════════════════════════════════════════════════════════
@@ -2679,8 +2699,8 @@ def scan():
         for i, individual_code in enumerate(split_codes, 1):
             print(f"   Processing split {i}/{len(split_codes)}: {individual_code}")
 
-            # Process this individual scan
-            result = _process_single_scan(individual_code, is_ajax)
+            # Process this individual scan (pass batch_id explicitly)
+            result = _process_single_scan(individual_code, is_ajax, batch_id)
 
             if isinstance(result, tuple):  # Error response
                 # If any scan fails, return the error
@@ -2706,27 +2726,23 @@ def scan():
                 flash(msg, "info")
             return redirect(url_for("index"))
 
-    # Single tracking number - process normally
-    return _process_single_scan(code, is_ajax)
+    # Single tracking number - process normally (pass batch_id explicitly)
+    return _process_single_scan(code, is_ajax, batch_id)
 
 
-def _process_single_scan(code, is_ajax):
+def _process_single_scan(code, is_ajax, batch_id):
     """
     Process a single tracking number scan.
 
     Args:
         code: The tracking number to process
         is_ajax: Whether this is an AJAX request
+        batch_id: The batch ID to add the scan to (explicit, for multi-tab support)
 
     Returns:
         JSON response for AJAX, redirect for regular requests
     """
-    batch_id = session.get("batch_id")
-    if not batch_id:
-        if is_ajax:
-            return jsonify({"success": False, "error": "No batch open."}), 400
-        flash("No batch open. Please start a new batch first.", "error")
-        return redirect(url_for("index"))
+    # batch_id is now passed explicitly from scan() for multi-tab support
 
     conn = get_mysql_connection()
     try:

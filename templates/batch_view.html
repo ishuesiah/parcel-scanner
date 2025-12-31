@@ -42,8 +42,13 @@
     border: 1px solid var(--border-color, #ddd);
     border-radius: 6px;
     background: white;
+    color: var(--text-main, #070e31);
     font-size: 0.9rem;
     min-width: 180px;
+  }
+  .move-toolbar select option {
+    color: var(--text-main, #070e31);
+    background: white;
   }
   .btn-move {
     padding: 8px 16px;
@@ -360,14 +365,23 @@
 
         clearSelection();
 
-        // Show success message
-        const toolbar = document.getElementById('moveToolbar');
-        toolbar.innerHTML = `<span style="color: #199b76; font-weight: 500;">✓ ${data.moved_count} scan(s) moved to Batch #${targetBatchId}</span>
-          <a href="/view_batch/${targetBatchId}" style="color: var(--secondary); margin-left: 12px;">View Batch →</a>`;
-        toolbar.classList.remove('no-selection');
+        // Reset button state (keep toolbar functional for more moves)
+        moveBtn.disabled = true;
+        moveBtn.innerHTML = 'Move →';
 
-        // Reload after delay to refresh counts
-        setTimeout(() => window.location.reload(), 2000);
+        // Show inline success message that auto-dismisses
+        const toolbar = document.getElementById('moveToolbar');
+        const existingMsg = toolbar.querySelector('.move-success-msg');
+        if (existingMsg) existingMsg.remove();
+
+        const successMsg = document.createElement('span');
+        successMsg.className = 'move-success-msg';
+        successMsg.style.cssText = 'color: var(--success, #199b76); font-weight: 500; margin-left: auto; display: flex; align-items: center; gap: 8px;';
+        successMsg.innerHTML = `✓ ${data.moved_count} moved <a href="/view_batch/${targetBatchId}" style="color: var(--secondary); font-weight: normal;">View →</a>`;
+        toolbar.appendChild(successMsg);
+
+        // Auto-dismiss success message after 5 seconds
+        setTimeout(() => successMsg.remove(), 5000);
       } else {
         alert('Error: ' + (data.error || 'Could not move scans'));
         moveBtn.disabled = false;
