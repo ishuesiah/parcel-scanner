@@ -448,22 +448,7 @@
         </div>
       </div>
     </div>
-
-    <!-- Order Details Modal -->
-    <div id="orderModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;">
-      <div style="background: white; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; position: relative; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
-        <div style="padding: 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
-          <h3 style="margin: 0; color: #333;" id="modalTitle">Order Details</h3>
-          <button onclick="closeOrderModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #666;">&times;</button>
-        </div>
-        <div id="modalContent" style="padding: 20px;">
-          <p style="text-align: center; color: #666;">Loading...</p>
-        </div>
-        <div style="padding: 15px 20px; border-top: 1px solid #eee; text-align: right; background: #f9f9f9;">
-          <button onclick="closeOrderModal()" style="padding: 8px 16px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
-        </div>
-      </div>
-    </div>
+    <!-- Order Details: Now unified in base.html (OrderPanel) -->
 {% endblock %}
 
 {% block scripts %}
@@ -490,129 +475,7 @@
       return `<a href="${url}" target="_blank" rel="noopener" style="color: #1976d2; text-decoration: none; font-family: monospace; font-size: 0.85rem;" title="Track ${trackingNumber}">${trackingNumber}</a>`;
     }
 
-    // ── Order Details Modal ──
-    async function showOrderDetails(orderNumber) {
-      const modal = document.getElementById('orderModal');
-      const modalContent = document.getElementById('modalContent');
-      const modalTitle = document.getElementById('modalTitle');
-
-      modal.style.display = 'flex';
-      modalTitle.textContent = `Order #${orderNumber}`;
-      modalContent.innerHTML = '<p style="text-align: center; color: #666;">Loading...</p>';
-
-      try {
-        const response = await fetch(`/api/orders/${orderNumber}/details`);
-        const data = await response.json();
-
-        if (data.success) {
-          const order = data.order;
-          const items = data.line_items;
-
-          let addressHtml = '';
-          const addr = order.shipping_address;
-          if (addr && Object.keys(addr).length > 0) {
-            if (addr.raw) {
-              addressHtml = `<p style="margin: 0; line-height: 1.6;">${addr.raw}</p>`;
-            } else {
-              addressHtml = `
-                <p style="margin: 0; line-height: 1.6;">
-                  ${addr.name || ''}<br>
-                  ${addr.address1 || ''}${addr.address2 ? '<br>' + addr.address2 : ''}<br>
-                  ${addr.city || ''}, ${addr.province_code || addr.province || ''} ${addr.zip || ''}<br>
-                  ${addr.country || ''}
-                  ${addr.phone ? '<br>Phone: ' + addr.phone : ''}
-                </p>
-              `;
-            }
-          } else {
-            addressHtml = '<p style="color: #999;">No shipping address</p>';
-          }
-
-          let itemsHtml = '';
-          if (items && items.length > 0) {
-            itemsHtml = items.map(item => {
-              let propsHtml = '';
-              if (item.properties && item.properties.length > 0) {
-                propsHtml = '<div style="margin-top: 6px; padding: 6px 8px; background: #f8f9fa; border-radius: 4px; font-size: 0.85em;">' +
-                  item.properties.map(p => `<div style="color: #555;"><span style="color: #888;">${p.name}:</span> ${p.value}</div>`).join('') +
-                  '</div>';
-              }
-              return `
-              <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee;">
-                <div style="flex: 1;">
-                  <strong>${item.title}</strong>
-                  ${item.variant ? '<br><span style="color: #666; font-size: 0.9em;">' + item.variant + '</span>' : ''}
-                  ${item.sku ? '<br><span style="color: #999; font-size: 0.85em;">SKU: ' + item.sku + '</span>' : ''}
-                  ${propsHtml}
-                </div>
-                <div style="text-align: right; white-space: nowrap; margin-left: 12px;">
-                  <span style="color: #666;">× ${item.quantity}</span>
-                  <br><strong>$${item.price.toFixed(2)}</strong>
-                </div>
-              </div>
-            `}).join('');
-          } else {
-            itemsHtml = '<p style="color: #999;">No items found</p>';
-          }
-
-          modalContent.innerHTML = `
-            <div style="margin-bottom: 20px;">
-              <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Customer</h4>
-              <p style="margin: 0;"><strong>${order.customer_name || 'Unknown'}</strong></p>
-              <p style="margin: 4px 0; color: #666;">${order.customer_email || ''}</p>
-              ${order.customer_phone ? '<p style="margin: 4px 0; color: #666;">' + order.customer_phone + '</p>' : ''}
-            </div>
-
-            <div style="margin-bottom: 20px;">
-              <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Shipping Address</h4>
-              ${addressHtml}
-            </div>
-
-            <div style="margin-bottom: 20px;">
-              <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Items Ordered</h4>
-              ${itemsHtml}
-            </div>
-
-            <div style="background: #f5f5f5; padding: 12px; border-radius: 4px;">
-              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                <span>Subtotal:</span><span>$${order.subtotal_price.toFixed(2)}</span>
-              </div>
-              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                <span>Tax:</span><span>$${order.total_tax.toFixed(2)}</span>
-              </div>
-              <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.1em; border-top: 1px solid #ddd; padding-top: 8px; margin-top: 8px;">
-                <span>Total:</span><span>$${order.total_price.toFixed(2)}</span>
-              </div>
-            </div>
-
-            ${order.note ? '<div style="margin-top: 15px; padding: 10px; background: #fff8e1; border-radius: 4px;"><strong>Note:</strong> ' + order.note + '</div>' : ''}
-            ${order.cancelled ? '<div style="margin-top: 15px; padding: 10px; background: #ffebee; border-radius: 4px; color: #c62828;"><strong>⚠ This order has been cancelled</strong></div>' : ''}
-          `;
-
-        } else {
-          modalContent.innerHTML = `<p style="text-align: center; color: #c62828;">Error: ${data.error || 'Could not load order'}</p>`;
-        }
-      } catch (error) {
-        console.error('Error loading order:', error);
-        modalContent.innerHTML = '<p style="text-align: center; color: #c62828;">Error loading order details</p>';
-      }
-    }
-
-    function closeOrderModal() {
-      document.getElementById('orderModal').style.display = 'none';
-    }
-
-    document.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape') {
-        closeOrderModal();
-      }
-    });
-
-    document.getElementById('orderModal').addEventListener('click', function(e) {
-      if (e.target === this) {
-        closeOrderModal();
-      }
-    });
+    // Order Details: Now handled by unified OrderPanel (see order-panel.js)
 
     function switchTab(tab) {
       // Update URL with tab parameter
@@ -918,6 +781,280 @@
     // Handle create group modal escape key
     document.getElementById('createGroupModal').addEventListener('click', function(e) {
       if (e.target === this) closeCreateGroupModal();
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // WebSocket-Based Live Tracking System
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    let socket = null;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 10;
+
+    // Collect all tracking numbers from the current page
+    function getVisibleTrackingNumbers() {
+      const trackingNumbers = [];
+      const rows = document.querySelectorAll('#tab-shipments tbody tr');
+      rows.forEach(row => {
+        const trackingCell = row.querySelector('td:nth-child(5) a');
+        if (trackingCell) {
+          const tracking = trackingCell.textContent.trim();
+          if (tracking && tracking !== '—') {
+            trackingNumbers.push(tracking);
+          }
+        }
+      });
+      return trackingNumbers;
+    }
+
+    // Get tracking numbers that need refreshing (Loading, Checking, stale)
+    function getStaleTrackingNumbers() {
+      const staleTracking = [];
+      const staleIndicators = ['Loading', 'Checking', 'Unknown', 'Error'];
+      const rows = document.querySelectorAll('#tab-shipments tbody tr');
+
+      rows.forEach(row => {
+        const trackingCell = row.querySelector('td:nth-child(5) a');
+        const statusCell = row.querySelector('td:nth-child(9)'); // Status is column 9
+
+        if (trackingCell && statusCell) {
+          const tracking = trackingCell.textContent.trim();
+          const statusText = statusCell.textContent.trim();
+
+          if (tracking && tracking !== '—') {
+            // Check if status indicates stale data
+            const isStale = staleIndicators.some(indicator =>
+              statusText.toLowerCase().includes(indicator.toLowerCase())
+            );
+            if (isStale) {
+              staleTracking.push(tracking);
+            }
+          }
+        }
+      });
+      return staleTracking;
+    }
+
+    // Update a single tracking status in the table
+    function updateTrackingRow(data) {
+      const trackingNum = data.tracking_number;
+      const rows = document.querySelectorAll('#tab-shipments tbody tr');
+
+      rows.forEach(row => {
+        const trackingCell = row.querySelector('td:nth-child(5) a');
+        if (trackingCell && trackingCell.textContent.trim() === trackingNum) {
+          // Update status badge
+          const statusCell = row.querySelector('td:nth-child(9)');
+          if (statusCell) {
+            const badge = statusCell.querySelector('.status-badge');
+            if (badge) {
+              badge.className = 'status-badge status-' + data.status;
+              badge.textContent = data.status_text;
+
+              // Visual feedback for live update
+              row.style.transition = 'background-color 0.5s';
+              row.style.backgroundColor = '#e8f5e9';
+              setTimeout(() => {
+                row.style.backgroundColor = '';
+              }, 2000);
+            }
+          }
+
+          // Update last activity
+          const activityCell = row.querySelector('td:nth-child(10)');
+          if (activityCell && data.last_location) {
+            activityCell.textContent = data.last_location;
+          }
+        }
+      });
+    }
+
+    // Create/update connection status indicator
+    function updateConnectionStatus(connected, message = '') {
+      let indicator = document.getElementById('wsStatusIndicator');
+
+      if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.id = 'wsStatusIndicator';
+        indicator.style.cssText = `
+          position: fixed;
+          bottom: 20px;
+          right: 20px;
+          padding: 8px 14px;
+          background: var(--bg-surface, #fff);
+          border: 1px solid var(--border-color, #ddd);
+          border-radius: 20px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+          font-size: 0.8rem;
+          z-index: 1000;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          transition: all 0.3s;
+        `;
+        document.body.appendChild(indicator);
+
+        // Add pulse animation
+        const style = document.createElement('style');
+        style.textContent = `
+          @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+          @keyframes spin { to { transform: rotate(360deg); } }
+        `;
+        document.head.appendChild(style);
+      }
+
+      if (connected) {
+        indicator.innerHTML = `
+          <span style="width: 8px; height: 8px; background: #4caf50; border-radius: 50%; animation: pulse 2s infinite;"></span>
+          <span style="color: #4caf50;">Live</span>
+        `;
+        indicator.title = 'Real-time updates active';
+      } else {
+        indicator.innerHTML = `
+          <span style="width: 10px; height: 10px; border: 2px solid #ff9800; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></span>
+          <span style="color: #ff9800;">${message || 'Connecting...'}</span>
+        `;
+        indicator.title = message || 'Connecting to live updates';
+      }
+    }
+
+    // Initialize WebSocket connection
+    function initWebSocket() {
+      // Load Socket.IO client dynamically
+      if (typeof io === 'undefined') {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.socket.io/4.7.2/socket.io.min.js';
+        script.onload = connectWebSocket;
+        document.head.appendChild(script);
+      } else {
+        connectWebSocket();
+      }
+    }
+
+    function connectWebSocket() {
+      updateConnectionStatus(false, 'Connecting...');
+
+      socket = io({
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 10000,
+        reconnectionAttempts: MAX_RECONNECT_ATTEMPTS,
+        timeout: 20000
+      });
+
+      // Connection established
+      socket.on('connect', () => {
+        console.log('WebSocket connected');
+        reconnectAttempts = 0;
+        updateConnectionStatus(true);
+
+        // Subscribe to shipments page updates
+        socket.emit('subscribe_shipments_page');
+
+        // Subscribe to visible tracking numbers
+        const trackingNumbers = getVisibleTrackingNumbers();
+        if (trackingNumbers.length > 0) {
+          socket.emit('subscribe_tracking', { tracking_numbers: trackingNumbers });
+        }
+
+        // Auto-refresh stale/loading items
+        const staleTracking = getStaleTrackingNumbers();
+        if (staleTracking.length > 0) {
+          console.log('Auto-refreshing', staleTracking.length, 'stale tracking numbers');
+          socket.emit('request_tracking_refresh', {
+            tracking_numbers: staleTracking.slice(0, 20)
+          });
+        }
+      });
+
+      // Connection lost
+      socket.on('disconnect', (reason) => {
+        console.log('WebSocket disconnected:', reason);
+        updateConnectionStatus(false, 'Reconnecting...');
+      });
+
+      // Reconnection attempt
+      socket.on('reconnect_attempt', (attempt) => {
+        reconnectAttempts = attempt;
+        updateConnectionStatus(false, `Reconnecting (${attempt}/${MAX_RECONNECT_ATTEMPTS})...`);
+      });
+
+      // Reconnection failed
+      socket.on('reconnect_failed', () => {
+        updateConnectionStatus(false, 'Connection lost');
+        console.error('WebSocket reconnection failed');
+      });
+
+      // Receive tracking updates
+      socket.on('tracking_update', (data) => {
+        console.log('📦 Live tracking update:', data);
+        updateTrackingRow(data);
+      });
+
+      // Refresh started confirmation
+      socket.on('tracking_refresh_started', (data) => {
+        console.log('🔄 Refresh started:', data.count, 'tracking numbers being fetched');
+      });
+
+      // Subscription confirmed
+      socket.on('subscription_confirmed', (data) => {
+        console.log('✓ Subscription confirmed:', data);
+      });
+
+      // Handle errors
+      socket.on('error', (data) => {
+        console.error('WebSocket error:', data);
+      });
+
+      // Rate limit warning
+      socket.on('rate_limit_exceeded', (data) => {
+        console.warn('Rate limit exceeded:', data);
+      });
+    }
+
+    // Request manual refresh (triggers background API fetch)
+    function requestTrackingRefresh() {
+      if (!socket || !socket.connected) {
+        alert('Not connected to live updates. Please refresh the page.');
+        return;
+      }
+
+      const trackingNumbers = getVisibleTrackingNumbers();
+      if (trackingNumbers.length === 0) return;
+
+      socket.emit('request_tracking_refresh', {
+        tracking_numbers: trackingNumbers.slice(0, 20)  // Limit to 20
+      });
+
+      updateConnectionStatus(true);
+      console.log('Requested tracking refresh for', trackingNumbers.length, 'numbers');
+    }
+
+    // Initialize based on current tab
+    document.addEventListener('DOMContentLoaded', function() {
+      const currentTab = '{{ current_tab }}';
+
+      if (currentTab === 'shipments') {
+        initWebSocket();
+      } else if (currentTab.startsWith('group_')) {
+        // For tracking groups, also use WebSocket
+        initWebSocket();
+      }
+
+      // Handle page visibility - reconnect when tab becomes visible
+      document.addEventListener('visibilitychange', function() {
+        if (!document.hidden && socket && !socket.connected) {
+          socket.connect();
+        }
+      });
+    });
+
+    // Clean up on page unload
+    window.addEventListener('beforeunload', function() {
+      if (socket) {
+        socket.disconnect();
+      }
     });
   </script>
 {% endblock %}

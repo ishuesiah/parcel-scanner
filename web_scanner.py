@@ -1,5 +1,24 @@
 # web_scanner.py
 
+# ══════════════════════════════════════════════════════════════════════════════
+# EVENTLET MONKEY PATCHING - MUST BE FIRST BEFORE ANY OTHER IMPORTS
+# This enables async I/O for WebSocket support in production (gunicorn+eventlet)
+# ══════════════════════════════════════════════════════════════════════════════
+import os as _os
+
+# Flag used by websocket_manager.py to detect async mode
+EVENTLET_ENABLED = False
+
+if _os.environ.get('DISABLE_EVENTLET', '').lower() != 'true':
+    try:
+        import eventlet
+        eventlet.monkey_patch()
+        EVENTLET_ENABLED = True
+        print("✓ Eventlet monkey patch applied (production WebSocket mode)")
+    except ImportError:
+        print("⚠️ Eventlet not installed - WebSocket connections may be unstable")
+# ══════════════════════════════════════════════════════════════════════════════
+
 """
 Hemlock & Oak Parcel Scanner
 Version: 1.2.1
@@ -63,6 +82,12 @@ def format_pst(dt):
         # Assume UTC if no timezone
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(PST).strftime("%Y-%m-%d %H:%M")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BACKGROUND NOTIFICATION TASK TRACKING
+# Tracks progress of notification tasks so they can run in background
+# ══════════════════════════════════════════════════════════════════════════════
+notification_tasks = {}  # {batch_id: {status, total, processed, success, skipped, errors, message}}
 
 def normalize_carrier(carrier_code):
     """Normalize carrier codes to display-friendly names."""
@@ -128,6 +153,245 @@ google = oauth.register(
         'scope': 'openid email profile'
     }
 )
+
+# ── WebSocket (Flask-SocketIO) Setup ──
+from websocket_manager import (
+    init_socketio, get_socketio, TrackingRooms, TrackingEvents,
+    socketio_login_required, socketio_rate_limit,
+    connection_limiter, get_client_ip,
+    validate_tracking_number, validate_batch_id,
+    broadcast_tracking_update, broadcast_batch_scan_update, broadcast_scans_moved
+)
+from flask_socketio import emit, join_room, leave_room, disconnect
+
+socketio = init_socketio(app)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WebSocket Event Handlers
+# ══════════════════════════════════════════════════════════════════════════════
+
+@socketio.on('connect')
+def handle_ws_connect():
+    """
+    Handle WebSocket connection.
+    Validates authentication and connection limits.
+    """
+    client_ip = get_client_ip()
+
+    # Check connection limit (DoS protection)
+    if not connection_limiter.can_connect(client_ip):
+        print(f"[WS] Connection limit exceeded for {client_ip}")
+        return False
+
+    # Check authentication
+    if not session.get("authenticated"):
+        print(f"[WS] Unauthorized connection attempt from {client_ip}")
+        return False
+
+    # Check session timeout
+    last_active = session.get("last_active", 0)
+    now = time.time()
+    if (now - last_active) > INACTIVITY_TIMEOUT:
+        print(f"[WS] Expired session from {client_ip}")
+        session.clear()
+        return False
+
+    # Update session activity
+    session["last_active"] = now
+
+    # Register connection
+    connection_limiter.add_connection(client_ip)
+    session['ws_client_ip'] = client_ip
+
+    auth_method = session.get("auth_method", "password")
+    user_email = session.get("user_email", "local")
+    print(f"[WS] Connected: {user_email} ({auth_method}) from {client_ip}")
+
+    emit(TrackingEvents.CONNECTION_SUCCESS, {
+        'message': 'Connected to live tracking',
+        'auth_method': auth_method
+    })
+
+    return True
+
+
+@socketio.on('disconnect')
+def handle_ws_disconnect():
+    """Handle WebSocket disconnection."""
+    client_ip = session.get('ws_client_ip')
+    if client_ip:
+        connection_limiter.remove_connection(client_ip)
+
+    user_email = session.get("user_email", "unknown")
+    print(f"[WS] Disconnected: {user_email}")
+
+
+@socketio.on('subscribe_batch')
+@socketio_rate_limit(max_requests=30, window_seconds=60)
+@socketio_login_required
+def handle_subscribe_batch(data):
+    """Subscribe to real-time updates for a batch."""
+    if not isinstance(data, dict):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid request'})
+        return
+
+    batch_id = data.get('batch_id')
+    is_valid, batch_id, error = validate_batch_id(batch_id)
+
+    if not is_valid:
+        emit(TrackingEvents.ERROR, {'message': error})
+        return
+
+    room = TrackingRooms.batch(batch_id)
+    join_room(room)
+
+    print(f"[WS] Subscribed to batch {batch_id}")
+    emit(TrackingEvents.SUBSCRIPTION_CONFIRMED, {
+        'type': 'batch',
+        'batch_id': batch_id
+    })
+
+
+@socketio.on('unsubscribe_batch')
+@socketio_login_required
+def handle_unsubscribe_batch(data):
+    """Unsubscribe from batch updates."""
+    if not isinstance(data, dict):
+        return
+
+    batch_id = data.get('batch_id')
+    is_valid, batch_id, _ = validate_batch_id(batch_id)
+
+    if is_valid:
+        room = TrackingRooms.batch(batch_id)
+        leave_room(room)
+        print(f"[WS] Unsubscribed from batch {batch_id}")
+
+
+@socketio.on('subscribe_tracking')
+@socketio_rate_limit(max_requests=100, window_seconds=60)
+@socketio_login_required
+def handle_subscribe_tracking(data):
+    """Subscribe to tracking number updates."""
+    if not isinstance(data, dict):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid request'})
+        return
+
+    tracking_numbers = data.get('tracking_numbers', [])
+
+    if isinstance(tracking_numbers, str):
+        tracking_numbers = [tracking_numbers]
+
+    if not isinstance(tracking_numbers, list):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid tracking numbers'})
+        return
+
+    # Limit subscriptions per request
+    tracking_numbers = tracking_numbers[:50]
+
+    subscribed = []
+    for tn in tracking_numbers:
+        is_valid, sanitized, _ = validate_tracking_number(tn)
+        if is_valid:
+            room = TrackingRooms.tracking_number(sanitized)
+            join_room(room)
+            subscribed.append(sanitized)
+
+    if subscribed:
+        print(f"[WS] Subscribed to {len(subscribed)} tracking numbers")
+        emit(TrackingEvents.SUBSCRIPTION_CONFIRMED, {
+            'type': 'tracking',
+            'count': len(subscribed),
+            'tracking_numbers': subscribed
+        })
+
+
+@socketio.on('subscribe_shipments_page')
+@socketio_rate_limit(max_requests=10, window_seconds=60)
+@socketio_login_required
+def handle_subscribe_shipments_page(data=None):
+    """Subscribe to the shipments/tracking page for all updates."""
+    room = TrackingRooms.shipments_page()
+    join_room(room)
+    print(f"[WS] Subscribed to shipments page")
+    emit(TrackingEvents.SUBSCRIPTION_CONFIRMED, {
+        'type': 'shipments_page'
+    })
+
+
+@socketio.on('subscribe_tracking_group')
+@socketio_rate_limit(max_requests=20, window_seconds=60)
+@socketio_login_required
+def handle_subscribe_tracking_group(data):
+    """Subscribe to tracking group updates."""
+    if not isinstance(data, dict):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid request'})
+        return
+
+    group_id = data.get('group_id')
+    try:
+        group_id = int(group_id)
+    except (TypeError, ValueError):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid group ID'})
+        return
+
+    room = TrackingRooms.tracking_group(group_id)
+    join_room(room)
+    print(f"[WS] Subscribed to tracking group {group_id}")
+    emit(TrackingEvents.SUBSCRIPTION_CONFIRMED, {
+        'type': 'tracking_group',
+        'group_id': group_id
+    })
+
+
+@socketio.on('request_tracking_refresh')
+@socketio_rate_limit(max_requests=10, window_seconds=60)
+@socketio_login_required
+def handle_request_tracking_refresh(data):
+    """
+    Request immediate tracking status refresh.
+    Triggers background job to fetch latest from carrier API.
+    """
+    if not isinstance(data, dict):
+        emit(TrackingEvents.ERROR, {'message': 'Invalid request'})
+        return
+
+    tracking_numbers = data.get('tracking_numbers', [])
+
+    if isinstance(tracking_numbers, str):
+        tracking_numbers = [tracking_numbers]
+
+    if not isinstance(tracking_numbers, list) or len(tracking_numbers) == 0:
+        emit(TrackingEvents.ERROR, {'message': 'No tracking numbers provided'})
+        return
+
+    # Limit to prevent API abuse
+    tracking_numbers = tracking_numbers[:20]
+
+    # Validate and split by carrier
+    ups_tracking = []
+    cp_tracking = []
+
+    for tn in tracking_numbers:
+        is_valid, sanitized, _ = validate_tracking_number(tn)
+        if is_valid:
+            if sanitized.startswith("1Z"):
+                ups_tracking.append(sanitized)
+            else:
+                cp_tracking.append(sanitized)
+
+    # Trigger background refresh
+    import threading
+    if ups_tracking:
+        threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking, True)).start()
+    if cp_tracking:
+        threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking, True)).start()
+
+    emit('tracking_refresh_started', {
+        'count': len(ups_tracking) + len(cp_tracking),
+        'message': 'Refresh started, updates will be pushed automatically'
+    })
 
 
 # ── Jinja Template Filters ──
@@ -439,6 +703,10 @@ def init_background_scheduler():
     """
     Initialize background scheduler for automatic tracking updates.
     Runs every 30 minutes to refresh stale tracking statuses.
+
+    Note: When eventlet is monkey-patched, APScheduler's BackgroundScheduler
+    works correctly because eventlet patches the threading module. The scheduler
+    will use green threads instead of OS threads.
     """
     global _scheduler, _scheduler_initialized
 
@@ -449,8 +717,25 @@ def init_background_scheduler():
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.interval import IntervalTrigger
+        from apscheduler.executors.pool import ThreadPoolExecutor
 
-        _scheduler = BackgroundScheduler(daemon=True)
+        # Configure executor - limit to 1 thread for predictable behavior
+        # with eventlet's cooperative threading
+        executors = {
+            'default': ThreadPoolExecutor(1)
+        }
+
+        job_defaults = {
+            'coalesce': True,  # Combine missed runs into one
+            'max_instances': 1,  # Prevent overlapping executions
+            'misfire_grace_time': 300  # 5 min grace for misfires
+        }
+
+        _scheduler = BackgroundScheduler(
+            executors=executors,
+            job_defaults=job_defaults,
+            daemon=True
+        )
 
         # Schedule tracking refresh every 30 minutes
         _scheduler.add_job(
@@ -458,13 +743,13 @@ def init_background_scheduler():
             trigger=IntervalTrigger(minutes=30),
             id='tracking_refresh',
             name='Refresh stale tracking statuses',
-            replace_existing=True,
-            max_instances=1  # Prevent overlapping executions
+            replace_existing=True
         )
 
         _scheduler.start()
         _scheduler_initialized = True
-        print("✅ Background tracking scheduler started (30 min interval)")
+        mode = "eventlet" if EVENTLET_ENABLED else "threading"
+        print(f"✅ Background tracking scheduler started (30 min interval, {mode} mode)")
 
         # Shut down scheduler when app stops
         atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
@@ -473,6 +758,8 @@ def init_background_scheduler():
         print("⚠️ APScheduler not installed - background tracking disabled")
     except Exception as e:
         print(f"⚠️ Failed to start background scheduler: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def background_tracking_refresh():
@@ -524,6 +811,13 @@ def background_tracking_refresh():
         if ups_tracking:
             print(f"🔄 [Background] Refreshing {min(len(ups_tracking), 30)} UPS tracking numbers...")
             update_ups_tracking_cache(ups_tracking[:30], force_refresh=True)
+
+            # Resubscribe to Track Alert for packages older than 10 days
+            # (UPS Track Alert subscriptions expire after 14 days)
+            try:
+                subscribe_ups_track_alerts(ups_tracking[:30])
+            except Exception as sub_err:
+                print(f"⚠️ [Background] Track Alert resubscription error: {sub_err}")
 
         if cp_tracking:
             print(f"🔄 [Background] Refreshing {min(len(cp_tracking), 20)} Canada Post tracking numbers...")
@@ -890,6 +1184,15 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
                 ))
                 conn.commit()
                 updated_count += 1
+
+                # Broadcast live update via WebSocket
+                broadcast_tracking_update(tracking_number, {
+                    'status': result.get("status", "unknown"),
+                    'status_text': result.get("status_description", ""),
+                    'last_location': result.get("location", ""),
+                    'estimated_delivery': result.get("estimated_delivery", ""),
+                    'is_delivered': result.get("status") == "delivered"
+                })
             except Exception as e:
                 print(f"⚠️ Error caching tracking for {tracking_number}: {e}")
                 error_count += 1
@@ -901,6 +1204,64 @@ def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
     finally:
         cursor.close()
         conn.close()
+
+
+def subscribe_ups_track_alerts(tracking_numbers: list):
+    """
+    Subscribe UPS tracking numbers to Track Alert webhooks.
+
+    This enables push notifications from UPS when tracking status changes,
+    eliminating the need for constant polling.
+
+    Requirements:
+    - UPS_WEBHOOK_SECRET env var (used to verify incoming webhooks)
+    - APP_URL env var (for constructing webhook URL)
+    - UPS API credentials (for OAuth)
+    """
+    if not tracking_numbers:
+        return
+
+    # Filter to UPS only
+    ups_tracking = [t for t in tracking_numbers if t and t.startswith("1Z")]
+    if not ups_tracking:
+        return
+
+    # Check if webhook is configured
+    webhook_secret = os.environ.get("UPS_WEBHOOK_SECRET", "")
+    app_url = os.environ.get("APP_URL", "")
+
+    if not webhook_secret:
+        print("⚠️ UPS_WEBHOOK_SECRET not set - skipping Track Alert subscription")
+        return
+
+    if not app_url:
+        print("⚠️ APP_URL not set - skipping Track Alert subscription")
+        return
+
+    webhook_url = f"{app_url.rstrip('/')}/api/webhooks/ups"
+
+    try:
+        ups_api = get_ups_api()
+        if not ups_api.enabled:
+            print("⚠️ UPS API not enabled - skipping Track Alert subscription")
+            return
+
+        # Subscribe in batches of 100 (UPS limit)
+        for i in range(0, len(ups_tracking), 100):
+            batch = ups_tracking[i:i + 100]
+            result = ups_api.subscribe_track_alerts(
+                tracking_numbers=batch,
+                webhook_url=webhook_url,
+                webhook_credential=webhook_secret
+            )
+
+            if result.get("success"):
+                print(f"📡 Subscribed {len(batch)} packages to UPS Track Alert")
+            else:
+                print(f"⚠️ Track Alert subscription failed: {result.get('error', 'Unknown error')}")
+
+    except Exception as e:
+        print(f"❌ Error subscribing to Track Alert: {e}")
 
 
 def update_canadapost_tracking_cache(tracking_numbers, force_refresh=False):
@@ -1004,6 +1365,15 @@ def update_canadapost_tracking_cache(tracking_numbers, force_refresh=False):
                 ))
                 conn.commit()
                 updated_count += 1
+
+                # Broadcast live update via WebSocket
+                broadcast_tracking_update(tracking_number, {
+                    'status': result.get("status", "unknown"),
+                    'status_text': result.get("status_description", ""),
+                    'last_location': result.get("location", ""),
+                    'estimated_delivery': result.get("estimated_delivery", ""),
+                    'is_delivered': result.get("status") == "delivered"
+                })
             except Exception as e:
                 print(f"⚠️ Error caching Canada Post tracking for {tracking_number}: {e}")
                 error_count += 1
@@ -1819,10 +2189,22 @@ def index():
         """, (batch_id,))
         scans = cursor.fetchall()
 
+        # Fetch all batches for the move dropdown
+        cursor.execute("""
+          SELECT b.id, b.carrier, b.created_at, b.status,
+                 COUNT(s.id) as pkg_count
+            FROM batches b
+            LEFT JOIN scans s ON s.batch_id = b.id
+           GROUP BY b.id, b.carrier, b.created_at, b.status
+           ORDER BY b.id DESC
+        """)
+        all_batches = cursor.fetchall()
+
         return render_template(
             "new_batch.html",
             current_batch=batch_row,
             scans=scans,
+            all_batches=all_batches,
             shop_url=SHOP_URL,
             version=__version__,
             active_page="current_batch"
@@ -2226,8 +2608,34 @@ def process_scan_apis_background(scan_id, tracking_number, batch_carrier):
             (scan_carrier, order_number, customer_name, order_id, customer_email, shipstation_batch_number, scan_id)
         )
         conn.commit()
+
+        # Get batch_id for WebSocket broadcast
+        cursor.execute("SELECT batch_id FROM scans WHERE id = %s", (scan_id,))
+        scan_row = cursor.fetchone()
+        batch_id = scan_row.get('batch_id') if scan_row else None
         cursor.close()
+
         print(f"✓ Updated scan {scan_id}: {tracking_number} -> Order: {order_number}, Customer: {customer_name}")
+
+        # Broadcast update via WebSocket for real-time UI updates
+        if batch_id:
+            broadcast_batch_scan_update(batch_id, {
+                'id': scan_id,
+                'tracking_number': tracking_number,
+                'carrier': scan_carrier,
+                'order_number': order_number,
+                'customer_name': customer_name,
+                'customer_email': customer_email,
+                'status': 'Complete'
+            }, action='update')
+
+        # Subscribe UPS packages to Track Alert for push notifications
+        # This runs in background so it won't slow down scanning
+        if tracking_number.startswith("1Z"):
+            try:
+                subscribe_ups_track_alerts([tracking_number])
+            except Exception as sub_err:
+                print(f"⚠️ Track Alert subscription error (non-critical): {sub_err}")
 
         # NOTE: Klaviyo notifications are sent when batch is marked as picked up
         # See notify_customers() function - sends "Order Shipped" event for all unique customers in batch
@@ -2251,14 +2659,34 @@ def scan():
 
     ✨ NEW: Automatically detects and splits concatenated tracking numbers
     (e.g., two UPS numbers stuck together like 1ZAC508867380623021ZAC50882034286504)
+
+    ✨ NEW: Accepts batch_id explicitly via form data for multi-tab support.
+    Falls back to session for backwards compatibility.
     """
     code = request.form.get("code", "").strip()
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+
+    # Get batch_id explicitly from form (multi-tab support), fallback to session
+    batch_id = request.form.get("batch_id")
+    if batch_id:
+        try:
+            batch_id = int(batch_id)
+        except (ValueError, TypeError):
+            batch_id = None
+    if not batch_id:
+        batch_id = session.get("batch_id")
 
     if not code:
         if is_ajax:
             return jsonify({"success": False, "error": "No code received."}), 400
         flash("No code received.", "error")
+        return redirect(url_for("index"))
+
+    # Validate batch_id early
+    if not batch_id:
+        if is_ajax:
+            return jsonify({"success": False, "error": "No batch open."}), 400
+        flash("No batch open. Please start a new batch first.", "error")
         return redirect(url_for("index"))
 
     # ═══════════════════════════════════════════════════════════════════
@@ -2277,8 +2705,8 @@ def scan():
         for i, individual_code in enumerate(split_codes, 1):
             print(f"   Processing split {i}/{len(split_codes)}: {individual_code}")
 
-            # Process this individual scan
-            result = _process_single_scan(individual_code, is_ajax)
+            # Process this individual scan (pass batch_id explicitly)
+            result = _process_single_scan(individual_code, is_ajax, batch_id)
 
             if isinstance(result, tuple):  # Error response
                 # If any scan fails, return the error
@@ -2304,27 +2732,23 @@ def scan():
                 flash(msg, "info")
             return redirect(url_for("index"))
 
-    # Single tracking number - process normally
-    return _process_single_scan(code, is_ajax)
+    # Single tracking number - process normally (pass batch_id explicitly)
+    return _process_single_scan(code, is_ajax, batch_id)
 
 
-def _process_single_scan(code, is_ajax):
+def _process_single_scan(code, is_ajax, batch_id):
     """
     Process a single tracking number scan.
 
     Args:
         code: The tracking number to process
         is_ajax: Whether this is an AJAX request
+        batch_id: The batch ID to add the scan to (explicit, for multi-tab support)
 
     Returns:
         JSON response for AJAX, redirect for regular requests
     """
-    batch_id = session.get("batch_id")
-    if not batch_id:
-        if is_ajax:
-            return jsonify({"success": False, "error": "No batch open."}), 400
-        flash("No batch open. Please start a new batch first.", "error")
-        return redirect(url_for("index"))
+    # batch_id is now passed explicitly from scan() for multi-tab support
 
     conn = get_mysql_connection()
     try:
@@ -3198,6 +3622,224 @@ def notify_customers():
             pass
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ASYNC NOTIFICATION SYSTEM - Runs in background, reports progress
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _run_notification_task(batch_id):
+    """
+    Background task to send notifications. Updates notification_tasks dict with progress.
+    """
+    global notification_tasks
+
+    task = notification_tasks.get(batch_id)
+    if not task:
+        return
+
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Get batch info
+        cursor.execute("SELECT carrier, status FROM batches WHERE id = %s", (batch_id,))
+        batch = cursor.fetchone()
+        if not batch:
+            task['status'] = 'error'
+            task['message'] = 'Batch not found'
+            return
+
+        carrier = batch['carrier']
+        batch_status = batch.get('status', 'in_progress')
+
+        if batch_status != 'recorded' and batch_status != 'notified':
+            task['status'] = 'error'
+            task['message'] = 'Batch must be marked as picked up first'
+            return
+
+        # Get scans with customer emails
+        cursor.execute("""
+            SELECT DISTINCT order_number, customer_email, customer_name, tracking_number, order_id
+            FROM scans
+            WHERE batch_id = %s
+              AND order_number != 'N/A'
+              AND order_number != 'Processing...'
+              AND customer_email != ''
+              AND customer_email IS NOT NULL
+        """, (batch_id,))
+        scans = cursor.fetchall()
+
+        if not scans:
+            task['status'] = 'complete'
+            task['message'] = 'No orders with email addresses found'
+            return
+
+        task['total'] = len(scans)
+        task['status'] = 'running'
+
+        # Initialize Klaviyo API
+        from klaviyo_api import KlaviyoAPI
+        klaviyo = KlaviyoAPI()
+
+        # Initialize Shopify API
+        try:
+            shopify_api = get_shopify_api()
+        except:
+            shopify_api = None
+
+        now = now_pst().strftime("%Y-%m-%d %H:%M:%S")
+
+        for idx, scan in enumerate(scans, 1):
+            order_number = scan['order_number']
+            customer_email = scan['customer_email']
+            tracking_number = scan['tracking_number']
+
+            task['processed'] = idx
+            task['current_order'] = order_number
+
+            # Check if already notified
+            cursor.execute("SELECT id FROM notifications WHERE order_number = %s LIMIT 1", (order_number,))
+            if cursor.fetchone():
+                task['skipped'] += 1
+                continue
+
+            # Get line items from local DB
+            line_items = []
+            try:
+                cursor.execute("""
+                    SELECT oli.product_title, oli.variant_title, oli.sku, oli.quantity, oli.price
+                    FROM order_line_items oli
+                    JOIN orders o ON oli.order_id = o.id
+                    WHERE o.order_number = %s
+                """, (order_number,))
+                local_items = cursor.fetchall()
+                if local_items:
+                    line_items = [
+                        {'title': item['product_title'], 'variant_title': item['variant_title'],
+                         'sku': item['sku'], 'quantity': item['quantity'],
+                         'price': str(item['price']) if item['price'] else '0'}
+                        for item in local_items
+                    ]
+            except:
+                pass
+
+            # Send notification
+            success = klaviyo.notify_order_shipped(
+                email=customer_email,
+                order_number=order_number,
+                tracking_number=tracking_number,
+                carrier=carrier,
+                line_items=line_items
+            )
+
+            # Record notification
+            try:
+                cursor.execute("""
+                    INSERT INTO notifications
+                        (batch_id, order_number, customer_email, tracking_number, notified_at, success, error_message)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (batch_id, order_number, customer_email, tracking_number, now, success, None if success else "Klaviyo API error"))
+                conn.commit()
+
+                if success:
+                    task['success'] += 1
+                else:
+                    task['errors'] += 1
+            except:
+                task['skipped'] += 1
+
+        # Update batch status
+        cursor.execute("UPDATE batches SET status = 'notified', notified_at = %s WHERE id = %s", (now, batch_id))
+        conn.commit()
+
+        # Build final message
+        parts = []
+        if task['success'] > 0:
+            parts.append(f"{task['success']} sent")
+        if task['skipped'] > 0:
+            parts.append(f"{task['skipped']} skipped")
+        if task['errors'] > 0:
+            parts.append(f"{task['errors']} failed")
+
+        task['status'] = 'complete'
+        task['message'] = ' | '.join(parts) if parts else 'Complete'
+
+    except Exception as e:
+        task['status'] = 'error'
+        task['message'] = str(e)
+        print(f"Error in background notification task: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        try:
+            cursor.close()
+        except:
+            pass
+        try:
+            conn.close()
+        except:
+            pass
+
+
+@app.route("/api/notify/start", methods=["POST"])
+def api_start_notification():
+    """Start background notification task for a batch."""
+    global notification_tasks
+
+    # Get batch_id from form or JSON
+    batch_id = request.form.get('batch_id') or request.json.get('batch_id') if request.is_json else None
+    if not batch_id:
+        batch_id = session.get('batch_id')
+
+    if not batch_id:
+        return jsonify({"success": False, "error": "No batch specified"}), 400
+
+    try:
+        batch_id = int(batch_id)
+    except:
+        return jsonify({"success": False, "error": "Invalid batch ID"}), 400
+
+    # Check if task already running
+    existing = notification_tasks.get(batch_id)
+    if existing and existing.get('status') == 'running':
+        return jsonify({"success": False, "error": "Notification already in progress", "task": existing}), 409
+
+    # Initialize task
+    notification_tasks[batch_id] = {
+        'status': 'starting',
+        'total': 0,
+        'processed': 0,
+        'success': 0,
+        'skipped': 0,
+        'errors': 0,
+        'message': 'Starting...',
+        'current_order': None,
+        'started_at': now_pst().isoformat()
+    }
+
+    # Start background thread
+    thread = threading.Thread(target=_run_notification_task, args=(batch_id,), daemon=True)
+    thread.start()
+
+    return jsonify({"success": True, "batch_id": batch_id, "message": "Notification task started"})
+
+
+@app.route("/api/notify/status/<int:batch_id>", methods=["GET"])
+def api_notification_status(batch_id):
+    """Get status of a notification task."""
+    task = notification_tasks.get(batch_id)
+    if not task:
+        return jsonify({"success": False, "error": "No task found for this batch"}), 404
+
+    return jsonify({"success": True, "task": task})
+
+
+@app.route("/api/notify/status", methods=["GET"])
+def api_notification_status_all():
+    """Get status of all active notification tasks."""
+    active = {k: v for k, v in notification_tasks.items() if v.get('status') in ('starting', 'running')}
+    return jsonify({"success": True, "tasks": active})
+
+
 @app.route("/all_batches", methods=["GET"])
 def all_batches():
     conn = get_mysql_connection()
@@ -3275,14 +3917,94 @@ def view_batch(batch_id):
         """, (batch_id,))
         scans = cursor.fetchall()
 
+        # Fetch all batches for the move dropdown (excluding current batch)
+        cursor.execute("""
+          SELECT b.id, b.carrier, b.created_at, b.status,
+                 COUNT(s.id) as pkg_count
+            FROM batches b
+            LEFT JOIN scans s ON s.batch_id = b.id
+           GROUP BY b.id, b.carrier, b.created_at, b.status
+           ORDER BY b.id DESC
+        """)
+        all_batches = cursor.fetchall()
+
         return render_template(
             "batch_view.html",
             batch=batch,
             scans=scans,
+            all_batches=all_batches,
             shop_url=SHOP_URL,
             version=__version__,
             active_page="all_batches"
         )
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@app.route("/api/scans/move", methods=["POST"])
+def move_scans_to_batch():
+    """
+    API endpoint to move selected scans from one batch to another.
+    Expects JSON body with: scan_ids (list), target_batch_id (int), source_batch_id (int)
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "No data provided"}), 400
+
+    scan_ids = data.get("scan_ids", [])
+    target_batch_id = data.get("target_batch_id")
+    source_batch_id = data.get("source_batch_id")
+
+    if not scan_ids:
+        return jsonify({"success": False, "error": "No scans selected"}), 400
+    if not target_batch_id:
+        return jsonify({"success": False, "error": "No target batch specified"}), 400
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Verify target batch exists
+        cursor.execute("SELECT id, carrier FROM batches WHERE id = %s", (target_batch_id,))
+        target_batch = cursor.fetchone()
+        if not target_batch:
+            return jsonify({"success": False, "error": f"Target batch #{target_batch_id} not found"}), 404
+
+        # Convert scan_ids to integers for safety
+        scan_ids = [int(sid) for sid in scan_ids]
+
+        # Update scans to new batch
+        placeholders = ",".join(["%s"] * len(scan_ids))
+        cursor.execute(f"""
+            UPDATE scans
+               SET batch_id = %s
+             WHERE id IN ({placeholders})
+               AND batch_id = %s
+        """, [target_batch_id] + scan_ids + [source_batch_id])
+
+        moved_count = cursor.rowcount
+        conn.commit()
+
+        print(f"📦 Moved {moved_count} scan(s) from batch #{source_batch_id} to batch #{target_batch_id}")
+
+        # Broadcast move via WebSocket for real-time UI updates
+        if moved_count > 0:
+            broadcast_scans_moved(source_batch_id, target_batch_id, scan_ids, moved_count)
+
+        return jsonify({
+            "success": True,
+            "moved_count": moved_count,
+            "target_batch_id": target_batch_id,
+            "message": f"Successfully moved {moved_count} scan(s) to batch #{target_batch_id}"
+        })
+
+    except Exception as e:
+        print(f"❌ Error moving scans: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
     finally:
         try:
             cursor.close()
@@ -4207,15 +4929,48 @@ def check_shipments():
 
             # Check if tracking needs refresh (older than 2 hours or missing)
             if is_ups or is_canada_post:
+                needs_refresh = False
+
                 if not tracking_updated:
-                    tracking_to_refresh.append(tracking_number)
+                    needs_refresh = True
                 else:
                     # Handle timezone-aware timestamps from PostgreSQL
                     now = datetime.now()
-                    if hasattr(tracking_updated, 'tzinfo') and tracking_updated.tzinfo is not None:
-                        tracking_updated = tracking_updated.replace(tzinfo=None)
-                    if (now - tracking_updated).total_seconds() > 7200:
-                        tracking_to_refresh.append(tracking_number)
+                    tracking_updated_check = tracking_updated
+                    if hasattr(tracking_updated_check, 'tzinfo') and tracking_updated_check.tzinfo is not None:
+                        tracking_updated_check = tracking_updated_check.replace(tzinfo=None)
+
+                    # Stale if > 2 hours old
+                    if (now - tracking_updated_check).total_seconds() > 7200:
+                        needs_refresh = True
+
+                    # Also refresh if estimated delivery has PASSED but still shows in_transit
+                    # This catches packages where cache is stale but timestamp looks recent
+                    if ups_status == "in_transit" and estimated_delivery and not is_delivered:
+                        try:
+                            # Try to parse estimated delivery date
+                            est_str = estimated_delivery.split("(")[0].strip()  # Remove time window
+                            # Try common formats: "December 19", "Dec 19", "2024-12-19"
+                            parsed_est = None
+                            for fmt in ["%B %d", "%b %d", "%Y-%m-%d", "%m/%d/%Y"]:
+                                try:
+                                    parsed_est = datetime.strptime(est_str, fmt)
+                                    # Add current year if not present
+                                    if parsed_est.year == 1900:
+                                        parsed_est = parsed_est.replace(year=now.year)
+                                    break
+                                except ValueError:
+                                    continue
+
+                            if parsed_est and parsed_est.date() < now.date():
+                                # Estimated delivery has passed - force refresh
+                                needs_refresh = True
+                                print(f"⚠️ {tracking_number}: Est delivery {est_str} passed, forcing refresh")
+                        except Exception as e:
+                            pass  # Can't parse date, skip this check
+
+                if needs_refresh:
+                    tracking_to_refresh.append(tracking_number)
 
             # Save original status for flag logic (before we modify it for display)
             original_ups_status = ups_status
@@ -4441,6 +5196,278 @@ def check_shipments():
             version=__version__,
             active_page="check_shipments"
         )
+
+
+@app.route("/api/tracking/status", methods=["POST"])
+def api_tracking_status():
+    """
+    API endpoint for fetching tracking status updates.
+    Used by frontend for live tracking polling.
+
+    Request body:
+    {
+        "tracking_numbers": ["1Z...", "1Z..."],
+        "force_refresh": false  // Optional: force refresh from carrier API
+    }
+
+    Returns tracking status for each tracking number from cache.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "No data provided"}), 400
+
+    tracking_numbers = data.get("tracking_numbers", [])
+    force_refresh = data.get("force_refresh", False)
+
+    if not tracking_numbers:
+        return jsonify({"success": True, "statuses": {}})
+
+    # Limit to prevent abuse
+    tracking_numbers = tracking_numbers[:100]
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Get current tracking status from cache
+        placeholders = ",".join(["%s"] * len(tracking_numbers))
+        cursor.execute(f"""
+            SELECT tracking_number, status, status_description, estimated_delivery,
+                   last_location, last_activity_date, is_delivered, updated_at
+            FROM tracking_status_cache
+            WHERE tracking_number IN ({placeholders})
+        """, tracking_numbers)
+
+        cached = {row["tracking_number"]: row for row in cursor.fetchall()}
+        cursor.close()
+        conn.close()
+
+        # Format response
+        statuses = {}
+        stale_tracking = []
+
+        for tn in tracking_numbers:
+            cached_data = cached.get(tn)
+            if cached_data:
+                status = cached_data.get("status") or "unknown"
+                status_text = cached_data.get("status_description") or ""
+                is_delivered = cached_data.get("is_delivered") or False
+                last_location = cached_data.get("last_location") or ""
+                estimated_delivery = cached_data.get("estimated_delivery") or ""
+                updated_at = cached_data.get("updated_at")
+
+                # Check if cache is stale (older than 2 hours)
+                is_stale = False
+                if updated_at:
+                    now = datetime.now()
+                    if hasattr(updated_at, 'tzinfo') and updated_at.tzinfo is not None:
+                        updated_at = updated_at.replace(tzinfo=None)
+                    if (now - updated_at).total_seconds() > 7200:
+                        is_stale = True
+                        stale_tracking.append(tn)
+                else:
+                    is_stale = True
+                    stale_tracking.append(tn)
+
+                # Format status for display
+                if status == "delivered" or is_delivered:
+                    display_status = "delivered"
+                    display_text = "✅ Delivered"
+                    severity = "ok"
+                elif status == "in_transit":
+                    display_status = "in_transit"
+                    if "out for delivery" in status_text.lower():
+                        display_text = "🏃 Almost There!"
+                        display_status = "almost_there"
+                    else:
+                        display_text = "🚚 On the Way"
+                        if estimated_delivery:
+                            display_text += f" - Est: {estimated_delivery}"
+                    severity = "ok"
+                elif status == "label_created":
+                    display_status = "label_created"
+                    display_text = "📦 Label Created"
+                    severity = "warning"
+                elif status == "exception":
+                    display_status = "exception"
+                    display_text = "⚠️ Exception/Delay"
+                    severity = "critical"
+                else:
+                    display_status = status
+                    display_text = status_text or "Unknown"
+                    severity = "warning"
+
+                statuses[tn] = {
+                    "status": display_status,
+                    "status_text": display_text,
+                    "last_location": last_location,
+                    "estimated_delivery": estimated_delivery,
+                    "is_delivered": is_delivered,
+                    "is_stale": is_stale,
+                    "severity": severity
+                }
+            else:
+                # Not in cache
+                statuses[tn] = {
+                    "status": "unknown",
+                    "status_text": "🔄 Loading...",
+                    "last_location": "",
+                    "estimated_delivery": "",
+                    "is_delivered": False,
+                    "is_stale": True,
+                    "severity": "warning"
+                }
+                stale_tracking.append(tn)
+
+        # Trigger background refresh for stale tracking if requested or if too many are stale
+        if (force_refresh or len(stale_tracking) > 0) and stale_tracking:
+            import threading
+            # Split into UPS and Canada Post
+            ups_tracking = [t for t in stale_tracking if t.startswith("1Z")]
+            cp_tracking = [t for t in stale_tracking if not t.startswith("1Z")]
+
+            # Limit background refresh
+            if force_refresh:
+                # Force refresh - update more
+                if ups_tracking:
+                    threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:50], True)).start()
+                if cp_tracking:
+                    threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:30], True)).start()
+            elif len(stale_tracking) <= 20:
+                # Auto-refresh only for small batches
+                if ups_tracking:
+                    threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:20], False)).start()
+                if cp_tracking:
+                    threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:15], False)).start()
+
+        return jsonify({
+            "success": True,
+            "statuses": statuses,
+            "stale_count": len(stale_tracking),
+            "refreshing": len(stale_tracking) > 0
+        })
+
+    except Exception as e:
+        print(f"❌ Error in tracking status API: {e}")
+        try:
+            conn.close()
+        except:
+            pass
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UPS Track Alert Webhook Endpoint
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/webhooks/ups", methods=["POST"])
+def ups_webhook():
+    """
+    Receive UPS Track Alert webhook notifications.
+
+    UPS sends POST requests here when tracking status changes for subscribed packages.
+    Updates the tracking cache and broadcasts via WebSocket for real-time UI updates.
+
+    Security:
+    - Verifies Bearer token from UPS matches our secret
+    - User-Agent must be 'UPSPubSubTrackingService'
+    """
+    # Verify UPS User-Agent header
+    user_agent = request.headers.get("User-Agent", "")
+    if user_agent != "UPSPubSubTrackingService":
+        print(f"⚠️ UPS webhook: Invalid User-Agent: {user_agent}")
+        # Don't reject - UPS might change this, just log it
+
+    # Verify Bearer token
+    webhook_secret = os.environ.get("UPS_WEBHOOK_SECRET", "")
+    if webhook_secret:
+        auth_header = request.headers.get("Authorization", "")
+        credential = request.headers.get("credential", "")
+        token = credential or (auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else "")
+
+        if token != webhook_secret:
+            print(f"⚠️ UPS webhook: Invalid credential/token")
+            return jsonify({"error": "Unauthorized"}), 401
+
+    # Parse the payload
+    try:
+        payload = request.get_json()
+        if not payload:
+            return jsonify({"error": "No payload"}), 400
+
+        tracking_number = payload.get("trackingNumber", "")
+        if not tracking_number:
+            return jsonify({"error": "No tracking number"}), 400
+
+        print(f"📡 UPS webhook received for: {tracking_number}")
+
+        # Parse the webhook payload
+        from ups_api import UPSAPI
+        parsed = UPSAPI.parse_webhook_payload(payload)
+
+        if parsed.get("status") == "error":
+            print(f"❌ Failed to parse UPS webhook: {parsed.get('error')}")
+            return jsonify({"received": True}), 200
+
+        # Update tracking cache
+        conn = get_mysql_connection()
+        try:
+            cursor = conn.cursor()
+
+            # Upsert into tracking_status_cache
+            cursor.execute("""
+                INSERT INTO tracking_status_cache
+                    (tracking_number, carrier, status, status_description,
+                     last_location, estimated_delivery, is_delivered, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (tracking_number) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    status_description = EXCLUDED.status_description,
+                    last_location = EXCLUDED.last_location,
+                    estimated_delivery = EXCLUDED.estimated_delivery,
+                    is_delivered = EXCLUDED.is_delivered,
+                    updated_at = NOW()
+            """, (
+                tracking_number,
+                "UPS",
+                parsed.get("status", "unknown"),
+                parsed.get("status_description", ""),
+                parsed.get("location", ""),
+                parsed.get("estimated_delivery", ""),
+                parsed.get("status") == "delivered"
+            ))
+
+            conn.commit()
+            cursor.close()
+            print(f"✅ UPS webhook: Updated cache for {tracking_number} -> {parsed.get('status')}")
+
+            # Broadcast via WebSocket for real-time UI update
+            broadcast_tracking_update(tracking_number, {
+                'status': parsed.get("status", "unknown"),
+                'status_text': parsed.get("status_description", ""),
+                'last_location': parsed.get("location", ""),
+                'estimated_delivery': parsed.get("estimated_delivery", ""),
+                'is_delivered': parsed.get("status") == "delivered"
+            })
+
+        except Exception as db_error:
+            print(f"❌ UPS webhook DB error: {db_error}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            try:
+                conn.close()
+            except:
+                pass
+
+        # Respond quickly - UPS requires fast acknowledgment
+        return jsonify({"received": True}), 200
+
+    except Exception as e:
+        print(f"❌ UPS webhook error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/cancel_order", methods=["POST"])
@@ -6328,8 +7355,7 @@ def api_get_order_details(order_number):
                 "properties": [{"name": p['name'], "value": p['value']} for p in properties]
             })
 
-        cursor.close()
-        conn.close()
+        # NOTE: Don't close cursor/conn yet - we still need to fetch shipment data below
 
         # Parse shipping address (stored as JSON string)
         shipping_address = {}
@@ -6405,6 +7431,50 @@ def api_get_order_details(order_number):
         # Calculate total weight
         total_weight = order.get('total_weight_grams') or sum(item.get('weight_grams', 0) * item.get('quantity', 1) for item in line_items_with_props)
 
+        # Get shipment and tracking data (JOIN shipments_cache + tracking_status_cache)
+        shipment_data = None
+        tracking_data = None
+        cursor.execute("""
+            SELECT sc.tracking_number, sc.carrier_code, sc.ship_date,
+                   sc.shipstation_batch_number,
+                   tc.status, tc.status_description, tc.estimated_delivery,
+                   tc.last_location, tc.last_activity_date, tc.is_delivered,
+                   tc.updated_at as tracking_updated
+            FROM shipments_cache sc
+            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+            WHERE sc.order_number = %s
+            ORDER BY sc.ship_date DESC
+            LIMIT 1
+        """, (order_number,))
+        ship_row = cursor.fetchone()
+
+        if ship_row:
+            shipment_data = {
+                "tracking_number": ship_row.get('tracking_number') or '',
+                "carrier": normalize_carrier(ship_row.get('carrier_code') or ''),
+                "carrier_code": ship_row.get('carrier_code') or '',
+                "ship_date": str(ship_row['ship_date']) if ship_row.get('ship_date') else '',
+                "batch_number": ship_row.get('shipstation_batch_number') or ''
+            }
+
+            # Build tracking data
+            status = ship_row.get('status') or 'unknown'
+            tracking_data = {
+                "status": status,
+                "status_text": ship_row.get('status_description') or status.replace('_', ' ').title(),
+                "estimated_delivery": ship_row.get('estimated_delivery') or '',
+                "last_location": ship_row.get('last_location') or '',
+                "last_activity": str(ship_row['last_activity_date']) if ship_row.get('last_activity_date') else '',
+                "is_delivered": ship_row.get('is_delivered') or False,
+                "progress_percent": {
+                    'delivered': 100, 'out_for_delivery': 90, 'almost_there': 85,
+                    'in_transit': 50, 'label_created': 10, 'exception': 50
+                }.get(status, 0)
+            }
+
+        cursor.close()
+        conn.close()
+
         return jsonify({
             "success": True,
             "order": {
@@ -6431,7 +7501,9 @@ def api_get_order_details(order_number):
                 "zone": rate_zone,
                 "detail": rate_zone_detail,
                 "is_international": rate_zone != "Domestic"
-            }
+            },
+            "shipment": shipment_data,
+            "tracking": tracking_data
         })
 
     except Exception as e:
@@ -8166,4 +9238,7 @@ if __name__ == "__main__":
     # Debug mode disabled by default to prevent auto-reloader from killing long-running syncs
     # Set FLASK_DEBUG=true in environment to enable debug mode for local development
     debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=debug_mode)
+    # Use socketio.run() for WebSocket support
+    # allow_unsafe_werkzeug=True needed for PaaS platforms that run via `python app.py`
+    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)),
+                 debug=debug_mode, allow_unsafe_werkzeug=True)

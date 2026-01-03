@@ -3,7 +3,95 @@
 
 {% block title %}Batch #{{ batch.id }} - H&O Parcel Scans{% endblock %}
 
-{% block extra_styles %}{% endblock %}
+{% block extra_styles %}
+<style>
+  /* Selection styles */
+  .select-checkbox {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    accent-color: var(--secondary, #516aec);
+  }
+  .scan-row.selected {
+    background-color: rgba(81, 106, 236, 0.1) !important;
+  }
+  .scan-row:hover {
+    background-color: rgba(81, 106, 236, 0.05);
+  }
+  /* Move toolbar */
+  .move-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--bg-surface, #f8f9fa);
+    border: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 8px;
+    margin-bottom: 16px;
+  }
+  .move-toolbar.no-selection .selected-count,
+  .move-toolbar.no-selection .btn-clear-selection {
+    opacity: 0.5;
+  }
+  .move-toolbar .selected-count {
+    font-weight: 600;
+    color: var(--secondary, #516aec);
+  }
+  .move-toolbar select {
+    padding: 8px 12px;
+    border: 1px solid var(--border-color, #ddd);
+    border-radius: 6px;
+    background: white !important;
+    color: #333 !important;
+    font-size: 0.9rem;
+    min-width: 200px;
+    cursor: pointer;
+    -webkit-appearance: menulist;
+    appearance: menulist;
+  }
+  .move-toolbar select option {
+    color: #333 !important;
+    background: white !important;
+    padding: 8px;
+  }
+  .btn-move {
+    padding: 8px 16px;
+    background: var(--secondary, #516aec);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-move:hover {
+    opacity: 0.9;
+  }
+  .btn-move:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
+  .btn-clear-selection {
+    padding: 8px 12px;
+    background: transparent;
+    color: var(--text-muted, #666);
+    border: 1px solid var(--border-color, #ddd);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .btn-clear-selection:hover {
+    background: #f0f0f0;
+  }
+  .select-all-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+</style>
+{% endblock %}
 
 {% block content %}
     <div class="batch-header">
@@ -17,10 +105,38 @@
       <em>Tracking Numbers: {{ batch.tracking_numbers }}</em>
     </p>
 
+    <!-- Move Toolbar -->
+    <div id="moveToolbar" class="move-toolbar no-selection">
+      <span class="selected-count"><span id="selectedCount">0</span> selected</span>
+      <span style="color: var(--text-muted);">Move to →</span>
+      <select id="targetBatchSelect">
+        <option value="">Select batch...</option>
+        {% if all_batches %}
+          {% for b in all_batches %}
+            {% if b.id != batch.id %}
+              <option value="{{ b.id }}">Batch #{{ b.id }} ({{ b.carrier }}) - {{ b.pkg_count }} pkgs</option>
+            {% endif %}
+          {% endfor %}
+        {% endif %}
+      </select>
+      <button type="button" class="btn-move" id="moveBtn" onclick="moveSelectedScans()" disabled>
+        Move →
+      </button>
+      <button type="button" class="btn-clear-selection" onclick="clearSelection()">Clear Selection</button>
+      {% if not all_batches or all_batches|length <= 1 %}
+        <span style="color: var(--text-muted); font-size: 0.85rem; margin-left: auto;">(No other batches available)</span>
+      {% endif %}
+    </div>
+
     <h3>All Scans in Batch {{ batch.id }}</h3>
     <table>
       <thead>
         <tr>
+          <th style="width: 40px;">
+            <div class="select-all-header">
+              <input type="checkbox" id="selectAll" class="select-checkbox" onclick="toggleSelectAll(this)">
+            </div>
+          </th>
           <th>Tracking</th>
           <th>Carrier</th>
           <th>SS Batch</th>
@@ -30,10 +146,13 @@
           <th>Status</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="scansTableBody">
         {% for row in scans %}
-          <tr class="{{ 'duplicate-row' if row.status.startswith('Duplicate') else '' }}">
-<td>{{ tracking_link(row.tracking_number, row.carrier) }}</td>
+          <tr class="scan-row {{ 'duplicate-row' if row.status.startswith('Duplicate') else '' }}" data-scan-id="{{ row.id }}" data-index="{{ loop.index0 }}">
+            <td>
+              <input type="checkbox" class="select-checkbox scan-checkbox" data-scan-id="{{ row.id }}" data-index="{{ loop.index0 }}">
+            </td>
+            <td>{{ tracking_link(row.tracking_number, row.carrier) }}</td>
             <td>{{ row.carrier }}</td>
             <td>{{ row.shipstation_batch_number or '' }}</td>
             <td>
@@ -73,25 +192,218 @@
       </tbody>
     </table>
 
-    <!-- Order Details Modal -->
-    <div id="orderModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;">
-      <div style="background: white; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto; position: relative; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
-        <div style="padding: 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
-          <h3 style="margin: 0; color: #333;" id="modalTitle">Order Details</h3>
-          <button onclick="closeOrderModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #666;">&times;</button>
-        </div>
-        <div id="modalContent" style="padding: 20px;">
-          <p style="text-align: center; color: #666;">Loading...</p>
-        </div>
-        <div style="padding: 15px 20px; border-top: 1px solid #eee; text-align: right; background: #f9f9f9;">
-          <button onclick="closeOrderModal()" style="padding: 8px 16px; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">Close</button>
-        </div>
-      </div>
-    </div>
+    <!-- Order Details Modal: Now unified in base.html (OrderPanel) -->
 {% endblock %}
 
 {% block scripts %}
 <script>
+  // ── Selection State ──
+  let lastCheckedIndex = null;
+  const selectedScanIds = new Set();
+  const currentBatchId = {{ batch.id }};
+
+  // ── Initialize Checkbox Event Listeners ──
+  document.addEventListener('DOMContentLoaded', function() {
+    const tableBody = document.getElementById('scansTableBody');
+
+    // Use event delegation for checkbox clicks
+    tableBody.addEventListener('click', function(event) {
+      if (event.target.classList.contains('scan-checkbox')) {
+        handleCheckboxClick(event);
+      }
+    });
+  });
+
+  // ── Checkbox Click Handler with Shift-Select Support ──
+  function handleCheckboxClick(event) {
+    const checkbox = event.target;
+    const scanId = checkbox.dataset.scanId;
+    const index = parseInt(checkbox.dataset.index);
+    const row = checkbox.closest('tr');
+
+    if (event.shiftKey && lastCheckedIndex !== null && lastCheckedIndex !== index) {
+      // Shift-click: select range
+      event.preventDefault();
+
+      const checkboxes = Array.from(document.querySelectorAll('.scan-checkbox'));
+      const start = Math.min(lastCheckedIndex, index);
+      const end = Math.max(lastCheckedIndex, index);
+
+      for (let i = start; i <= end; i++) {
+        const cb = checkboxes[i];
+        if (cb) {
+          cb.checked = true;
+          selectedScanIds.add(cb.dataset.scanId);
+          cb.closest('tr').classList.add('selected');
+        }
+      }
+    } else {
+      // Regular click - checkbox state already toggled by browser
+      if (checkbox.checked) {
+        selectedScanIds.add(scanId);
+        row.classList.add('selected');
+      } else {
+        selectedScanIds.delete(scanId);
+        row.classList.remove('selected');
+      }
+      lastCheckedIndex = index;
+    }
+
+    updateSelectionUI();
+  }
+
+  // ── Toggle Select All ──
+  function toggleSelectAll(checkbox) {
+    const allCheckboxes = document.querySelectorAll('.scan-checkbox');
+    allCheckboxes.forEach(cb => {
+      cb.checked = checkbox.checked;
+      const row = cb.closest('tr');
+      if (checkbox.checked) {
+        selectedScanIds.add(cb.dataset.scanId);
+        row.classList.add('selected');
+      } else {
+        selectedScanIds.delete(cb.dataset.scanId);
+        row.classList.remove('selected');
+      }
+    });
+    updateSelectionUI();
+  }
+
+  // ── Clear Selection ──
+  function clearSelection() {
+    selectedScanIds.clear();
+    document.querySelectorAll('.scan-checkbox').forEach(cb => {
+      cb.checked = false;
+      cb.closest('tr').classList.remove('selected');
+    });
+    document.getElementById('selectAll').checked = false;
+    lastCheckedIndex = null;
+    updateSelectionUI();
+  }
+
+  // ── Update Selection UI ──
+  function updateSelectionUI() {
+    const count = selectedScanIds.size;
+    const toolbar = document.getElementById('moveToolbar');
+    const countSpan = document.getElementById('selectedCount');
+    const moveBtn = document.getElementById('moveBtn');
+    const targetSelect = document.getElementById('targetBatchSelect');
+
+    countSpan.textContent = count;
+
+    if (count > 0) {
+      toolbar.classList.remove('no-selection');
+    } else {
+      toolbar.classList.add('no-selection');
+    }
+
+    // Enable move button only if selection exists and target batch is selected
+    moveBtn.disabled = count === 0 || !targetSelect.value;
+
+    // Update select all checkbox state
+    const allCheckboxes = document.querySelectorAll('.scan-checkbox');
+    const selectAllCheckbox = document.getElementById('selectAll');
+    if (count === allCheckboxes.length && count > 0) {
+      selectAllCheckbox.checked = true;
+      selectAllCheckbox.indeterminate = false;
+    } else if (count > 0) {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = true;
+    } else {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = false;
+    }
+  }
+
+  // ── Move Selected Scans ──
+  async function moveSelectedScans() {
+    const targetBatchId = document.getElementById('targetBatchSelect').value;
+    if (!targetBatchId) {
+      alert('Please select a target batch');
+      return;
+    }
+
+    if (selectedScanIds.size === 0) {
+      alert('No scans selected');
+      return;
+    }
+
+    const scanIds = Array.from(selectedScanIds);
+    const targetBatchText = document.getElementById('targetBatchSelect').selectedOptions[0].text;
+
+    if (!confirm(`Move ${scanIds.length} scan(s) to ${targetBatchText}?`)) {
+      return;
+    }
+
+    const moveBtn = document.getElementById('moveBtn');
+    moveBtn.disabled = true;
+    moveBtn.innerHTML = 'Moving...';
+
+    try {
+      const response = await fetch('/api/scans/move', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify({
+          scan_ids: scanIds,
+          target_batch_id: parseInt(targetBatchId),
+          source_batch_id: currentBatchId
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Remove moved rows from the table
+        scanIds.forEach(scanId => {
+          const row = document.querySelector(`tr[data-scan-id="${scanId}"]`);
+          if (row) {
+            row.style.transition = 'opacity 0.3s, transform 0.3s';
+            row.style.opacity = '0';
+            row.style.transform = 'translateX(50px)';
+            setTimeout(() => row.remove(), 300);
+          }
+        });
+
+        clearSelection();
+
+        // Reset button state (keep toolbar functional for more moves)
+        moveBtn.disabled = true;
+        moveBtn.innerHTML = 'Move →';
+
+        // Show inline success message that auto-dismisses
+        const toolbar = document.getElementById('moveToolbar');
+        const existingMsg = toolbar.querySelector('.move-success-msg');
+        if (existingMsg) existingMsg.remove();
+
+        const successMsg = document.createElement('span');
+        successMsg.className = 'move-success-msg';
+        successMsg.style.cssText = 'color: var(--success, #199b76); font-weight: 500; margin-left: auto; display: flex; align-items: center; gap: 8px;';
+        successMsg.innerHTML = `✓ ${data.moved_count} moved <a href="/view_batch/${targetBatchId}" style="color: var(--secondary); font-weight: normal;">View →</a>`;
+        toolbar.appendChild(successMsg);
+
+        // Auto-dismiss success message after 5 seconds
+        setTimeout(() => successMsg.remove(), 5000);
+      } else {
+        alert('Error: ' + (data.error || 'Could not move scans'));
+        moveBtn.disabled = false;
+        moveBtn.innerHTML = 'Move →';
+      }
+    } catch (error) {
+      console.error('Error moving scans:', error);
+      alert('Error moving scans. Please try again.');
+      moveBtn.disabled = false;
+      moveBtn.innerHTML = 'Move →';
+    }
+  }
+
+  // ── Enable/Disable Move Button Based on Target Selection ──
+  document.getElementById('targetBatchSelect').addEventListener('change', function() {
+    updateSelectionUI();
+  });
+
   async function resolveDuplicate(scanId) {
     if (!confirm('Mark this scan as NOT a duplicate? Status will change to "Complete".')) {
       return;
@@ -117,129 +429,6 @@
       alert('Error resolving duplicate. Please try again.');
     }
   }
-
-  // ── Order Details Modal ──
-  async function showOrderDetails(orderNumber) {
-    const modal = document.getElementById('orderModal');
-    const modalContent = document.getElementById('modalContent');
-    const modalTitle = document.getElementById('modalTitle');
-
-    modal.style.display = 'flex';
-    modalTitle.textContent = `Order #${orderNumber}`;
-    modalContent.innerHTML = '<p style="text-align: center; color: #666;">Loading...</p>';
-
-    try {
-      const response = await fetch(`/api/orders/${orderNumber}/details`);
-      const data = await response.json();
-
-      if (data.success) {
-        const order = data.order;
-        const items = data.line_items;
-
-        let addressHtml = '';
-        const addr = order.shipping_address;
-        if (addr && Object.keys(addr).length > 0) {
-          if (addr.raw) {
-            addressHtml = `<p style="margin: 0; line-height: 1.6;">${addr.raw}</p>`;
-          } else {
-            addressHtml = `
-              <p style="margin: 0; line-height: 1.6;">
-                ${addr.name || ''}<br>
-                ${addr.address1 || ''}${addr.address2 ? '<br>' + addr.address2 : ''}<br>
-                ${addr.city || ''}, ${addr.province_code || addr.province || ''} ${addr.zip || ''}<br>
-                ${addr.country || ''}
-                ${addr.phone ? '<br>Phone: ' + addr.phone : ''}
-              </p>
-            `;
-          }
-        } else {
-          addressHtml = '<p style="color: #999;">No shipping address</p>';
-        }
-
-        let itemsHtml = '';
-        if (items && items.length > 0) {
-          itemsHtml = items.map(item => {
-            let propsHtml = '';
-            if (item.properties && item.properties.length > 0) {
-              propsHtml = '<div style="margin-top: 6px; padding: 6px 8px; background: #f8f9fa; border-radius: 4px; font-size: 0.85em;">' +
-                item.properties.map(p => `<div style="color: #555;"><span style="color: #888;">${p.name}:</span> ${p.value}</div>`).join('') +
-                '</div>';
-            }
-            return `
-            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee;">
-              <div style="flex: 1;">
-                <strong>${item.title}</strong>
-                ${item.variant ? '<br><span style="color: #666; font-size: 0.9em;">' + item.variant + '</span>' : ''}
-                ${item.sku ? '<br><span style="color: #999; font-size: 0.85em;">SKU: ' + item.sku + '</span>' : ''}
-                ${propsHtml}
-              </div>
-              <div style="text-align: right; white-space: nowrap; margin-left: 12px;">
-                <span style="color: #666;">× ${item.quantity}</span>
-                <br><strong>$${item.price.toFixed(2)}</strong>
-              </div>
-            </div>
-          `}).join('');
-        } else {
-          itemsHtml = '<p style="color: #999;">No items found</p>';
-        }
-
-        modalContent.innerHTML = `
-          <div style="margin-bottom: 20px;">
-            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Customer</h4>
-            <p style="margin: 0;"><strong>${order.customer_name || 'Unknown'}</strong></p>
-            <p style="margin: 4px 0; color: #666;">${order.customer_email || ''}</p>
-            ${order.customer_phone ? '<p style="margin: 4px 0; color: #666;">' + order.customer_phone + '</p>' : ''}
-          </div>
-
-          <div style="margin-bottom: 20px;">
-            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Shipping Address</h4>
-            ${addressHtml}
-          </div>
-
-          <div style="margin-bottom: 20px;">
-            <h4 style="margin: 0 0 10px 0; color: #666; font-size: 0.9rem; text-transform: uppercase;">Items Ordered</h4>
-            ${itemsHtml}
-          </div>
-
-          <div style="background: #f5f5f5; padding: 12px; border-radius: 4px;">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-              <span>Subtotal:</span><span>$${order.subtotal_price.toFixed(2)}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-              <span>Tax:</span><span>$${order.total_tax.toFixed(2)}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; font-weight: bold; font-size: 1.1em; border-top: 1px solid #ddd; padding-top: 8px; margin-top: 8px;">
-              <span>Total:</span><span>$${order.total_price.toFixed(2)}</span>
-            </div>
-          </div>
-
-          ${order.note ? '<div style="margin-top: 15px; padding: 10px; background: #fff8e1; border-radius: 4px;"><strong>Note:</strong> ' + order.note + '</div>' : ''}
-          ${order.cancelled ? '<div style="margin-top: 15px; padding: 10px; background: #ffebee; border-radius: 4px; color: #c62828;"><strong>⚠ This order has been cancelled</strong></div>' : ''}
-        `;
-
-      } else {
-        modalContent.innerHTML = `<p style="text-align: center; color: #c62828;">Error: ${data.error || 'Could not load order'}</p>`;
-      }
-    } catch (error) {
-      console.error('Error loading order:', error);
-      modalContent.innerHTML = '<p style="text-align: center; color: #c62828;">Error loading order details</p>';
-    }
-  }
-
-  function closeOrderModal() {
-    document.getElementById('orderModal').style.display = 'none';
-  }
-
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-      closeOrderModal();
-    }
-  });
-
-  document.getElementById('orderModal').addEventListener('click', function(e) {
-    if (e.target === this) {
-      closeOrderModal();
-    }
-  });
+  // Order Details: Now handled by unified OrderPanel (see order-panel.js)
 </script>
 {% endblock %}

@@ -374,7 +374,11 @@
       {% endif %}
     </div>
 
-    <!-- Order Details Modal - Full Screen -->
+    <!-- Order Details Modal - Full Screen
+         NOTE: This page keeps its own modal implementation because it has
+         specialized customs editing functionality (HS codes, country of origin,
+         save customs info, save as SKU defaults) that other pages don't need.
+         Other pages use the unified OrderPanel from order-panel.js. -->
     <div id="orderModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; justify-content: center; align-items: center;">
       <div style="background: white; border-radius: 12px; width: 95%; max-width: 1400px; height: 90vh; display: flex; flex-direction: column; position: relative; box-shadow: 0 8px 40px rgba(0,0,0,0.3);">
         <div style="padding: 16px 24px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
