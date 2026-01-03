@@ -195,19 +195,32 @@
         <div class="text-[10px] font-bold uppercase tracking-widest mb-2 text-text-muted opacity-60">
           Team Stats
         </div>
-        <div class="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-main">
-          <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-secondary/10">
-            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/>
-            </svg>
+        <div class="space-y-2">
+          <div class="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-main">
+            <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-secondary/10">
+              <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="text-[11px] text-text-muted opacity-70">Team</div>
+              <div class="text-lg font-bold text-secondary leading-tight">{{ team_packing_speed }} <span class="text-xs font-normal text-text-muted">/hr</span></div>
+            </div>
           </div>
-          <div class="flex-1 min-w-0">
-            <div class="text-[11px] text-text-muted opacity-70">Packing Speed</div>
-            <div class="text-lg font-bold text-secondary leading-tight">{{ team_packing_speed }} <span class="text-xs font-normal text-text-muted">/hr</span></div>
+          <div class="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-main">
+            <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
+              <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+              </svg>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="text-[11px] text-text-muted opacity-70">Per Person</div>
+              <div class="text-lg font-bold text-accent leading-tight">{{ (team_packing_speed / 3)|round(1) }} <span class="text-xs font-normal text-text-muted">/hr</span></div>
+            </div>
           </div>
         </div>
         <div class="text-[10px] text-text-muted opacity-50 mt-1.5 px-1">
-          Avg. weekdays, 30 days
+          Avg. weekdays, 30 days (3 packers)
         </div>
       </div>
 
