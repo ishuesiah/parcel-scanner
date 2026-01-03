@@ -2089,13 +2089,15 @@ def get_team_packing_speed():
         conn = get_mysql_connection()
         cursor = conn.cursor()
 
-        # Get count of scans per day for the last 30 days
+        # Get count of scans per WEEKDAY for the last 30 days
         # Only count non-duplicate scans (status = 'Complete')
+        # Exclude weekends: DOW 0=Sunday, 6=Saturday, so 1-5 = Mon-Fri
         cursor.execute("""
             SELECT DATE(scan_date) as scan_day, COUNT(*) as daily_count
             FROM scans
             WHERE scan_date >= NOW() - INTERVAL '30 days'
               AND status = 'Complete'
+              AND EXTRACT(DOW FROM scan_date) BETWEEN 1 AND 5
             GROUP BY DATE(scan_date)
             ORDER BY scan_day DESC
         """)
@@ -2108,7 +2110,7 @@ def get_team_packing_speed():
             _packing_speed_cache["expires"] = now + 300  # 5 min cache
             return 0
 
-        # Calculate average parcels per hour (8-hour workday)
+        # Calculate average parcels per hour (8-hour workday, weekdays only)
         total_parcels = sum(row['daily_count'] for row in rows)
         work_days = len(rows)
         total_work_hours = work_days * 8
