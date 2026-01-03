@@ -2065,6 +2065,77 @@ def require_login():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ── CONTEXT PROCESSOR: Inject global template variables ──────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Cache for packing speed stats (refreshed every 5 minutes)
+_packing_speed_cache = {"value": None, "expires": 0}
+
+
+def get_team_packing_speed():
+    """
+    Calculate average parcels per hour based on last 30 days of scan data.
+    Assumes an 8-hour workday for each day with scans.
+    Result is cached for 5 minutes to reduce database load.
+    """
+    import time as _time
+    now = _time.time()
+
+    # Return cached value if still valid
+    if _packing_speed_cache["value"] is not None and now < _packing_speed_cache["expires"]:
+        return _packing_speed_cache["value"]
+
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Get count of scans per day for the last 30 days
+        # Only count non-duplicate scans (status = 'Complete')
+        cursor.execute("""
+            SELECT DATE(scan_date) as scan_day, COUNT(*) as daily_count
+            FROM scans
+            WHERE scan_date >= NOW() - INTERVAL '30 days'
+              AND status = 'Complete'
+            GROUP BY DATE(scan_date)
+            ORDER BY scan_day DESC
+        """)
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        if not rows:
+            _packing_speed_cache["value"] = 0
+            _packing_speed_cache["expires"] = now + 300  # 5 min cache
+            return 0
+
+        # Calculate average parcels per hour (8-hour workday)
+        total_parcels = sum(row['daily_count'] for row in rows)
+        work_days = len(rows)
+        total_work_hours = work_days * 8
+
+        avg_per_hour = total_parcels / total_work_hours if total_work_hours > 0 else 0
+
+        # Cache for 5 minutes
+        _packing_speed_cache["value"] = round(avg_per_hour, 1)
+        _packing_speed_cache["expires"] = now + 300
+
+        return _packing_speed_cache["value"]
+
+    except Exception as e:
+        print(f"Error calculating packing speed: {e}")
+        return 0
+
+
+@app.context_processor
+def inject_global_vars():
+    """Inject variables available to all templates."""
+    return {
+        "team_packing_speed": get_team_packing_speed(),
+        "version": __version__
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ── Routes ────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -190,6 +190,27 @@
         </nav>
       </div>
 
+      <!-- Packing Speed Stats -->
+      <div class="px-4 py-3 border-t border-border-color">
+        <div class="text-[10px] font-bold uppercase tracking-widest mb-2 text-text-muted opacity-60">
+          Team Stats
+        </div>
+        <div class="flex items-center gap-3 px-3 py-2 rounded-lg bg-bg-main">
+          <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-secondary/10">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/>
+            </svg>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="text-[11px] text-text-muted opacity-70">Packing Speed</div>
+            <div class="text-lg font-bold text-secondary leading-tight">{{ team_packing_speed }} <span class="text-xs font-normal text-text-muted">/hr</span></div>
+          </div>
+        </div>
+        <div class="text-[10px] text-text-muted opacity-50 mt-1.5 px-1">
+          Avg. over 30 days (8hr day)
+        </div>
+      </div>
+
       <!-- Footer -->
       <div class="p-4 border-t border-border-color">
         <a href="{{ url_for('logout') }}"
