@@ -1,40 +1,110 @@
 # Parcel Scanner - Project Documentation
 
 ## Overview
-Flask-based parcel scanning and order management system for Hemlock & Oak Stationery. Integrates with Shopify, ShipStation, UPS, and Canada Post for order fulfillment, tracking, and shipping.
+Flask-based parcel scanning and order management system for Hemlock & Oak Stationery. Integrates with Shopify, ShipStation, UPS, Canada Post, and Klaviyo for order fulfillment, tracking, shipping, and customer notifications.
 
 ## Tech Stack
-- **Backend**: Python/Flask
+- **Backend**: Python/Flask with eventlet for WebSocket support
 - **Database**: PostgreSQL (Neon)
 - **Frontend**: Jinja2 templates, vanilla JavaScript, Tailwind-inspired CSS
-- **APIs**: Shopify, ShipStation, UPS, Canada Post
-- **Background Jobs**: APScheduler for tracking updates
+- **APIs**: Shopify, ShipStation, UPS, Canada Post, Klaviyo
+- **Real-time**: Socket.IO for WebSocket-based live tracking updates
+- **Background Jobs**: APScheduler for tracking updates, threading for notifications
+
+---
+
+## Recent Changes (January 2025)
+
+### Unified Order Detail Panel
+- **New file**: `static/js/order-panel.js` - Reusable slide-out panel module
+- Full-screen slide-out panel (ShipStation-style) for order details
+- Real-time WebSocket tracking updates via Socket.IO
+- Shows shipment info: carrier, tracking number (clickable), ship date, batch
+- Shows live tracking: status, estimated delivery, last location, progress bar
+- Used across all pages (batch_view, check_shipments, all_orders)
+- Global `showOrderDetails(orderNumber)` function for backwards compatibility
+- Panel HTML in `base.html`, CSS in `styles.css` (Section 24)
+
+### Collapsible Sidebar
+- Sidebar collapses completely (`width: 0`) when hidden
+- Floating expand button (right-arrow) appears when collapsed
+- State persisted in localStorage
+- CSS in `styles.css` (Section 25)
+
+### Move Orders Between Batches
+- Select multiple scans in batch_view.html using checkboxes
+- Dropdown to select target batch
+- Move button transfers scans to different batch
+- Inline success message (no page reload required)
+- API: `POST /api/scans/move` with `scan_ids`, `target_batch_id`, `source_batch_id`
+
+### Multi-Tab Batch Support
+- Scan forms now include hidden `batch_id` field
+- `/scan` endpoint accepts `batch_id` from form data (falls back to session)
+- Enables scanning to different batches in multiple browser tabs simultaneously
+
+### Background Notification System
+- Notifications now run in background thread
+- Progress indicator (bottom-right corner) shows:
+  - Spinner while sending
+  - Progress count and bar (e.g., "5 of 12 (42%)")
+  - Checkmark on completion with summary
+- Persists across page navigation
+- Auto-dismisses after 8 seconds
+- **API Endpoints**:
+  - `POST /api/notify/start` - Start background notification task
+  - `GET /api/notify/status/<batch_id>` - Check task progress
+  - `GET /api/notify/status` - Check all active tasks
+- Global `notification_tasks` dict tracks progress
+- JavaScript `NotificationProgress` module in base.html
+
+### UPS Track Alert Webhooks
+- Real-time tracking updates via UPS push notifications
+- Endpoint: `POST /webhooks/ups/track-alert`
+- Auto-subscribes to tracking updates when scanning UPS packages
+- Updates `tracking_status_cache` immediately on webhook receipt
+- Env vars: `UPS_WEBHOOK_SECRET`, `APP_URL`
+
+### Stale Tracking Detection
+- Detects when estimated delivery date has passed but status still shows "in_transit"
+- Forces refresh of tracking data when this occurs
+- Prevents showing outdated "delivery by [past date]" messages
+
+### Bug Fixes
+- Fixed "cursor already closed" error in order details endpoint
+- Fixed dropdown placeholder text visibility (white on white)
+- Fixed sidebar collapse not reversing
 
 ---
 
 ## Key Files
 
 ### Core Application
-- `web_scanner.py` - Main Flask app with all routes and API endpoints (~6000 lines)
+- `web_scanner.py` - Main Flask app with all routes and API endpoints (~7500+ lines)
 - `orders_sync.py` - Database initialization and Shopify order sync
 - `shopify_api.py` - Shopify API integration
+- `websocket_manager.py` - Socket.IO event handlers for real-time updates
+
+### JavaScript Modules
+- `static/js/order-panel.js` - Unified order detail slide-out panel
 
 ### Shipping & Tracking APIs
 - `ups_api.py` - UPS tracking (`UPSAPI`) and shipping/rating/labels (`UPSShippingAPI`)
 - `canadapost_api.py` - Canada Post tracking (`CanadaPostAPI`) and rating (`CanadaPostShippingAPI`)
 - `rate_shopping.py` - Unified rate comparison across carriers
+- `klaviyo_api.py` - Klaviyo email notifications
 
 ### Templates (in `/templates`)
-- `base.html` - Base layout with sidebar navigation
-- `macros.html` - **NEW** Reusable Jinja2 macros (tracking_link, status_badge, progress_bar)
+- `base.html` - Base layout with sidebar, notification progress bar, order panel
+- `macros.html` - Reusable Jinja2 macros (tracking_link, status_badge, progress_bar)
 - `all_orders.html` - Orders list with filters, sorting, batch selection, label generation
 - `check_shipments.html` - Live tracking dashboard with dynamic tracking groups
-- `ss_batch_detail.html` - ShipStation batch details with order modal
+- `batch_view.html` - Individual batch view with move-to-batch functionality
+- `new_batch.html` - Create new scan batch with async notifications
 - `settings.html` - Packing slip builder, carrier account settings
+- `ss_batch_detail.html` - ShipStation batch details with order modal
 - `order_batches.html` / `order_batch_detail.html` - Order batch management
 - `all_scans.html` - All scans list
-- `batch_view.html` - Individual batch view
-- `new_batch.html` - Create new scan batch
 - `pick_and_pack.html` - Order verification with barcode scanning
 - `stuck_orders.html` - Fix orders with missing data
 
@@ -263,10 +333,22 @@ Uses reusable `tracking_link` macro in `macros.html` and JavaScript `trackingLin
 - `DELETE /api/tracking-groups/<id>/orders/<order>` - Remove order from group
 
 ### Orders
-- `GET /api/orders/<order>/details` - Full order details with line items
+- `GET /api/orders/<order>/details` - Full order details with line items, shipment & tracking data
 - `POST /api/orders/<order>/cancel` - Cancel order
 - `GET /api/orders/<order>/packing-slip` - Generate packing slip PDF
 - `GET /api/orders/<order>/customs-form` - Generate customs form PDF
+
+### Scans & Batches
+- `POST /api/scans/move` - Move scans between batches (`scan_ids`, `target_batch_id`, `source_batch_id`)
+- `POST /scan` - Add scan to batch (accepts `batch_id` in form data for multi-tab support)
+
+### Notifications
+- `POST /api/notify/start` - Start background notification task for batch
+- `GET /api/notify/status/<batch_id>` - Get notification task progress
+- `GET /api/notify/status` - Get all active notification tasks
+
+### Webhooks
+- `POST /webhooks/ups/track-alert` - UPS Track Alert webhook for real-time tracking updates
 
 ### Settings
 - `GET /api/settings` - Get all settings
