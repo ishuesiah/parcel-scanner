@@ -218,6 +218,25 @@
         {% endwith %}
       </div>
 
+      <!-- Global Notification Progress Bar -->
+      <div id="notificationProgress" class="notification-progress hidden">
+        <div class="notification-progress-inner">
+          <div class="notification-progress-icon">
+            <svg class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+            </svg>
+          </div>
+          <div class="notification-progress-text">
+            <span id="notifyProgressLabel">Sending notifications...</span>
+            <span id="notifyProgressCount" class="notification-progress-count"></span>
+          </div>
+          <div class="notification-progress-bar-container">
+            <div id="notifyProgressBar" class="notification-progress-bar" style="width: 0%"></div>
+          </div>
+          <button onclick="NotificationProgress.dismiss()" class="notification-progress-close" title="Dismiss">×</button>
+        </div>
+      </div>
+
       <main class="flex-1 overflow-y-auto px-4 md:px-8 pb-8">
         {% block content %}{% endblock %}
       </main>
@@ -298,6 +317,167 @@
         if (expandBtn) expandBtn.classList.add('visible');
       }
     });
+  </script>
+
+  <!-- Notification Progress Controller -->
+  <script>
+    const NotificationProgress = (function() {
+      let pollInterval = null;
+      let currentBatchId = null;
+
+      const container = () => document.getElementById('notificationProgress');
+      const label = () => document.getElementById('notifyProgressLabel');
+      const count = () => document.getElementById('notifyProgressCount');
+      const bar = () => document.getElementById('notifyProgressBar');
+      const icon = () => container()?.querySelector('.notification-progress-icon');
+
+      function show() {
+        const el = container();
+        if (el) {
+          el.classList.remove('hidden', 'complete', 'error');
+          // Reset icon to spinner
+          const iconEl = icon();
+          if (iconEl) {
+            iconEl.innerHTML = '<svg class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>';
+          }
+        }
+      }
+
+      function hide() {
+        const el = container();
+        if (el) el.classList.add('hidden');
+        stopPolling();
+      }
+
+      function dismiss() {
+        hide();
+        currentBatchId = null;
+      }
+
+      function update(task) {
+        const el = container();
+        if (!el || !task) return;
+
+        const pct = task.total > 0 ? Math.round((task.processed / task.total) * 100) : 0;
+
+        if (label()) label().textContent = task.status === 'complete' ? 'Notifications sent!' :
+                                           task.status === 'error' ? 'Error sending notifications' :
+                                           'Sending notifications...';
+
+        if (count()) {
+          if (task.status === 'complete' || task.status === 'error') {
+            count().textContent = task.message || '';
+          } else if (task.total > 0) {
+            count().textContent = `${task.processed} of ${task.total} (${pct}%)`;
+          } else {
+            count().textContent = 'Preparing...';
+          }
+        }
+
+        if (bar()) bar().style.width = pct + '%';
+
+        if (task.status === 'complete') {
+          el.classList.add('complete');
+          el.classList.remove('error');
+          // Change icon to checkmark
+          const iconEl = icon();
+          if (iconEl) {
+            iconEl.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+          }
+          if (bar()) bar().style.width = '100%';
+          stopPolling();
+          // Auto-hide after 8 seconds
+          setTimeout(() => { if (container()?.classList.contains('complete')) dismiss(); }, 8000);
+        } else if (task.status === 'error') {
+          el.classList.add('error');
+          el.classList.remove('complete');
+          const iconEl = icon();
+          if (iconEl) {
+            iconEl.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+          }
+          stopPolling();
+        }
+      }
+
+      async function poll() {
+        if (!currentBatchId) return;
+        try {
+          const res = await fetch(`/api/notify/status/${currentBatchId}`);
+          const data = await res.json();
+          if (data.success && data.task) {
+            update(data.task);
+          }
+        } catch (e) {
+          console.error('Error polling notification status:', e);
+        }
+      }
+
+      function startPolling(batchId) {
+        currentBatchId = batchId;
+        stopPolling();
+        pollInterval = setInterval(poll, 1000);
+        poll(); // Immediate first poll
+      }
+
+      function stopPolling() {
+        if (pollInterval) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+        }
+      }
+
+      async function start(batchId) {
+        show();
+        if (label()) label().textContent = 'Starting notifications...';
+        if (count()) count().textContent = '';
+        if (bar()) bar().style.width = '0%';
+
+        try {
+          const formData = new FormData();
+          formData.append('batch_id', batchId);
+
+          const res = await fetch('/api/notify/start', {
+            method: 'POST',
+            body: formData
+          });
+          const data = await res.json();
+
+          if (data.success) {
+            startPolling(batchId);
+          } else {
+            update({ status: 'error', message: data.error || 'Failed to start' });
+          }
+        } catch (e) {
+          update({ status: 'error', message: 'Network error' });
+        }
+      }
+
+      // Check for active tasks on page load
+      async function checkActive() {
+        try {
+          const res = await fetch('/api/notify/status');
+          const data = await res.json();
+          if (data.success && data.tasks) {
+            const batchIds = Object.keys(data.tasks);
+            if (batchIds.length > 0) {
+              const batchId = parseInt(batchIds[0]);
+              show();
+              update(data.tasks[batchId]);
+              if (data.tasks[batchId].status === 'running' || data.tasks[batchId].status === 'starting') {
+                startPolling(batchId);
+              }
+            }
+          }
+        } catch (e) {
+          // Ignore errors
+        }
+      }
+
+      // Check on page load
+      document.addEventListener('DOMContentLoaded', checkActive);
+
+      return { start, dismiss, show, hide, update, checkActive };
+    })();
   </script>
 
   <!-- Unified Order Panel Controller -->

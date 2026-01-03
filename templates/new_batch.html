@@ -85,13 +85,9 @@
           <button type="button" class="btn btn-new" onclick="window.location.reload()">Refresh</button>
           <button type="button" class="btn btn-new" onclick="saveBatch()">Save</button>
           {% if batch_status == 'notified' %}
-            <form action="{{ url_for('notify_customers') }}" method="post" style="margin: 0;">
-              <button type="submit" class="btn btn-new">Resend Notifications</button>
-            </form>
+            <button type="button" class="btn btn-new" onclick="NotificationProgress.start({{ current_batch.id }})">Resend Notifications</button>
           {% elif batch_status == 'recorded' %}
-            <form action="{{ url_for('notify_customers') }}" method="post" style="margin: 0;">
-              <button type="submit" class="btn btn-batch">✉ Notify Customers</button>
-            </form>
+            <button type="button" class="btn btn-batch" onclick="NotificationProgress.start({{ current_batch.id }})">✉ Notify Customers</button>
           {% else %}
             <form action="{{ url_for('record_batch') }}" method="post" style="margin: 0;">
               <button type="submit" class="btn btn-batch">✓ Mark as Picked Up</button>

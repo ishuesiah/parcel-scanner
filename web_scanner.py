@@ -83,6 +83,12 @@ def format_pst(dt):
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(PST).strftime("%Y-%m-%d %H:%M")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BACKGROUND NOTIFICATION TASK TRACKING
+# Tracks progress of notification tasks so they can run in background
+# ══════════════════════════════════════════════════════════════════════════════
+notification_tasks = {}  # {batch_id: {status, total, processed, success, skipped, errors, message}}
+
 def normalize_carrier(carrier_code):
     """Normalize carrier codes to display-friendly names."""
     if not carrier_code:
@@ -3614,6 +3620,224 @@ def notify_customers():
             conn.close()
         except Exception:
             pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ASYNC NOTIFICATION SYSTEM - Runs in background, reports progress
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _run_notification_task(batch_id):
+    """
+    Background task to send notifications. Updates notification_tasks dict with progress.
+    """
+    global notification_tasks
+
+    task = notification_tasks.get(batch_id)
+    if not task:
+        return
+
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Get batch info
+        cursor.execute("SELECT carrier, status FROM batches WHERE id = %s", (batch_id,))
+        batch = cursor.fetchone()
+        if not batch:
+            task['status'] = 'error'
+            task['message'] = 'Batch not found'
+            return
+
+        carrier = batch['carrier']
+        batch_status = batch.get('status', 'in_progress')
+
+        if batch_status != 'recorded' and batch_status != 'notified':
+            task['status'] = 'error'
+            task['message'] = 'Batch must be marked as picked up first'
+            return
+
+        # Get scans with customer emails
+        cursor.execute("""
+            SELECT DISTINCT order_number, customer_email, customer_name, tracking_number, order_id
+            FROM scans
+            WHERE batch_id = %s
+              AND order_number != 'N/A'
+              AND order_number != 'Processing...'
+              AND customer_email != ''
+              AND customer_email IS NOT NULL
+        """, (batch_id,))
+        scans = cursor.fetchall()
+
+        if not scans:
+            task['status'] = 'complete'
+            task['message'] = 'No orders with email addresses found'
+            return
+
+        task['total'] = len(scans)
+        task['status'] = 'running'
+
+        # Initialize Klaviyo API
+        from klaviyo_api import KlaviyoAPI
+        klaviyo = KlaviyoAPI()
+
+        # Initialize Shopify API
+        try:
+            shopify_api = get_shopify_api()
+        except:
+            shopify_api = None
+
+        now = now_pst().strftime("%Y-%m-%d %H:%M:%S")
+
+        for idx, scan in enumerate(scans, 1):
+            order_number = scan['order_number']
+            customer_email = scan['customer_email']
+            tracking_number = scan['tracking_number']
+
+            task['processed'] = idx
+            task['current_order'] = order_number
+
+            # Check if already notified
+            cursor.execute("SELECT id FROM notifications WHERE order_number = %s LIMIT 1", (order_number,))
+            if cursor.fetchone():
+                task['skipped'] += 1
+                continue
+
+            # Get line items from local DB
+            line_items = []
+            try:
+                cursor.execute("""
+                    SELECT oli.product_title, oli.variant_title, oli.sku, oli.quantity, oli.price
+                    FROM order_line_items oli
+                    JOIN orders o ON oli.order_id = o.id
+                    WHERE o.order_number = %s
+                """, (order_number,))
+                local_items = cursor.fetchall()
+                if local_items:
+                    line_items = [
+                        {'title': item['product_title'], 'variant_title': item['variant_title'],
+                         'sku': item['sku'], 'quantity': item['quantity'],
+                         'price': str(item['price']) if item['price'] else '0'}
+                        for item in local_items
+                    ]
+            except:
+                pass
+
+            # Send notification
+            success = klaviyo.notify_order_shipped(
+                email=customer_email,
+                order_number=order_number,
+                tracking_number=tracking_number,
+                carrier=carrier,
+                line_items=line_items
+            )
+
+            # Record notification
+            try:
+                cursor.execute("""
+                    INSERT INTO notifications
+                        (batch_id, order_number, customer_email, tracking_number, notified_at, success, error_message)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (batch_id, order_number, customer_email, tracking_number, now, success, None if success else "Klaviyo API error"))
+                conn.commit()
+
+                if success:
+                    task['success'] += 1
+                else:
+                    task['errors'] += 1
+            except:
+                task['skipped'] += 1
+
+        # Update batch status
+        cursor.execute("UPDATE batches SET status = 'notified', notified_at = %s WHERE id = %s", (now, batch_id))
+        conn.commit()
+
+        # Build final message
+        parts = []
+        if task['success'] > 0:
+            parts.append(f"{task['success']} sent")
+        if task['skipped'] > 0:
+            parts.append(f"{task['skipped']} skipped")
+        if task['errors'] > 0:
+            parts.append(f"{task['errors']} failed")
+
+        task['status'] = 'complete'
+        task['message'] = ' | '.join(parts) if parts else 'Complete'
+
+    except Exception as e:
+        task['status'] = 'error'
+        task['message'] = str(e)
+        print(f"Error in background notification task: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        try:
+            cursor.close()
+        except:
+            pass
+        try:
+            conn.close()
+        except:
+            pass
+
+
+@app.route("/api/notify/start", methods=["POST"])
+def api_start_notification():
+    """Start background notification task for a batch."""
+    global notification_tasks
+
+    # Get batch_id from form or JSON
+    batch_id = request.form.get('batch_id') or request.json.get('batch_id') if request.is_json else None
+    if not batch_id:
+        batch_id = session.get('batch_id')
+
+    if not batch_id:
+        return jsonify({"success": False, "error": "No batch specified"}), 400
+
+    try:
+        batch_id = int(batch_id)
+    except:
+        return jsonify({"success": False, "error": "Invalid batch ID"}), 400
+
+    # Check if task already running
+    existing = notification_tasks.get(batch_id)
+    if existing and existing.get('status') == 'running':
+        return jsonify({"success": False, "error": "Notification already in progress", "task": existing}), 409
+
+    # Initialize task
+    notification_tasks[batch_id] = {
+        'status': 'starting',
+        'total': 0,
+        'processed': 0,
+        'success': 0,
+        'skipped': 0,
+        'errors': 0,
+        'message': 'Starting...',
+        'current_order': None,
+        'started_at': now_pst().isoformat()
+    }
+
+    # Start background thread
+    thread = threading.Thread(target=_run_notification_task, args=(batch_id,), daemon=True)
+    thread.start()
+
+    return jsonify({"success": True, "batch_id": batch_id, "message": "Notification task started"})
+
+
+@app.route("/api/notify/status/<int:batch_id>", methods=["GET"])
+def api_notification_status(batch_id):
+    """Get status of a notification task."""
+    task = notification_tasks.get(batch_id)
+    if not task:
+        return jsonify({"success": False, "error": "No task found for this batch"}), 404
+
+    return jsonify({"success": True, "task": task})
+
+
+@app.route("/api/notify/status", methods=["GET"])
+def api_notification_status_all():
+    """Get status of all active notification tasks."""
+    active = {k: v for k, v in notification_tasks.items() if v.get('status') in ('starting', 'running')}
+    return jsonify({"success": True, "tasks": active})
 
 
 @app.route("/all_batches", methods=["GET"])

@@ -2908,3 +2908,132 @@ body.panel-open {
     border: none;
   }
 }
+
+
+/* ============================================================================
+   26. NOTIFICATION PROGRESS BAR
+   ============================================================================ */
+
+.notification-progress {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  padding: 16px 20px;
+  min-width: 320px;
+  max-width: 420px;
+  animation: slideInUp 0.3s ease;
+}
+
+.notification-progress.hidden {
+  display: none;
+}
+
+.notification-progress.complete {
+  border-color: var(--success, #199b76);
+}
+
+.notification-progress.error {
+  border-color: var(--danger, #dc3545);
+}
+
+.notification-progress-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.notification-progress-icon {
+  color: var(--secondary);
+  flex-shrink: 0;
+}
+
+.notification-progress-icon svg {
+  display: block;
+}
+
+.notification-progress.complete .notification-progress-icon {
+  color: var(--success, #199b76);
+}
+
+.notification-progress.complete .notification-progress-icon svg {
+  animation: none;
+}
+
+.notification-progress-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.notification-progress-text span {
+  display: block;
+  color: var(--text-main);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.notification-progress-count {
+  font-size: 0.8rem !important;
+  color: var(--text-muted) !important;
+  font-weight: 400 !important;
+  margin-top: 2px;
+}
+
+.notification-progress-bar-container {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-main);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.notification-progress-bar {
+  height: 100%;
+  background: var(--secondary);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.notification-progress.complete .notification-progress-bar {
+  background: var(--success, #199b76);
+}
+
+.notification-progress.error .notification-progress-bar {
+  background: var(--danger, #dc3545);
+}
+
+.notification-progress-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.25rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.notification-progress-close:hover {
+  opacity: 1;
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
