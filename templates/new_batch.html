@@ -60,6 +60,33 @@
         </form>
       </div>
 
+      <!-- Packing Timer Section -->
+      <div id="packing-timer-section" class="scan-section" style="margin-bottom: 12px; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); border: 2px solid #dee2e6; border-radius: 12px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
+          <div style="display: flex; align-items: center; gap: 16px;">
+            <button type="button" id="packing-timer-btn" onclick="togglePackingTimer()" class="btn btn-batch" style="padding: 12px 24px; font-size: 1rem; min-width: 160px;">
+              ▶ Start Packing
+            </button>
+            <div id="timer-display" style="display: none; font-family: 'Courier New', monospace; font-size: 1.5rem; font-weight: bold; color: #333; background: white; padding: 8px 16px; border-radius: 8px; border: 1px solid #ccc;">
+              00:00:00
+            </div>
+          </div>
+          <div id="timer-stats" style="display: none; gap: 24px; align-items: center;">
+            <div style="text-align: center;">
+              <div style="font-size: 0.75rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">Scans</div>
+              <div id="timer-scan-count" style="font-size: 1.5rem; font-weight: bold; color: #516aec;">0</div>
+            </div>
+            <div style="text-align: center;">
+              <div style="font-size: 0.75rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">Per Hour</div>
+              <div id="timer-parcels-per-hour" style="font-size: 1.5rem; font-weight: bold; color: #199b76;">0.0</div>
+            </div>
+          </div>
+        </div>
+        <div id="timer-session-info" style="display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #dee2e6; font-size: 0.85rem; color: #666;">
+          <span id="timer-started-at"></span>
+        </div>
+      </div>
+
       <!-- Scan form with async capability -->
       <div class="scan-section">
         <form id="scan-form" class="scan-form" autocomplete="off">
@@ -522,6 +549,9 @@
           const currentCount = parseInt(scanCount.textContent);
           scanCount.textContent = currentCount + 1;
 
+          // Increment packing timer scan count (if timer is running)
+          incrementPackingTimerScan();
+
           // Clear input IMMEDIATELY
           codeInput.value = '';
 
@@ -824,6 +854,134 @@
     // ═══════════════════════════════════════════════════════════════════════════
     // Move Scans Between Batches (with Shift+Click support)
     // ═══════════════════════════════════════════════════════════════════════════
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Packing Timer - Parcels Per Hour Calculator
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    let packingTimerState = {
+      isRunning: false,
+      startTime: null,
+      scanCount: 0,
+      intervalId: null
+    };
+
+    function togglePackingTimer() {
+      if (packingTimerState.isRunning) {
+        stopPackingTimer();
+      } else {
+        startPackingTimer();
+      }
+    }
+
+    function startPackingTimer() {
+      packingTimerState.isRunning = true;
+      packingTimerState.startTime = Date.now();
+      packingTimerState.scanCount = 0;
+
+      const btn = document.getElementById('packing-timer-btn');
+      const timerDisplay = document.getElementById('timer-display');
+      const timerStats = document.getElementById('timer-stats');
+      const sessionInfo = document.getElementById('timer-session-info');
+      const startedAt = document.getElementById('timer-started-at');
+      const timerSection = document.getElementById('packing-timer-section');
+
+      // Update UI
+      btn.innerHTML = '⏹ Stop Packing';
+      btn.style.background = '#dc3545';
+      btn.classList.remove('btn-batch');
+      btn.classList.add('btn-delete');
+
+      timerDisplay.style.display = 'block';
+      timerStats.style.display = 'flex';
+      sessionInfo.style.display = 'block';
+
+      // Add active styling to section
+      timerSection.style.borderColor = '#199b76';
+      timerSection.style.background = 'linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%)';
+
+      // Show start time
+      const now = new Date();
+      startedAt.textContent = `Started at ${now.toLocaleTimeString()}`;
+
+      // Reset stats display
+      document.getElementById('timer-scan-count').textContent = '0';
+      document.getElementById('timer-parcels-per-hour').textContent = '0.0';
+
+      // Start the timer update interval
+      packingTimerState.intervalId = setInterval(updatePackingTimer, 1000);
+      updatePackingTimer(); // Initial update
+    }
+
+    function stopPackingTimer() {
+      packingTimerState.isRunning = false;
+
+      if (packingTimerState.intervalId) {
+        clearInterval(packingTimerState.intervalId);
+        packingTimerState.intervalId = null;
+      }
+
+      const btn = document.getElementById('packing-timer-btn');
+      const timerSection = document.getElementById('packing-timer-section');
+      const sessionInfo = document.getElementById('timer-session-info');
+      const startedAt = document.getElementById('timer-started-at');
+
+      // Update button
+      btn.innerHTML = '▶ Start Packing';
+      btn.style.background = '';
+      btn.classList.remove('btn-delete');
+      btn.classList.add('btn-batch');
+
+      // Reset section styling
+      timerSection.style.borderColor = '#dee2e6';
+      timerSection.style.background = 'linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)';
+
+      // Show session summary
+      const elapsed = Date.now() - packingTimerState.startTime;
+      const hours = elapsed / 3600000;
+      const parcelsPerHour = hours > 0 ? (packingTimerState.scanCount / hours).toFixed(1) : 0;
+
+      const elapsedFormatted = formatElapsedTime(elapsed);
+      startedAt.innerHTML = `<strong>Session Complete:</strong> ${packingTimerState.scanCount} parcels in ${elapsedFormatted} = <strong style="color: #199b76;">${parcelsPerHour} per hour</strong>`;
+    }
+
+    function updatePackingTimer() {
+      if (!packingTimerState.isRunning || !packingTimerState.startTime) return;
+
+      const elapsed = Date.now() - packingTimerState.startTime;
+      const timerDisplay = document.getElementById('timer-display');
+
+      // Update time display
+      timerDisplay.textContent = formatElapsedTime(elapsed);
+
+      // Calculate parcels per hour
+      const hours = elapsed / 3600000; // Convert ms to hours
+      let parcelsPerHour = 0;
+      if (hours > 0 && packingTimerState.scanCount > 0) {
+        parcelsPerHour = packingTimerState.scanCount / hours;
+      }
+
+      document.getElementById('timer-parcels-per-hour').textContent = parcelsPerHour.toFixed(1);
+    }
+
+    function formatElapsedTime(ms) {
+      const totalSeconds = Math.floor(ms / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+
+      return String(hours).padStart(2, '0') + ':' +
+             String(minutes).padStart(2, '0') + ':' +
+             String(seconds).padStart(2, '0');
+    }
+
+    function incrementPackingTimerScan() {
+      if (packingTimerState.isRunning) {
+        packingTimerState.scanCount++;
+        document.getElementById('timer-scan-count').textContent = packingTimerState.scanCount;
+        updatePackingTimer(); // Update parcels per hour immediately
+      }
+    }
 
     {% if current_batch %}
     let lastCheckedIndex = null;  // Track last clicked checkbox for shift-select
