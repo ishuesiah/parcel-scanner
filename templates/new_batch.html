@@ -597,14 +597,16 @@
 
       // Insert at the top of the table
       scansTable.insertBefore(row, scansTable.firstChild);
+
+      // Add shift+click handler to the new checkbox
+      const newCheckbox = row.querySelector('.scan-checkbox');
+      if (newCheckbox && typeof handleScanCheckboxClick === 'function') {
+        newCheckbox.addEventListener('click', handleScanCheckboxClick);
+      }
     }
 
     // ── Select all checkboxes functionality ──
-    const selectAllCheckbox = document.getElementById('select-all');
-    selectAllCheckbox.addEventListener('change', function() {
-      const checkboxes = document.querySelectorAll('.scan-checkbox');
-      checkboxes.forEach(cb => cb.checked = this.checked);
-    });
+    // Note: Main handler with shift+click and updateMoveSelection is in the "Move Scans" section below
 
     // ── Delete form handling ──
     const deleteForm = document.getElementById('delete-form');
