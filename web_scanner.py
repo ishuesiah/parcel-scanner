@@ -5198,6 +5198,206 @@ def check_shipments():
         )
 
 
+@app.route("/stationary_parcels", methods=["GET"])
+def stationary_parcels():
+    """
+    Parcels not moving - Shows parcels that have had no tracking updates for 10+ days.
+    These are shipments where the status is still 'label_created' (no pickup/movement detected).
+    """
+    search_query = request.args.get("search", "").strip()
+    page = int(request.args.get("page", 1))
+    per_page = min(int(request.args.get("per_page", 100)), 500)
+    days_threshold = int(request.args.get("days", 10))  # Default 10 days
+
+    parcels = []
+    total_parcels = 0
+    total_pages = 1
+
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Build search condition
+        search_condition = ""
+        search_params = []
+        if search_query:
+            search_condition = """
+                AND (
+                    sc.tracking_number LIKE %s
+                    OR sc.order_number LIKE %s
+                    OR sc.customer_name LIKE %s
+                )
+            """
+            search_like = f"%{search_query}%"
+            search_params = [search_like, search_like, search_like]
+
+        # Count query for pagination
+        # Stationary = ship_date >= X days ago AND (status = 'label_created' OR status IS NULL)
+        # Only UPS and Canada Post carriers (we can track these)
+        count_query = f"""
+            SELECT COUNT(DISTINCT sc.tracking_number) as total
+            FROM shipments_cache sc
+            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+            LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
+            WHERE sc.ship_date <= CURRENT_DATE - INTERVAL '{days_threshold} days'
+              AND sc.ship_date >= CURRENT_DATE - INTERVAL '120 days'
+              AND (tc.status = 'label_created' OR tc.status IS NULL)
+              AND (tc.is_delivered IS NULL OR tc.is_delivered = FALSE)
+              AND co.id IS NULL
+              AND (
+                  sc.carrier_code = 'UPS'
+                  OR sc.carrier_code LIKE '%%canada%%'
+                  OR sc.tracking_number LIKE '1Z%%'
+              )
+              {search_condition}
+        """
+        cursor.execute(count_query, search_params)
+        total_parcels = cursor.fetchone()['total']
+        total_pages = max(1, (total_parcels + per_page - 1) // per_page)
+
+        # Get paginated stationary parcels
+        offset = (page - 1) * per_page
+        query = f"""
+            SELECT
+                sc.tracking_number,
+                sc.order_number,
+                sc.customer_name,
+                sc.carrier_code,
+                sc.ship_date,
+                sc.shipstation_batch_number,
+                MAX(s.scan_date) as scan_date,
+                tc.status as tracking_status,
+                tc.status_description,
+                tc.last_location,
+                tc.last_activity_date,
+                tc.updated_at as tracking_updated_at,
+                CURRENT_DATE - sc.ship_date as days_since_ship
+            FROM shipments_cache sc
+            LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
+            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+            LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
+            WHERE sc.ship_date <= CURRENT_DATE - INTERVAL '{days_threshold} days'
+              AND sc.ship_date >= CURRENT_DATE - INTERVAL '120 days'
+              AND (tc.status = 'label_created' OR tc.status IS NULL)
+              AND (tc.is_delivered IS NULL OR tc.is_delivered = FALSE)
+              AND co.id IS NULL
+              AND (
+                  sc.carrier_code = 'UPS'
+                  OR sc.carrier_code LIKE '%%canada%%'
+                  OR sc.tracking_number LIKE '1Z%%'
+              )
+              {search_condition}
+            GROUP BY sc.tracking_number, sc.order_number, sc.customer_name,
+                     sc.carrier_code, sc.ship_date, sc.shipstation_batch_number,
+                     tc.status, tc.status_description, tc.last_location,
+                     tc.last_activity_date, tc.updated_at
+            ORDER BY sc.ship_date ASC
+            LIMIT %s OFFSET %s
+        """
+        cursor.execute(query, search_params + [per_page, offset])
+        results = cursor.fetchall()
+
+        # Process results
+        for row in results:
+            tracking_number = row.get("tracking_number", "")
+            carrier_code = row.get("carrier_code", "").upper()
+            ship_date = str(row.get("ship_date", ""))
+            days_since = row.get("days_since_ship", 0)
+            if hasattr(days_since, 'days'):
+                days_since = days_since.days
+
+            # Build tracking URL
+            tracking_url = ""
+            is_canada_post = "canada" in carrier_code.lower() if carrier_code else False
+            is_ups = carrier_code == "UPS" or tracking_number.startswith("1Z")
+
+            if is_ups:
+                tracking_url = f"https://www.ups.com/track?loc=en_US&tracknum={tracking_number}"
+            elif is_canada_post:
+                tracking_url = f"https://www.canadapost-postescanada.ca/track-reperage/en#/search?searchFor={tracking_number}"
+
+            # Determine severity based on days
+            if days_since >= 14:
+                severity = "critical"
+                flag_text = f"🚨 No movement for {days_since} days!"
+            else:
+                severity = "warning"
+                flag_text = f"⚠️ No movement for {days_since} days"
+
+            # Check if scanned
+            scan_date_obj = row.get("scan_date")
+            scanned = scan_date_obj is not None
+            scan_date = ""
+            if scan_date_obj:
+                scan_date = scan_date_obj.strftime("%Y-%m-%d") if hasattr(scan_date_obj, 'strftime') else str(scan_date_obj)[:10]
+
+            parcels.append({
+                "tracking_number": tracking_number,
+                "order_number": row.get("order_number", ""),
+                "customer_name": row.get("customer_name", "Unknown"),
+                "carrier": normalize_carrier(carrier_code) if carrier_code else "UPS",
+                "ship_date": ship_date,
+                "batch_number": row.get("shipstation_batch_number", ""),
+                "scanned": scanned,
+                "scan_date": scan_date,
+                "days_since_ship": days_since,
+                "severity": severity,
+                "flag_text": flag_text,
+                "tracking_url": tracking_url,
+                "last_location": row.get("last_location") or "—",
+                "tracking_status": row.get("tracking_status") or "label_created",
+                "tracking_updated": row.get("tracking_updated_at")
+            })
+
+        cursor.close()
+        conn.close()
+
+        # Pagination URLs
+        has_prev = page > 1
+        has_next = page < total_pages
+        prev_url = url_for('stationary_parcels', page=page-1, search=search_query, per_page=per_page, days=days_threshold) if has_prev else "#"
+        next_url = url_for('stationary_parcels', page=page+1, search=search_query, per_page=per_page, days=days_threshold) if has_next else "#"
+
+        return render_template(
+            "stationary_parcels.html",
+            parcels=parcels,
+            search_query=search_query,
+            page=page,
+            per_page=per_page,
+            total_pages=total_pages,
+            total_parcels=total_parcels,
+            has_prev=has_prev,
+            has_next=has_next,
+            prev_url=prev_url,
+            next_url=next_url,
+            days_threshold=days_threshold,
+            version=__version__,
+            active_page="stationary_parcels"
+        )
+
+    except Exception as e:
+        print(f"❌ Error in stationary_parcels: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"Error loading stationary parcels: {str(e)}", "error")
+        return render_template(
+            "stationary_parcels.html",
+            parcels=[],
+            search_query=search_query,
+            page=1,
+            per_page=per_page,
+            total_pages=1,
+            total_parcels=0,
+            has_prev=False,
+            has_next=False,
+            prev_url="#",
+            next_url="#",
+            days_threshold=days_threshold,
+            version=__version__,
+            active_page="stationary_parcels"
+        )
+
+
 @app.route("/api/tracking/status", methods=["POST"])
 def api_tracking_status():
     """
