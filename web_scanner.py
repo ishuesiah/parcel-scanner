@@ -5233,13 +5233,13 @@ def stationary_parcels():
             search_params = [search_like, search_like, search_like]
 
         # Count query for pagination
-        # Stationary parcels = shipped 10+ days ago AND NOT delivered AND NOT in transit
-        # Must explicitly exclude delivered (is_delivered = TRUE) and in_transit status
+        # Stationary parcels = shipped 10+ days ago AND tracking shows 'label_created' (no movement)
+        # MUST have tracking data - we only show parcels where carrier confirmed no pickup
         # Only UPS and Canada Post carriers (we can track these)
         count_query = f"""
             SELECT COUNT(DISTINCT sc.tracking_number) as total
             FROM shipments_cache sc
-            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+            INNER JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
             LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
             WHERE sc.ship_date <= CURRENT_DATE - INTERVAL '{days_threshold} days'
               AND sc.ship_date >= CURRENT_DATE - INTERVAL '120 days'
@@ -5249,8 +5249,8 @@ def stationary_parcels():
                   OR sc.carrier_code ILIKE '%%canada%%'
                   OR sc.tracking_number LIKE '1Z%%'
               )
-              AND (tc.is_delivered IS NULL OR tc.is_delivered = FALSE)
-              AND (tc.status IS NULL OR tc.status NOT IN ('delivered', 'in_transit', 'out_for_delivery'))
+              AND tc.is_delivered = FALSE
+              AND tc.status = 'label_created'
               {search_condition}
         """
         cursor.execute(count_query, search_params)
@@ -5258,6 +5258,7 @@ def stationary_parcels():
         total_pages = max(1, (total_parcels + per_page - 1) // per_page)
 
         # Get paginated stationary parcels
+        # INNER JOIN ensures we only get parcels with tracking data
         offset = (page - 1) * per_page
         query = f"""
             SELECT
@@ -5277,7 +5278,7 @@ def stationary_parcels():
                 CURRENT_DATE - sc.ship_date as days_since_ship
             FROM shipments_cache sc
             LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
-            LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
+            INNER JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
             LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
             WHERE sc.ship_date <= CURRENT_DATE - INTERVAL '{days_threshold} days'
               AND sc.ship_date >= CURRENT_DATE - INTERVAL '120 days'
@@ -5287,8 +5288,8 @@ def stationary_parcels():
                   OR sc.carrier_code ILIKE '%%canada%%'
                   OR sc.tracking_number LIKE '1Z%%'
               )
-              AND (tc.is_delivered IS NULL OR tc.is_delivered = FALSE)
-              AND (tc.status IS NULL OR tc.status NOT IN ('delivered', 'in_transit', 'out_for_delivery'))
+              AND tc.is_delivered = FALSE
+              AND tc.status = 'label_created'
               {search_condition}
             GROUP BY sc.tracking_number, sc.order_number, sc.customer_name,
                      sc.carrier_code, sc.ship_date, sc.shipstation_batch_number,
