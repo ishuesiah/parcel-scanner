@@ -5376,6 +5376,26 @@ def stationary_parcels():
         elif sort_by == 'customer':
             parcels.sort(key=lambda p: (p.get('customer_name') or '').lower(), reverse=reverse_sort)
 
+        # Refresh tracking cache if user clicked "Refresh Tracking" button
+        # Do this BEFORE pagination so we refresh ALL parcels, not just current page
+        if refresh_tracking and parcels:
+            all_tracking = [p["tracking_number"] for p in parcels if p.get("tracking_number")]
+            if all_tracking:
+                print(f"🔄 User requested refresh: force-refreshing {len(all_tracking)} stationary parcel tracking statuses...")
+                import threading
+                # Split into UPS and Canada Post
+                ups_tracking = [t for t in all_tracking if t.startswith("1Z")]
+                cp_tracking = [t for t in all_tracking if not t.startswith("1Z")]
+                # Refresh in larger batches since this is user-initiated
+                if ups_tracking:
+                    threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:100], True)).start()
+                if cp_tracking:
+                    threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:50], True)).start()
+
+                # Redirect back without refresh param so page shows fresh data on reload
+                flash(f"Refreshing tracking for {len(all_tracking)} parcels in background. Reload in a few seconds to see updates.", "info")
+                return redirect(url_for('stationary_parcels', page=page, search=search_query, per_page=per_page, days=days_threshold, sort=sort_by, dir=sort_dir))
+
         # Paginate the filtered results
         total_parcels = len(parcels)
         total_pages = max(1, (total_parcels + per_page - 1) // per_page)
@@ -5388,20 +5408,6 @@ def stationary_parcels():
         has_next = page < total_pages
         prev_url = url_for('stationary_parcels', page=page-1, search=search_query, per_page=per_page, days=days_threshold, sort=sort_by, dir=sort_dir) if has_prev else "#"
         next_url = url_for('stationary_parcels', page=page+1, search=search_query, per_page=per_page, days=days_threshold, sort=sort_by, dir=sort_dir) if has_next else "#"
-
-        # Refresh tracking cache if user clicked "Refresh Tracking" button
-        if refresh_tracking and parcels:
-            all_tracking = [p["tracking_number"] for p in parcels if p.get("tracking_number")]
-            if all_tracking:
-                print(f"🔄 User requested refresh: force-refreshing {len(all_tracking)} stationary parcel tracking statuses...")
-                import threading
-                # Split into UPS and Canada Post
-                ups_tracking = [t for t in all_tracking if t.startswith("1Z")]
-                cp_tracking = [t for t in all_tracking if not t.startswith("1Z")]
-                if ups_tracking:
-                    threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:50], True)).start()
-                if cp_tracking:
-                    threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:30], True)).start()
 
         return render_template(
             "stationary_parcels.html",

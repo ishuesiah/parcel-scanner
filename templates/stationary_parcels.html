@@ -121,7 +121,7 @@
     </p>
   </div>
   <div style="display: flex; gap: 8px;">
-    <a href="{{ url_for('stationary_parcels', days=days_threshold, search=search_query, per_page=per_page, refresh=1) }}"
+    <a href="{{ url_for('stationary_parcels', days=days_threshold, search=search_query, per_page=per_page, sort=sort_by, dir=sort_dir, refresh=1) }}"
        class="btn btn-primary" style="text-decoration: none;">
       &#x1F504; Refresh Tracking
     </a>
@@ -131,12 +131,16 @@
   </div>
 </div>
 
-{% if refresh_tracking %}
-<div style="background: #e8f5e9; border: 1px solid #4caf50; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
-  <span style="font-size: 1.2rem;">&#128260;</span>
-  <span>Refreshing tracking data in the background. Reload the page in a few seconds to see updated statuses.</span>
-</div>
-{% endif %}
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for category, message in messages %}
+      <div style="background: {% if category == 'error' %}#ffebee{% else %}#e8f5e9{% endif %}; border: 1px solid {% if category == 'error' %}#f44336{% else %}#4caf50{% endif %}; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 1.2rem;">{% if category == 'error' %}&#9888;{% else %}&#128260;{% endif %}</span>
+        <span>{{ message }}</span>
+      </div>
+    {% endfor %}
+  {% endif %}
+{% endwith %}
 
 <!-- Summary Cards -->
 <div style="display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap;">
