@@ -1086,6 +1086,22 @@ def init_carrier_accounts():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipping_labels_order ON shipping_labels(order_number)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_shipping_labels_tracking ON shipping_labels(tracking_number)")
 
+        # Create resolved_parcels table for tracking manually resolved stationary parcels
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS resolved_parcels (
+                id SERIAL PRIMARY KEY,
+                tracking_number VARCHAR(255) NOT NULL,
+                order_number VARCHAR(255),
+                resolution_type VARCHAR(50) NOT NULL,
+                resolution_notes TEXT,
+                new_tracking_number VARCHAR(255),
+                resolved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_by VARCHAR(255)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_resolved_parcels_tracking ON resolved_parcels(tracking_number)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_resolved_parcels_order ON resolved_parcels(order_number)")
+
         conn.commit()
         cursor.close()
         conn.close()
@@ -5268,10 +5284,12 @@ def stationary_parcels():
             LEFT JOIN scans s ON s.tracking_number = sc.tracking_number
             LEFT JOIN tracking_status_cache tc ON tc.tracking_number = sc.tracking_number
             LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
+            LEFT JOIN resolved_parcels rp ON rp.tracking_number = sc.tracking_number
             WHERE sc.ship_date <= CURRENT_DATE - INTERVAL '{days_threshold} days'
               AND sc.ship_date >= CURRENT_DATE - INTERVAL '120 days'
               AND (tc.is_delivered IS NULL OR tc.is_delivered = false)
               AND (tc.status IS NULL OR tc.status NOT IN ('delivered', 'in_transit'))
+              AND rp.id IS NULL
             {search_condition}
             GROUP BY sc.tracking_number, sc.order_number, sc.customer_name,
                      sc.carrier_code, sc.ship_date, sc.shipstation_batch_number,
@@ -5450,6 +5468,94 @@ def stationary_parcels():
             version=__version__,
             active_page="stationary_parcels"
         )
+
+
+@app.route("/api/parcels/resolve", methods=["POST"])
+def api_resolve_parcel():
+    """
+    API endpoint to resolve a stationary parcel.
+    Marks a parcel as manually resolved (lost, refunded, re-shipped, etc.)
+
+    Request body:
+    {
+        "tracking_number": "1Z...",
+        "order_number": "12345",
+        "resolution_type": "lost|refunded|reshipped|picked_up|other",
+        "resolution_notes": "Customer was refunded",
+        "new_tracking_number": "1Z..." (optional, for reshipped)
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        tracking_number = data.get("tracking_number", "").strip()
+        order_number = data.get("order_number", "").strip()
+        resolution_type = data.get("resolution_type", "other").strip()
+        resolution_notes = data.get("resolution_notes", "").strip()
+        new_tracking_number = data.get("new_tracking_number", "").strip()
+
+        if not tracking_number:
+            return jsonify({"success": False, "error": "Tracking number is required"}), 400
+
+        valid_types = ["lost", "refunded", "reshipped", "picked_up", "delivered_manually", "other"]
+        if resolution_type not in valid_types:
+            resolution_type = "other"
+
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Insert resolution record
+        cursor.execute("""
+            INSERT INTO resolved_parcels
+            (tracking_number, order_number, resolution_type, resolution_notes, new_tracking_number, resolved_at)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        """, (tracking_number, order_number, resolution_type, resolution_notes, new_tracking_number or None))
+
+        # If reshipped with new tracking, add to tracking cache so it shows up in live tracking
+        if new_tracking_number and resolution_type == "reshipped":
+            # Detect carrier for new tracking
+            is_ups = new_tracking_number.startswith("1Z")
+            carrier = "UPS" if is_ups else "Canada Post"
+
+            cursor.execute("""
+                INSERT INTO tracking_status_cache (tracking_number, carrier, status, status_description, updated_at)
+                VALUES (%s, %s, 'label_created', 'Replacement shipment', CURRENT_TIMESTAMP)
+                ON CONFLICT (tracking_number) DO NOTHING
+            """, (new_tracking_number, carrier))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "message": f"Parcel {tracking_number} marked as {resolution_type}",
+            "new_tracking": new_tracking_number if new_tracking_number else None
+        })
+
+    except Exception as e:
+        print(f"❌ Error resolving parcel: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/parcels/resolved", methods=["GET"])
+def api_get_resolved_parcels():
+    """Get list of resolved parcels for filtering."""
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT tracking_number, order_number, resolution_type, resolution_notes,
+                   new_tracking_number, resolved_at
+            FROM resolved_parcels
+            ORDER BY resolved_at DESC
+            LIMIT 500
+        """)
+        resolved = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return jsonify({"success": True, "resolved": resolved})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/api/tracking/status", methods=["POST"])

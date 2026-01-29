@@ -262,12 +262,16 @@
             {% endif %}
           </td>
           <td style="font-size: 0.85rem; color: var(--text-muted);">{{ parcel.last_location }}</td>
-          <td>
+          <td style="white-space: nowrap;">
             {% if parcel.tracking_url %}
               <a href="{{ parcel.tracking_url }}" target="_blank" rel="noopener" class="btn btn-search" style="font-size: 0.8rem; padding: 6px 10px;">
                 Track
               </a>
             {% endif %}
+            <button onclick="openResolveModal('{{ parcel.tracking_number }}', '{{ parcel.order_number }}')"
+                    class="btn btn-secondary" style="font-size: 0.8rem; padding: 6px 10px; margin-left: 4px;">
+              Resolve
+            </button>
           </td>
         </tr>
       {% endfor %}
@@ -328,6 +332,51 @@
     </p>
   </div>
 {% endif %}
+
+<!-- Resolve Parcel Modal -->
+<div id="resolveModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 10000; align-items: center; justify-content: center;">
+  <div style="background: white; border-radius: 12px; padding: 24px; max-width: 450px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
+    <h3 style="margin: 0 0 16px 0; display: flex; align-items: center; gap: 8px;">
+      <span>&#9989;</span> Resolve Parcel
+    </h3>
+    <p style="margin: 0 0 16px 0; color: #666; font-size: 0.9rem;">
+      Tracking: <strong id="resolveTrackingNum"></strong><br>
+      Order: <strong id="resolveOrderNum"></strong>
+    </p>
+
+    <input type="hidden" id="resolveTrackingInput">
+    <input type="hidden" id="resolveOrderInput">
+
+    <div style="margin-bottom: 16px;">
+      <label style="display: block; font-weight: 500; margin-bottom: 6px;">Resolution Type</label>
+      <select id="resolutionType" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 0.95rem;">
+        <option value="delivered_manually">Delivered (confirmed manually)</option>
+        <option value="refunded">Refunded customer</option>
+        <option value="reshipped">Re-shipped with new tracking</option>
+        <option value="lost">Lost in transit</option>
+        <option value="picked_up">Customer picked up</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+
+    <div id="newTrackingSection" style="display: none; margin-bottom: 16px;">
+      <label style="display: block; font-weight: 500; margin-bottom: 6px;">New Tracking Number</label>
+      <input type="text" id="newTrackingNumber" placeholder="Enter new tracking number"
+             style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 0.95rem; box-sizing: border-box;">
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <label style="display: block; font-weight: 500; margin-bottom: 6px;">Notes (optional)</label>
+      <textarea id="resolutionNotes" rows="2" placeholder="Add any notes..."
+                style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 0.95rem; resize: vertical; box-sizing: border-box;"></textarea>
+    </div>
+
+    <div style="display: flex; gap: 10px; justify-content: flex-end;">
+      <button onclick="closeResolveModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="submitResolve()" class="btn btn-primary">Resolve</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -348,6 +397,87 @@
       console.error('OrderPanel not loaded');
     }
   }
+
+  // ─── Resolve Parcel Modal ───
+  function openResolveModal(trackingNumber, orderNumber) {
+    document.getElementById('resolveTrackingNum').textContent = trackingNumber;
+    document.getElementById('resolveOrderNum').textContent = orderNumber;
+    document.getElementById('resolveTrackingInput').value = trackingNumber;
+    document.getElementById('resolveOrderInput').value = orderNumber;
+    document.getElementById('resolutionType').value = 'delivered_manually';
+    document.getElementById('newTrackingNumber').value = '';
+    document.getElementById('resolutionNotes').value = '';
+    document.getElementById('newTrackingSection').style.display = 'none';
+    document.getElementById('resolveModal').style.display = 'flex';
+  }
+
+  function closeResolveModal() {
+    document.getElementById('resolveModal').style.display = 'none';
+  }
+
+  // Show/hide new tracking input based on resolution type
+  document.addEventListener('DOMContentLoaded', () => {
+    const typeSelect = document.getElementById('resolutionType');
+    if (typeSelect) {
+      typeSelect.addEventListener('change', function() {
+        const newTrackingSection = document.getElementById('newTrackingSection');
+        newTrackingSection.style.display = this.value === 'reshipped' ? 'block' : 'none';
+      });
+    }
+  });
+
+  function submitResolve() {
+    const trackingNumber = document.getElementById('resolveTrackingInput').value;
+    const orderNumber = document.getElementById('resolveOrderInput').value;
+    const resolutionType = document.getElementById('resolutionType').value;
+    const resolutionNotes = document.getElementById('resolutionNotes').value;
+    const newTrackingNumber = document.getElementById('newTrackingNumber').value;
+
+    fetch('/api/parcels/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tracking_number: trackingNumber,
+        order_number: orderNumber,
+        resolution_type: resolutionType,
+        resolution_notes: resolutionNotes,
+        new_tracking_number: newTrackingNumber
+      })
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        // Remove the row from the table
+        const row = document.querySelector(`tr[data-tracking="${trackingNumber}"]`);
+        if (row) {
+          row.style.transition = 'all 0.4s ease-out';
+          row.style.backgroundColor = '#e8f5e9';
+          row.style.opacity = '0';
+          setTimeout(() => {
+            row.remove();
+            totalParcelsCount--;
+            updateParcelCount();
+          }, 400);
+        }
+        closeResolveModal();
+        showNotification(`Parcel resolved: ${resolutionType.replace('_', ' ')}`);
+      } else {
+        alert('Error: ' + (data.error || 'Failed to resolve parcel'));
+      }
+    })
+    .catch(err => {
+      console.error('Resolve error:', err);
+      alert('Error resolving parcel');
+    });
+  }
+
+  // Close modal on backdrop click
+  document.addEventListener('click', (e) => {
+    const modal = document.getElementById('resolveModal');
+    if (e.target === modal) {
+      closeResolveModal();
+    }
+  });
 
   // ─── Live Tracking Updates via WebSocket ───
   let socket = null;
