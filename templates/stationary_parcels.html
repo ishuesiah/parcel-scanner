@@ -374,6 +374,11 @@
       const trackingNumbers = getVisibleTrackingNumbers();
       if (trackingNumbers.length > 0) {
         socket.emit('subscribe_tracking', { tracking_numbers: trackingNumbers.slice(0, 50) });
+
+        // AUTO-REFRESH on page load: Request fresh data for visible packages
+        // This triggers backend to poll UPS/CP APIs and push updates via WebSocket
+        console.log('Requesting tracking refresh for', trackingNumbers.length, 'packages...');
+        socket.emit('request_tracking_refresh', { tracking_numbers: trackingNumbers.slice(0, 20) });
       }
     });
 
@@ -498,19 +503,39 @@
     }
   }
 
-  // Auto-refresh fallback (for Canada Post which has no webhooks)
-  let autoRefreshInterval = null;
+  // Progressive refresh: request tracking updates in batches over time
+  let refreshBatchIndex = 1; // Start at 1 since batch 0 is requested on connect
+  function startProgressiveRefresh() {
+    const allTracking = getVisibleTrackingNumbers();
+    if (allTracking.length <= 20) return; // Already covered by initial request
+
+    // Request next batch every 10 seconds (respects rate limits)
+    const batchInterval = setInterval(() => {
+      if (!socket || !socket.connected) return;
+
+      const startIdx = refreshBatchIndex * 20;
+      const batch = allTracking.slice(startIdx, startIdx + 20);
+
+      if (batch.length === 0) {
+        clearInterval(batchInterval);
+        console.log('Progressive refresh complete - all packages queued');
+        return;
+      }
+
+      console.log(`Requesting refresh batch ${refreshBatchIndex + 1}: ${batch.length} packages`);
+      socket.emit('request_tracking_refresh', { tracking_numbers: batch });
+      refreshBatchIndex++;
+    }, 10000); // 10 seconds between batches
+  }
+
+  // Auto-refresh fallback: reload page if DB has new data
   function startAutoRefresh() {
-    // Refresh page data every 2 minutes as fallback
-    autoRefreshInterval = setInterval(() => {
-      // Only refresh if we have parcels and user hasn't interacted recently
+    // Check for DB changes every 60 seconds
+    setInterval(() => {
       if (totalParcelsCount > 0 && document.visibilityState === 'visible') {
-        console.log('Auto-refresh: checking for updates...');
-        // Soft refresh via fetch to avoid full page reload
         fetch(window.location.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
           .then(r => r.text())
           .then(html => {
-            // Extract updated parcel count from response
             const match = html.match(/\((\d+) total\)/);
             if (match && parseInt(match[1]) !== totalParcelsCount) {
               showNotification('Updates available - refreshing...');
@@ -519,12 +544,13 @@
           })
           .catch(() => {});
       }
-    }, 120000); // 2 minutes
+    }, 60000); // 1 minute
   }
 
   // Initialize on page load
   document.addEventListener('DOMContentLoaded', () => {
     initWebSocket();
+    startProgressiveRefresh();
     startAutoRefresh();
   });
 
