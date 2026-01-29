@@ -737,10 +737,10 @@ def init_background_scheduler():
             daemon=True
         )
 
-        # Schedule tracking refresh every 30 minutes
+        # Schedule tracking refresh every 10 minutes (increased frequency for faster updates)
         _scheduler.add_job(
             func=background_tracking_refresh,
-            trigger=IntervalTrigger(minutes=30),
+            trigger=IntervalTrigger(minutes=10),
             id='tracking_refresh',
             name='Refresh stale tracking statuses',
             replace_existing=True
@@ -749,7 +749,7 @@ def init_background_scheduler():
         _scheduler.start()
         _scheduler_initialized = True
         mode = "eventlet" if EVENTLET_ENABLED else "threading"
-        print(f"✅ Background tracking scheduler started (30 min interval, {mode} mode)")
+        print(f"✅ Background tracking scheduler started (10 min interval, {mode} mode)")
 
         # Shut down scheduler when app stops
         atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
@@ -817,21 +817,21 @@ def background_tracking_refresh():
 
         print(f"📦 [Background] Found {len(stale_shipments)} stale: {len(ups_tracking)} UPS, {len(cp_tracking)} Canada Post")
 
-        # Update in batches (respecting API rate limits)
+        # Update in batches (increased batch sizes for faster updates)
         if ups_tracking:
-            print(f"🔄 [Background] Refreshing {min(len(ups_tracking), 30)} UPS tracking numbers...")
-            update_ups_tracking_cache(ups_tracking[:30], force_refresh=True)
+            print(f"🔄 [Background] Refreshing {min(len(ups_tracking), 50)} UPS tracking numbers...")
+            update_ups_tracking_cache(ups_tracking[:50], force_refresh=True)
 
             # Resubscribe to Track Alert for packages older than 10 days
             # (UPS Track Alert subscriptions expire after 14 days)
             try:
-                subscribe_ups_track_alerts(ups_tracking[:30])
+                subscribe_ups_track_alerts(ups_tracking[:50])
             except Exception as sub_err:
                 print(f"⚠️ [Background] Track Alert resubscription error: {sub_err}")
 
         if cp_tracking:
-            print(f"🔄 [Background] Refreshing {min(len(cp_tracking), 20)} Canada Post tracking numbers...")
-            update_canadapost_tracking_cache(cp_tracking[:20], force_refresh=True)
+            print(f"🔄 [Background] Refreshing {min(len(cp_tracking), 30)} Canada Post tracking numbers...")
+            update_canadapost_tracking_cache(cp_tracking[:30], force_refresh=True)
 
         print("✅ [Background] Tracking refresh complete\n")
 
@@ -5219,6 +5219,8 @@ def stationary_parcels():
     per_page = min(int(request.args.get("per_page", 100)), 500)
     days_threshold = int(request.args.get("days", 10))  # Default 10 days
     refresh_tracking = request.args.get("refresh", "") == "1"
+    sort_by = request.args.get("sort", "days")  # days, date, customer
+    sort_dir = request.args.get("dir", "desc")  # asc or desc
 
     parcels = []
     total_parcels = 0
@@ -5276,7 +5278,7 @@ def stationary_parcels():
                      tc.status, tc.status_description, tc.estimated_delivery,
                      tc.last_location, tc.last_activity_date, tc.is_delivered, tc.updated_at,
                      co.id, co.reason
-            ORDER BY sc.ship_date ASC
+            ORDER BY sc.ship_date {'DESC' if sort_dir == 'desc' else 'ASC'}
         """
         cursor.execute(query, search_params)
         all_shipments = cursor.fetchall()
@@ -5365,6 +5367,15 @@ def stationary_parcels():
                 "tracking_updated": cached_ship.get("tracking_updated_at")
             })
 
+        # Sort parcels before pagination
+        reverse_sort = (sort_dir == 'desc')
+        if sort_by == 'days':
+            parcels.sort(key=lambda p: p.get('days_since_ship', 0), reverse=reverse_sort)
+        elif sort_by == 'date':
+            parcels.sort(key=lambda p: p.get('ship_date', ''), reverse=reverse_sort)
+        elif sort_by == 'customer':
+            parcels.sort(key=lambda p: (p.get('customer_name') or '').lower(), reverse=reverse_sort)
+
         # Paginate the filtered results
         total_parcels = len(parcels)
         total_pages = max(1, (total_parcels + per_page - 1) // per_page)
@@ -5372,11 +5383,11 @@ def stationary_parcels():
         end_idx = start_idx + per_page
         parcels = parcels[start_idx:end_idx]
 
-        # Pagination URLs
+        # Pagination URLs (preserve sort params)
         has_prev = page > 1
         has_next = page < total_pages
-        prev_url = url_for('stationary_parcels', page=page-1, search=search_query, per_page=per_page, days=days_threshold) if has_prev else "#"
-        next_url = url_for('stationary_parcels', page=page+1, search=search_query, per_page=per_page, days=days_threshold) if has_next else "#"
+        prev_url = url_for('stationary_parcels', page=page-1, search=search_query, per_page=per_page, days=days_threshold, sort=sort_by, dir=sort_dir) if has_prev else "#"
+        next_url = url_for('stationary_parcels', page=page+1, search=search_query, per_page=per_page, days=days_threshold, sort=sort_by, dir=sort_dir) if has_next else "#"
 
         # Refresh tracking cache if user clicked "Refresh Tracking" button
         if refresh_tracking and parcels:
@@ -5406,6 +5417,8 @@ def stationary_parcels():
             next_url=next_url,
             days_threshold=days_threshold,
             refresh_tracking=refresh_tracking,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
             version=__version__,
             active_page="stationary_parcels"
         )

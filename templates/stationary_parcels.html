@@ -98,6 +98,15 @@
   .table-row-critical:hover {
     background: rgba(198, 40, 40, 0.08) !important;
   }
+  th.sortable {
+    cursor: pointer;
+  }
+  th.sortable:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  th.sortable a:hover {
+    color: var(--secondary) !important;
+  }
 </style>
 {% endblock %}
 
@@ -178,12 +187,33 @@
     <thead>
       <tr>
         <th style="width: 50px;">Flag</th>
-        <th>Days Stuck</th>
+        <th class="sortable">
+          <a href="{{ url_for('stationary_parcels', days=days_threshold, search=search_query, per_page=per_page, sort='days', dir='desc' if sort_by == 'days' and sort_dir == 'asc' else 'asc') }}" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 4px;">
+            Days Stuck
+            {% if sort_by == 'days' %}
+              <span style="font-size: 0.7rem;">{{ '▼' if sort_dir == 'desc' else '▲' }}</span>
+            {% endif %}
+          </a>
+        </th>
         <th>Order #</th>
-        <th>Customer</th>
+        <th class="sortable">
+          <a href="{{ url_for('stationary_parcels', days=days_threshold, search=search_query, per_page=per_page, sort='customer', dir='desc' if sort_by == 'customer' and sort_dir == 'asc' else 'asc') }}" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 4px;">
+            Customer
+            {% if sort_by == 'customer' %}
+              <span style="font-size: 0.7rem;">{{ '▼' if sort_dir == 'desc' else '▲' }}</span>
+            {% endif %}
+          </a>
+        </th>
         <th>Tracking #</th>
         <th>Carrier</th>
-        <th>Ship Date</th>
+        <th class="sortable">
+          <a href="{{ url_for('stationary_parcels', days=days_threshold, search=search_query, per_page=per_page, sort='date', dir='desc' if sort_by == 'date' and sort_dir == 'asc' else 'asc') }}" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 4px;">
+            Ship Date
+            {% if sort_by == 'date' %}
+              <span style="font-size: 0.7rem;">{{ '▼' if sort_dir == 'desc' else '▲' }}</span>
+            {% endif %}
+          </a>
+        </th>
         <th>Scanned?</th>
         <th>Last Location</th>
         <th>Action</th>
@@ -191,7 +221,7 @@
     </thead>
     <tbody>
       {% for parcel in parcels %}
-        <tr class="{% if parcel.severity == 'critical' %}table-row-critical{% endif %}">
+        <tr class="{% if parcel.severity == 'critical' %}table-row-critical{% endif %}" data-tracking="{{ parcel.tracking_number }}">
           <td style="text-align: center;">
             {% if parcel.severity == 'critical' %}
               <span class="flag-critical" title="{{ parcel.flag_text }}">&#128680;</span>
@@ -297,6 +327,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script>
   function changePerPage(value) {
     const url = new URL(window.location.href);
@@ -313,5 +344,192 @@
       console.error('OrderPanel not loaded');
     }
   }
+
+  // ─── Live Tracking Updates via WebSocket ───
+  let socket = null;
+  let totalParcelsCount = {{ total_parcels }};
+
+  function initWebSocket() {
+    socket = io({
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
+      reconnectionAttempts: 10,
+      timeout: 20000
+    });
+
+    socket.on('connect', () => {
+      console.log('Connected to live tracking updates');
+      updateConnectionIndicator(true);
+
+      // Subscribe to shipments page updates (receives all tracking broadcasts)
+      socket.emit('subscribe_shipments_page');
+
+      // Also subscribe to specific tracking numbers on this page
+      const trackingNumbers = getVisibleTrackingNumbers();
+      if (trackingNumbers.length > 0) {
+        socket.emit('subscribe_tracking', { tracking_numbers: trackingNumbers.slice(0, 50) });
+      }
+    });
+
+    socket.on('disconnect', () => {
+      console.log('Disconnected from live tracking');
+      updateConnectionIndicator(false);
+    });
+
+    // Handle live tracking updates
+    socket.on('tracking_update', (data) => {
+      console.log('Live tracking update:', data);
+      handleTrackingUpdate(data);
+    });
+
+    socket.on('subscription_confirmed', (data) => {
+      console.log('Subscription confirmed:', data);
+    });
+  }
+
+  function getVisibleTrackingNumbers() {
+    const rows = document.querySelectorAll('tbody tr[data-tracking]');
+    return Array.from(rows).map(row => row.dataset.tracking).filter(t => t);
+  }
+
+  function handleTrackingUpdate(data) {
+    const trackingNum = data.tracking_number;
+    const status = data.status;
+    const isDelivered = data.is_delivered;
+
+    // Find the row for this tracking number
+    const row = document.querySelector(`tr[data-tracking="${trackingNum}"]`);
+    if (!row) return;
+
+    // If package is now delivered or in_transit, remove it from "not moving" list
+    if (status === 'delivered' || status === 'in_transit' || isDelivered) {
+      // Animate removal
+      row.style.transition = 'all 0.5s ease-out';
+      row.style.backgroundColor = status === 'delivered' ? '#e8f5e9' : '#fff3e0';
+      row.style.opacity = '0.7';
+
+      setTimeout(() => {
+        row.style.opacity = '0';
+        row.style.transform = 'translateX(100px)';
+      }, 1000);
+
+      setTimeout(() => {
+        row.remove();
+        totalParcelsCount--;
+        updateParcelCount();
+
+        // Show notification
+        showNotification(
+          status === 'delivered'
+            ? `Package ${trackingNum.slice(-8)} delivered!`
+            : `Package ${trackingNum.slice(-8)} is now moving`
+        );
+      }, 1500);
+    } else {
+      // Update last location if changed
+      const locationCell = row.querySelector('td:nth-child(9)');
+      if (locationCell && data.last_location) {
+        locationCell.textContent = data.last_location;
+        // Flash to indicate update
+        row.style.transition = 'background-color 0.3s';
+        row.style.backgroundColor = '#e3f2fd';
+        setTimeout(() => { row.style.backgroundColor = ''; }, 2000);
+      }
+    }
+  }
+
+  function updateParcelCount() {
+    // Update the total count display
+    const countSpan = document.querySelector('.pagination span[style*="margin-left"]');
+    if (countSpan) {
+      countSpan.textContent = `(${totalParcelsCount} total)`;
+    }
+    // Update summary card
+    const summaryCount = document.querySelector('.summary-card .count');
+    if (summaryCount) {
+      summaryCount.textContent = totalParcelsCount;
+    }
+  }
+
+  function showNotification(message) {
+    const notif = document.createElement('div');
+    notif.style.cssText = `
+      position: fixed; bottom: 20px; right: 20px; background: #323232; color: white;
+      padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; z-index: 9999;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2); animation: slideIn 0.3s ease-out;
+    `;
+    notif.textContent = message;
+    document.body.appendChild(notif);
+    setTimeout(() => {
+      notif.style.opacity = '0';
+      notif.style.transition = 'opacity 0.3s';
+      setTimeout(() => notif.remove(), 300);
+    }, 4000);
+  }
+
+  function updateConnectionIndicator(connected) {
+    let indicator = document.getElementById('liveIndicator');
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.id = 'liveIndicator';
+      indicator.style.cssText = `
+        position: fixed; bottom: 20px; left: 20px; padding: 8px 14px;
+        border-radius: 20px; font-size: 0.8rem; font-weight: 500;
+        display: flex; align-items: center; gap: 6px; z-index: 9998;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      `;
+      document.body.appendChild(indicator);
+    }
+
+    if (connected) {
+      indicator.style.background = '#e8f5e9';
+      indicator.style.color = '#2e7d32';
+      indicator.innerHTML = '<span style="width:8px;height:8px;background:#4caf50;border-radius:50%;animation:pulse 2s infinite;"></span> Live updates';
+    } else {
+      indicator.style.background = '#ffebee';
+      indicator.style.color = '#c62828';
+      indicator.innerHTML = '<span style="width:8px;height:8px;background:#f44336;border-radius:50%;"></span> Disconnected';
+    }
+  }
+
+  // Auto-refresh fallback (for Canada Post which has no webhooks)
+  let autoRefreshInterval = null;
+  function startAutoRefresh() {
+    // Refresh page data every 2 minutes as fallback
+    autoRefreshInterval = setInterval(() => {
+      // Only refresh if we have parcels and user hasn't interacted recently
+      if (totalParcelsCount > 0 && document.visibilityState === 'visible') {
+        console.log('Auto-refresh: checking for updates...');
+        // Soft refresh via fetch to avoid full page reload
+        fetch(window.location.href, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+          .then(r => r.text())
+          .then(html => {
+            // Extract updated parcel count from response
+            const match = html.match(/\((\d+) total\)/);
+            if (match && parseInt(match[1]) !== totalParcelsCount) {
+              showNotification('Updates available - refreshing...');
+              setTimeout(() => window.location.reload(), 1500);
+            }
+          })
+          .catch(() => {});
+      }
+    }, 120000); // 2 minutes
+  }
+
+  // Initialize on page load
+  document.addEventListener('DOMContentLoaded', () => {
+    initWebSocket();
+    startAutoRefresh();
+  });
+
+  // Add CSS animation for pulse
+  const style = document.createElement('style');
+  style.textContent = `
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    @keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  `;
+  document.head.appendChild(style);
 </script>
 {% endblock %}
