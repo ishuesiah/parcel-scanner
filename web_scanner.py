@@ -775,15 +775,25 @@ def background_tracking_refresh():
         # Find tracking numbers that:
         # 1. Are not delivered
         # 2. Have cache older than 4 hours OR no cache
-        # 3. Were shipped in the last 30 days (ignore old ones)
+        # 3. Were shipped in the last 30 days, OR up to 120 days if still showing label_created
+        #    (Extended to 120 days for stationary parcels that might have been delivered)
         cursor.execute("""
             SELECT DISTINCT sc.tracking_number, sc.carrier_code
             FROM shipments_cache sc
             LEFT JOIN tracking_status_cache tc ON sc.tracking_number = tc.tracking_number
-            WHERE sc.ship_date >= CURRENT_DATE - INTERVAL '30 days'
-              AND (tc.status IS NULL
-                   OR tc.status NOT IN ('delivered', 'exception')
-                   OR tc.updated_at < NOW() - INTERVAL '4 hours')
+            WHERE (
+                -- Normal refresh: shipments from last 30 days
+                (sc.ship_date >= CURRENT_DATE - INTERVAL '30 days'
+                 AND (tc.status IS NULL
+                      OR tc.status NOT IN ('delivered', 'exception')
+                      OR tc.updated_at < NOW() - INTERVAL '4 hours'))
+                OR
+                -- Extended refresh: older shipments still showing label_created (likely delivered)
+                (sc.ship_date >= CURRENT_DATE - INTERVAL '120 days'
+                 AND sc.ship_date < CURRENT_DATE - INTERVAL '30 days'
+                 AND (tc.status = 'label_created' OR tc.status IS NULL)
+                 AND (tc.updated_at < NOW() - INTERVAL '24 hours' OR tc.updated_at IS NULL))
+            )
               AND sc.tracking_number IS NOT NULL
               AND sc.tracking_number != ''
             ORDER BY tc.updated_at ASC NULLS FIRST
@@ -5208,6 +5218,7 @@ def stationary_parcels():
     page = int(request.args.get("page", 1))
     per_page = min(int(request.args.get("per_page", 100)), 500)
     days_threshold = int(request.args.get("days", 10))  # Default 10 days
+    refresh_tracking = request.args.get("refresh", "") == "1"
 
     parcels = []
     total_parcels = 0
@@ -5257,6 +5268,8 @@ def stationary_parcels():
             LEFT JOIN cancelled_orders co ON co.order_number = sc.order_number
             WHERE sc.ship_date <= CURRENT_DATE - INTERVAL '{days_threshold} days'
               AND sc.ship_date >= CURRENT_DATE - INTERVAL '120 days'
+              AND (tc.is_delivered IS NULL OR tc.is_delivered = false)
+              AND (tc.status IS NULL OR tc.status NOT IN ('delivered', 'in_transit'))
             {search_condition}
             GROUP BY sc.tracking_number, sc.order_number, sc.customer_name,
                      sc.carrier_code, sc.ship_date, sc.shipstation_batch_number,
@@ -5365,6 +5378,20 @@ def stationary_parcels():
         prev_url = url_for('stationary_parcels', page=page-1, search=search_query, per_page=per_page, days=days_threshold) if has_prev else "#"
         next_url = url_for('stationary_parcels', page=page+1, search=search_query, per_page=per_page, days=days_threshold) if has_next else "#"
 
+        # Refresh tracking cache if user clicked "Refresh Tracking" button
+        if refresh_tracking and parcels:
+            all_tracking = [p["tracking_number"] for p in parcels if p.get("tracking_number")]
+            if all_tracking:
+                print(f"🔄 User requested refresh: force-refreshing {len(all_tracking)} stationary parcel tracking statuses...")
+                import threading
+                # Split into UPS and Canada Post
+                ups_tracking = [t for t in all_tracking if t.startswith("1Z")]
+                cp_tracking = [t for t in all_tracking if not t.startswith("1Z")]
+                if ups_tracking:
+                    threading.Thread(target=update_ups_tracking_cache, args=(ups_tracking[:50], True)).start()
+                if cp_tracking:
+                    threading.Thread(target=update_canadapost_tracking_cache, args=(cp_tracking[:30], True)).start()
+
         return render_template(
             "stationary_parcels.html",
             parcels=parcels,
@@ -5378,6 +5405,7 @@ def stationary_parcels():
             prev_url=prev_url,
             next_url=next_url,
             days_threshold=days_threshold,
+            refresh_tracking=refresh_tracking,
             version=__version__,
             active_page="stationary_parcels"
         )
