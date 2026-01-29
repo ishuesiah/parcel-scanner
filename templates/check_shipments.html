@@ -117,6 +117,12 @@
     <div class="tabs">
       <button class="tab-btn {{ 'active' if current_tab == 'shipments' else '' }}" onclick="switchTab('shipments')">All Shipments</button>
       <button class="tab-btn {{ 'active' if current_tab == 'batches' else '' }}" onclick="switchTab('batches')">ShipStation Batches</button>
+      <button class="tab-btn {{ 'active' if current_tab == 'stationary' else '' }}" onclick="switchTab('stationary')" style="color: {% if stationary_parcels|length > 0 %}#c62828{% else %}inherit{% endif %};">
+        Parcels Not Moving
+        {% if stationary_parcels|length > 0 %}
+          <span style="background: #c62828; color: white; padding: 2px 6px; border-radius: 10px; font-size: 0.7rem; margin-left: 4px;">{{ stationary_parcels|length }}</span>
+        {% endif %}
+      </button>
       {% for group in tracking_groups %}
         <button class="tab-btn {{ 'active' if current_tab == 'group_' ~ group.id|string else '' }}" onclick="switchTab('group_{{ group.id }}')">
           {{ group.name }}
@@ -370,6 +376,88 @@
             No shipped orders found in the last 90 days.
           {% endif %}
         </p>
+      {% endif %}
+    </div>
+
+    <!-- Tab: Parcels Not Moving -->
+    <div id="tab-stationary" class="tab-content {{ 'active' if current_tab == 'stationary' else '' }}">
+      <p style="margin-bottom: 16px; color: #666;">
+        Shipments that have been stuck at "Label Created" for 10+ days with no carrier movement.
+      </p>
+
+      {% if stationary_parcels %}
+        <table>
+          <thead>
+            <tr>
+              <th>Flag</th>
+              <th>Days</th>
+              <th>Order #</th>
+              <th>Customer</th>
+              <th>Tracking #</th>
+              <th>Carrier</th>
+              <th>Ship Date</th>
+              <th>Scanned?</th>
+              <th>Status</th>
+              <th>Last Activity</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for ship in stationary_parcels %}
+              <tr style="background: {% if ship.days_since_ship >= 14 %}rgba(198, 40, 40, 0.05){% else %}rgba(245, 124, 0, 0.03){% endif %};">
+                <td>
+                  {% if ship.days_since_ship >= 14 %}
+                    <span class="flag-critical" title="No movement for {{ ship.days_since_ship }} days!">🚨</span>
+                  {% else %}
+                    <span class="flag-warning" title="No movement for {{ ship.days_since_ship }} days">⚠️</span>
+                  {% endif %}
+                </td>
+                <td>
+                  <span style="background: {% if ship.days_since_ship >= 14 %}#ffebee{% else %}#fff8e1{% endif %}; color: {% if ship.days_since_ship >= 14 %}#c62828{% else %}#f57c00{% endif %}; padding: 4px 8px; border-radius: 8px; font-weight: 600; font-size: 0.85rem;">
+                    {{ ship.days_since_ship }}d
+                  </span>
+                </td>
+                <td>
+                  <a href="#" onclick="showOrderDetails('{{ ship.order_number }}'); return false;" class="customer-link">{{ ship.order_number }}</a>
+                </td>
+                <td>
+                  <a href="#" onclick="showOrderDetails('{{ ship.order_number }}'); return false;" class="customer-link">{{ ship.customer_name }}</a>
+                </td>
+                <td>{{ tracking_link(ship.tracking_number, ship.carrier) }}</td>
+                <td>{{ ship.carrier }}</td>
+                <td>{{ ship.ship_date }}</td>
+                <td>
+                  {% if ship.scanned %}
+                    <span style="color: #199b76;">✓ {{ ship.scan_date }}</span>
+                  {% else %}
+                    <span style="color: #666;">—</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if ship.tracking_url %}
+                    <a href="{{ ship.tracking_url }}" target="_blank" style="text-decoration: none;">
+                      <span class="status-badge status-hasnt_moved">😴 Hasn't Moved</span>
+                    </a>
+                  {% else %}
+                    <span class="status-badge status-hasnt_moved">😴 Hasn't Moved</span>
+                  {% endif %}
+                  <div class="progress-bar"><div class="progress-bar-fill progress-10"></div></div>
+                </td>
+                <td style="font-size: 0.85rem;">{{ ship.ups_last_activity or '—' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <p style="margin-top: 16px; color: #666; font-size: 0.9rem;">
+          Showing {{ stationary_parcels|length }} parcels not moving for 10+ days.
+        </p>
+      {% else %}
+        <div style="text-align: center; padding: 60px 20px; background: var(--bg-surface); border-radius: 12px; border: 1px solid var(--border-color);">
+          <div style="font-size: 3rem; margin-bottom: 16px;">🎉</div>
+          <h3 style="margin: 0 0 8px 0; color: var(--text-main);">No Stuck Parcels!</h3>
+          <p style="margin: 0; color: var(--text-muted);">
+            All parcels from the last 90 days are either delivered or in transit.
+          </p>
+        </div>
       {% endif %}
     </div>
 

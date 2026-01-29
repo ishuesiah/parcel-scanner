@@ -129,15 +129,6 @@
                 <span class="text-sm tracking-wide">All Scans</span>
               </a>
             </li>
-            <li>
-              <a href="{{ url_for('stationary_parcels') }}"
-                 class="sidebar-item flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group {% if active_page == 'stationary_parcels' %}bg-accent/15 text-accent{% else %}text-text-muted hover:bg-bg-main{% endif %}">
-                <svg xmlns="http://www.w3.org/2000/svg" class="w-[18px] h-[18px] {% if active_page == 'stationary_parcels' %}text-accent{% endif %}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10" /><path d="M12 6v6" /><path d="M16.24 16.24l-4.24-4.24" />
-                </svg>
-                <span class="text-sm tracking-wide">Parcels not moving</span>
-              </a>
-            </li>
           </ul>
 
           <div class="text-[10px] font-bold uppercase tracking-widest px-4 mb-3 mt-8 text-text-muted opacity-60">
