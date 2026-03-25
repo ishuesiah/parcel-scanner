@@ -1084,6 +1084,39 @@ def init_carrier_accounts():
         print(f"❌ Error initializing carrier accounts: {e}")
 
 
+def init_product_likes_table():
+    """
+    Initialize product_likes table for tracking product favorites/likes.
+    Used by Shopify storefront to track which products customers like.
+    """
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+
+        # Create product_likes table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS product_likes (
+                product_id VARCHAR(255) PRIMARY KEY,
+                like_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Create index for faster lookups
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_product_likes_count
+            ON product_likes(like_count DESC)
+        """)
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✓ product_likes table initialized")
+    except Exception as e:
+        print(f"❌ Error initializing product_likes table: {e}")
+
+
 def update_ups_tracking_cache(tracking_numbers, force_refresh=False):
     """
     Update UPS tracking cache for given tracking numbers.
@@ -1392,6 +1425,7 @@ init_shipments_cache()
 init_tracking_status_cache()
 init_tracking_groups()
 init_carrier_accounts()
+init_product_likes_table()
 init_orders_tables(get_db_connection)
 normalize_table_collations()
 
@@ -9222,6 +9256,115 @@ def api_cancel_order(order_number):
             cursor.close()
         except Exception:
             pass
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Product Likes API ──
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/likes/<product_id>', methods=['GET'])
+def get_product_likes(product_id):
+    """
+    Get like count for a product.
+    Used by Shopify product pages to display favorite/like count.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT like_count FROM product_likes WHERE product_id = %s",
+            (product_id,)
+        )
+        result = cursor.fetchone()
+
+        if result:
+            return jsonify({'product_id': product_id, 'likes': result['like_count']})
+        else:
+            return jsonify({'product_id': product_id, 'likes': 0})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.route('/api/likes/<product_id>', methods=['POST'])
+def increment_product_likes(product_id):
+    """
+    Increment like count for a product (user liked).
+    Returns the new like count.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        # Use INSERT ... ON DUPLICATE KEY to handle first-time likes
+        cursor.execute("""
+            INSERT INTO product_likes (product_id, like_count, updated_at)
+            VALUES (%s, 1, CURRENT_TIMESTAMP)
+            ON DUPLICATE KEY UPDATE
+                like_count = like_count + 1,
+                updated_at = CURRENT_TIMESTAMP
+        """, (product_id,))
+
+        # Get the new count
+        cursor.execute("SELECT like_count FROM product_likes WHERE product_id = %s", (product_id,))
+        result = cursor.fetchone()
+        new_count = result['like_count'] if result else 1
+
+        conn.commit()
+
+        return jsonify({
+            'product_id': product_id,
+            'likes': new_count,
+            'success': True
+        })
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e), 'success': False}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+
+@app.route('/api/likes/<product_id>', methods=['DELETE'])
+def decrement_product_likes(product_id):
+    """
+    Decrement like count for a product (user unliked).
+    Returns the new like count.
+    """
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE product_likes
+            SET like_count = GREATEST(like_count - 1, 0),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE product_id = %s
+        """, (product_id,))
+
+        # Get the new count
+        cursor.execute("SELECT like_count FROM product_likes WHERE product_id = %s", (product_id,))
+        result = cursor.fetchone()
+
+        if result:
+            conn.commit()
+            return jsonify({
+                'product_id': product_id,
+                'likes': result['like_count'],
+                'success': True
+            })
+        else:
+            return jsonify({
+                'product_id': product_id,
+                'likes': 0,
+                'success': True
+            })
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e), 'success': False}), 500
+    finally:
+        cursor.close()
         conn.close()
 
 
