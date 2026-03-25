@@ -52,6 +52,7 @@ from flask import (
     session,
     jsonify
 )
+from flask_cors import CORS
 import psycopg2
 import psycopg2.extras
 from datetime import datetime, timedelta, timezone
@@ -119,6 +120,20 @@ from address_utils import is_po_box, check_po_box_compatibility  # PO Box detect
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
+
+# ── CORS Configuration ──
+# Allow Shopify domains to access product likes API
+CORS(app, resources={
+    r"/api/likes/*": {
+        "origins": [
+            "https://hemlockandoak.com",
+            "https://www.hemlockandoak.com",
+            "https://hemlock-oak.myshopify.com"
+        ],
+        "methods": ["GET", "POST", "DELETE"],
+        "allow_headers": ["Content-Type"]
+    }
+})
 
 # Trust proxy headers (Kinsta/cloud providers terminate SSL at the proxy)
 # This ensures url_for generates https:// URLs
