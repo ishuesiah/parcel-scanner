@@ -9384,6 +9384,400 @@ def decrement_product_likes(product_id):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ── Referral Program (Supabase Database) ──
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_referral_db_connection():
+    """Get connection to the Supabase referral database."""
+    referral_db_url = os.environ.get("REFERRAL_DATABASE_URL")
+    if not referral_db_url:
+        raise Exception("REFERRAL_DATABASE_URL not configured")
+    conn = psycopg2.connect(referral_db_url, cursor_factory=psycopg2.extras.RealDictCursor)
+    return conn
+
+
+@app.route('/referral-program')
+def referral_program():
+    """Referral program management page."""
+    return render_template('referral_program.html', active_page='referral_program')
+
+
+@app.route('/api/referral/stats', methods=['GET'])
+def get_referral_stats():
+    """Get referral program statistics from Supabase."""
+    try:
+        conn = get_referral_db_connection()
+        cursor = conn.cursor()
+
+        # Total users
+        cursor.execute("SELECT COUNT(*) as count FROM users")
+        total_users = cursor.fetchone()['count']
+
+        # Active users (users with points > 0)
+        cursor.execute("SELECT COUNT(*) as count FROM users WHERE points > 0")
+        active_users = cursor.fetchone()['count']
+
+        # Total points
+        cursor.execute("SELECT COALESCE(SUM(points), 0) as total FROM users")
+        total_points = cursor.fetchone()['total']
+
+        # Total referrals
+        cursor.execute("SELECT COALESCE(SUM(referral_count), 0) as total FROM users")
+        total_referrals = cursor.fetchone()['total']
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'stats': {
+                'total_users': total_users,
+                'active_users': active_users,
+                'total_points': int(total_points),
+                'total_referrals': int(total_referrals)
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/referral/users', methods=['GET'])
+def get_referral_users():
+    """Get referral users with pagination, search, and sorting from Supabase."""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    search = request.args.get('search', '').strip()
+    sort_by = request.args.get('sort_by', 'points')
+    sort_dir = request.args.get('sort_dir', 'desc')
+
+    # Validate sort parameters
+    allowed_sorts = ['points', 'total_spent', 'created_at', 'email', 'referral_count']
+    if sort_by not in allowed_sorts:
+        sort_by = 'points'
+    if sort_dir not in ['asc', 'desc']:
+        sort_dir = 'desc'
+
+    try:
+        conn = get_referral_db_connection()
+        cursor = conn.cursor()
+
+        # Build query
+        where_clause = ""
+        params = []
+
+        if search:
+            where_clause = """
+                WHERE email ILIKE %s
+                OR first_name ILIKE %s
+                OR last_name ILIKE %s
+                OR referral_code ILIKE %s
+            """
+            search_param = f"%{search}%"
+            params = [search_param, search_param, search_param, search_param]
+
+        # Get total count
+        count_query = f"SELECT COUNT(*) as count FROM users {where_clause}"
+        cursor.execute(count_query, params)
+        total = cursor.fetchone()['count']
+
+        # Get users
+        offset = (page - 1) * per_page
+        query = f"""
+            SELECT user_id, email, first_name, last_name, referral_code,
+                   points, tier, total_spent, referral_count, created_at
+            FROM users
+            {where_clause}
+            ORDER BY {sort_by} {sort_dir.upper()} NULLS LAST
+            LIMIT %s OFFSET %s
+        """
+        cursor.execute(query, params + [per_page, offset])
+        users = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        # Convert to list of dicts
+        users_list = []
+        for u in users:
+            users_list.append({
+                'user_id': u['user_id'],
+                'email': u['email'],
+                'first_name': u['first_name'],
+                'last_name': u['last_name'],
+                'referral_code': u['referral_code'],
+                'points': u['points'] or 0,
+                'tier': u['tier'],
+                'total_spent': float(u['total_spent']) if u['total_spent'] else 0,
+                'referral_count': u['referral_count'] or 0,
+                'created_at': u['created_at'].isoformat() if u['created_at'] else None
+            })
+
+        total_pages = (total + per_page - 1) // per_page if total > 0 else 1
+
+        return jsonify({
+            'success': True,
+            'users': users_list,
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+            'total_pages': total_pages
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/referral/users/<int:user_id>/points', methods=['POST'])
+def adjust_referral_points(user_id):
+    """Adjust points for a user (add or remove) in Supabase."""
+    data = request.get_json()
+    amount = data.get('amount', 0)
+    reason = data.get('reason', 'Admin adjustment')
+
+    if not isinstance(amount, int):
+        return jsonify({'success': False, 'error': 'Amount must be an integer'}), 400
+
+    try:
+        conn = get_referral_db_connection()
+        cursor = conn.cursor()
+
+        # Check user exists and get current points
+        cursor.execute("SELECT email, points FROM users WHERE user_id = %s", (user_id,))
+        user = cursor.fetchone()
+        if not user:
+            cursor.close()
+            conn.close()
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+
+        # Calculate new points (don't go below 0)
+        new_points = max(0, (user['points'] or 0) + amount)
+
+        # Update points
+        cursor.execute("""
+            UPDATE users SET points = %s WHERE user_id = %s
+        """, (new_points, user_id))
+
+        # Log action
+        action_type = 'admin_add' if amount > 0 else 'admin_remove'
+        cursor.execute("""
+            INSERT INTO user_actions (user_id, action_type, points_awarded, action_ref)
+            VALUES (%s, %s, %s, %s)
+        """, (user_id, action_type, amount, reason))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'new_points': new_points,
+            'email': user['email']
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/referral/users/<int:user_id>/redeem', methods=['POST'])
+def redeem_referral_points(user_id):
+    """Redeem points for a discount code via Shopify GraphQL API."""
+    data = request.get_json()
+    points_to_redeem = data.get('points', 500)
+
+    # Calculate discount value (100 points = $1)
+    discount_value = points_to_redeem / 100
+
+    try:
+        conn = get_referral_db_connection()
+        cursor = conn.cursor()
+
+        # Check user exists and has enough points
+        cursor.execute("SELECT email, points FROM users WHERE user_id = %s FOR UPDATE", (user_id,))
+        user = cursor.fetchone()
+        if not user:
+            cursor.close()
+            conn.close()
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+
+        current_points = user['points'] or 0
+        if current_points < points_to_redeem:
+            cursor.close()
+            conn.close()
+            return jsonify({'success': False, 'error': f'Not enough points. User has {current_points} points.'}), 400
+
+        # Create discount code via Shopify GraphQL API
+        shop_domain = os.environ.get("SHOP_URL", "hemlock-oak.myshopify.com")
+        shopify_token = os.environ.get("SHOPIFY_ACCESS_TOKEN")
+
+        if not shopify_token:
+            cursor.close()
+            conn.close()
+            return jsonify({'success': False, 'error': 'Shopify API not configured'}), 500
+
+        # Generate unique discount code
+        import random
+        import string
+        code_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+        discount_code = f"POINTS{int(discount_value)}CAD_{code_suffix}"
+
+        # Shopify GraphQL mutation
+        mutation = """
+            mutation discountCodeBasicCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
+              discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
+                codeDiscountNode {
+                  id
+                  codeDiscount {
+                    ... on DiscountCodeBasic {
+                      codes(first: 1) { nodes { code } }
+                    }
+                  }
+                }
+                userErrors { field message }
+              }
+            }
+        """
+
+        variables = {
+            "basicCodeDiscount": {
+                "title": f"${int(discount_value)} Off Points Reward",
+                "code": discount_code,
+                "startsAt": datetime.utcnow().isoformat() + "Z",
+                "customerSelection": {"all": True},
+                "customerGets": {
+                    "value": {
+                        "discountAmount": {
+                            "amount": str(discount_value),
+                            "appliesOnEachItem": False
+                        }
+                    },
+                    "items": {"all": True}
+                },
+                "combinesWith": {
+                    "orderDiscounts": True,
+                    "productDiscounts": True,
+                    "shippingDiscounts": True
+                },
+                "usageLimit": 1,
+                "appliesOncePerCustomer": True
+            }
+        }
+
+        graphql_url = f"https://{shop_domain}/admin/api/2024-01/graphql.json"
+        response = requests.post(
+            graphql_url,
+            headers={
+                "Content-Type": "application/json",
+                "X-Shopify-Access-Token": shopify_token
+            },
+            json={"query": mutation, "variables": variables},
+            timeout=30
+        )
+
+        result = response.json()
+
+        if result.get('errors') or result.get('data', {}).get('discountCodeBasicCreate', {}).get('userErrors'):
+            print(f"Shopify discount error: {result}")
+            cursor.close()
+            conn.close()
+            return jsonify({'success': False, 'error': 'Failed to create Shopify discount code'}), 500
+
+        # Deduct points
+        new_points = current_points - points_to_redeem
+        cursor.execute("UPDATE users SET points = %s WHERE user_id = %s", (new_points, user_id))
+
+        # Log action
+        cursor.execute("""
+            INSERT INTO user_actions (user_id, action_type, points_awarded, action_ref)
+            VALUES (%s, %s, %s, %s)
+        """, (user_id, 'redeem', -points_to_redeem, discount_code))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'discount_code': discount_code,
+            'discount_value': int(discount_value),
+            'points_redeemed': points_to_redeem,
+            'new_points': new_points
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/referral/users/<int:user_id>/actions', methods=['GET'])
+def get_referral_user_actions(user_id):
+    """Get action history for a user from Supabase."""
+    try:
+        conn = get_referral_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT action_id, action_type, points_awarded, action_ref, created_at
+            FROM user_actions
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+            LIMIT 100
+        """, (user_id,))
+
+        actions = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        actions_list = []
+        for a in actions:
+            actions_list.append({
+                'action_id': a['action_id'],
+                'action_type': a['action_type'],
+                'points_awarded': a['points_awarded'],
+                'action_ref': a['action_ref'],
+                'created_at': a['created_at'].isoformat() if a['created_at'] else None
+            })
+
+        return jsonify({
+            'success': True,
+            'actions': actions_list
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/referral/users/<int:user_id>', methods=['DELETE'])
+def delete_referral_user(user_id):
+    """Delete a referral user and their action history from Supabase."""
+    try:
+        conn = get_referral_db_connection()
+        cursor = conn.cursor()
+
+        # Get user email for response
+        cursor.execute("SELECT email FROM users WHERE user_id = %s", (user_id,))
+        user = cursor.fetchone()
+        if not user:
+            cursor.close()
+            conn.close()
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+
+        email = user['email']
+
+        # Delete actions first (foreign key constraint)
+        cursor.execute("DELETE FROM user_actions WHERE user_id = %s", (user_id,))
+
+        # Delete user
+        cursor.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            'success': True,
+            'email': email,
+            'message': f'User {email} deleted successfully'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ── Initialize Background Scheduler ──
 # ══════════════════════════════════════════════════════════════════════════════
 # Start the background scheduler for automatic tracking updates.
