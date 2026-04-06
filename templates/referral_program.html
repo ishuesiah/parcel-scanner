@@ -1,0 +1,828 @@
+{% extends "base.html" %}
+
+{% block title %}Referral Program - Parcel Scanner{% endblock %}
+
+{% block extra_styles %}
+<style>
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .stat-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 20px;
+  }
+
+  .stat-card .label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+
+  .stat-card .value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--text-main);
+  }
+
+  .stat-card .value.accent {
+    color: var(--accent);
+  }
+
+  .controls-bar {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .search-input {
+    flex: 1;
+    min-width: 250px;
+    padding: 10px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 0.9rem;
+    background: var(--bg-surface);
+  }
+
+  .search-input:focus {
+    outline: none;
+    border-color: var(--secondary);
+    box-shadow: 0 0 0 3px rgba(81, 106, 236, 0.1);
+  }
+
+  .users-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--bg-surface);
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+  }
+
+  .users-table th {
+    background: var(--bg-main);
+    padding: 14px 16px;
+    text-align: left;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .users-table td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.9rem;
+  }
+
+  .users-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .users-table tr:hover {
+    background: var(--bg-main);
+  }
+
+  .tier-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .tier-bronze { background: #cd7f32; color: white; }
+  .tier-silver { background: #c0c0c0; color: #333; }
+  .tier-gold { background: #ffd700; color: #333; }
+  .tier-vip { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+
+  .points-display {
+    font-weight: 600;
+    color: var(--secondary);
+  }
+
+  .actions-cell {
+    display: flex;
+    gap: 6px;
+  }
+
+  .action-btn {
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .action-btn.add { background: #e8f5e9; color: #2e7d32; }
+  .action-btn.add:hover { background: #c8e6c9; }
+
+  .action-btn.remove { background: #fff3e0; color: #e65100; }
+  .action-btn.remove:hover { background: #ffe0b2; }
+
+  .action-btn.discount { background: #e3f2fd; color: #1565c0; }
+  .action-btn.discount:hover { background: #bbdefb; }
+
+  .action-btn.history { background: #f3e5f5; color: #7b1fa2; }
+  .action-btn.history:hover { background: #e1bee7; }
+
+  .action-btn.delete { background: #ffebee; color: #c62828; }
+  .action-btn.delete:hover { background: #ffcdd2; }
+
+  .pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    margin-top: 20px;
+  }
+
+  .pagination button {
+    padding: 8px 16px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-surface);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+
+  .pagination button:hover:not(:disabled) {
+    background: var(--bg-main);
+    border-color: var(--secondary);
+  }
+
+  .pagination button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .pagination .page-info {
+    padding: 8px 16px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  /* Modal Styles */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .modal-overlay.active {
+    display: flex;
+  }
+
+  .modal {
+    background: var(--bg-surface);
+    border-radius: 12px;
+    width: 90%;
+    max-width: 500px;
+    max-height: 80vh;
+    overflow: hidden;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+  }
+
+  .modal-header {
+    padding: 20px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .modal-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+  }
+
+  .modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 0;
+    line-height: 1;
+  }
+
+  .modal-body {
+    padding: 20px;
+    overflow-y: auto;
+    max-height: 50vh;
+  }
+
+  .modal-footer {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .form-group input,
+  .form-group select,
+  .form-group textarea {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 0.9rem;
+    background: var(--bg-surface);
+  }
+
+  .btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-primary {
+    background: var(--secondary);
+    color: white;
+  }
+
+  .btn-primary:hover {
+    background: #4054b2;
+  }
+
+  .btn-secondary {
+    background: var(--bg-main);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+  }
+
+  .btn-danger {
+    background: var(--cancel-btn);
+    color: white;
+  }
+
+  .history-item {
+    padding: 12px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.85rem;
+  }
+
+  .history-item:last-child {
+    border-bottom: none;
+  }
+
+  .history-item .type {
+    font-weight: 600;
+    color: var(--secondary);
+  }
+
+  .history-item .points {
+    font-weight: 600;
+  }
+
+  .history-item .points.positive { color: #2e7d32; }
+  .history-item .points.negative { color: #c62828; }
+
+  .history-item .date {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+  }
+
+  .referral-code {
+    font-family: monospace;
+    background: var(--bg-main);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+  }
+
+  .loading-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--secondary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header mb-6 flex justify-between items-start">
+  <div>
+    <h1 class="text-2xl font-bold text-text-main">Referral Program</h1>
+    <p class="text-text-muted mt-1">Manage users, points, and discount codes</p>
+  </div>
+</div>
+
+<!-- Stats Cards -->
+<div class="stats-grid" id="statsGrid">
+  <div class="stat-card">
+    <div class="label">Total Users</div>
+    <div class="value" id="statTotalUsers">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Active Users</div>
+    <div class="value" id="statActiveUsers">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Total Points</div>
+    <div class="value accent" id="statTotalPoints">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">Total Referrals</div>
+    <div class="value" id="statTotalReferrals">-</div>
+  </div>
+</div>
+
+<!-- Controls -->
+<div class="controls-bar">
+  <input type="text" class="search-input" id="searchInput" placeholder="Search by email, name, or referral code...">
+  <select id="sortSelect" class="search-input" style="flex: 0 0 200px; min-width: 200px;">
+    <option value="points-desc">Points (High to Low)</option>
+    <option value="points-asc">Points (Low to High)</option>
+    <option value="total_spent-desc">Spent (High to Low)</option>
+    <option value="total_spent-asc">Spent (Low to High)</option>
+    <option value="created_at-desc">Newest First</option>
+    <option value="created_at-asc">Oldest First</option>
+    <option value="email-asc">Email (A-Z)</option>
+  </select>
+  <button class="btn btn-secondary" onclick="loadUsers()">Refresh</button>
+</div>
+
+<!-- Users Table -->
+<div id="usersTableContainer">
+  <table class="users-table">
+    <thead>
+      <tr>
+        <th>User</th>
+        <th>Referral Code</th>
+        <th>Points</th>
+        <th>Tier</th>
+        <th>Total Spent</th>
+        <th>Referrals</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="usersTableBody">
+      <tr><td colspan="7" class="empty-state">Loading...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Pagination -->
+<div class="pagination" id="pagination">
+  <button id="prevBtn" onclick="changePage(-1)" disabled>Previous</button>
+  <span class="page-info" id="pageInfo">Page 1</span>
+  <button id="nextBtn" onclick="changePage(1)">Next</button>
+</div>
+
+<!-- Points Modal -->
+<div class="modal-overlay" id="pointsModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="pointsModalTitle">Adjust Points</h3>
+      <button class="modal-close" onclick="closeModal('pointsModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="pointsUserInfo" style="margin-bottom: 16px; color: var(--text-muted);"></p>
+      <div class="form-group">
+        <label>Amount</label>
+        <input type="number" id="pointsAmount" placeholder="Enter positive or negative amount">
+      </div>
+      <div class="form-group">
+        <label>Reason</label>
+        <input type="text" id="pointsReason" placeholder="e.g., Customer service adjustment">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('pointsModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitPointsAdjustment()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Discount Modal -->
+<div class="modal-overlay" id="discountModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Create Discount Code</h3>
+      <button class="modal-close" onclick="closeModal('discountModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="discountUserInfo" style="margin-bottom: 16px; color: var(--text-muted);"></p>
+      <div class="form-group">
+        <label>Points to Redeem</label>
+        <select id="discountPoints">
+          <option value="500">500 points = $5 off</option>
+          <option value="1000">1,000 points = $10 off</option>
+          <option value="2500">2,500 points = $25 off</option>
+          <option value="5000">5,000 points = $50 off</option>
+        </select>
+      </div>
+      <p id="discountUserPoints" style="font-size: 0.85rem; color: var(--text-muted);"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('discountModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitDiscountCreation()">Create Code</button>
+    </div>
+  </div>
+</div>
+
+<!-- History Modal -->
+<div class="modal-overlay" id="historyModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="historyModalTitle">Action History</h3>
+      <button class="modal-close" onclick="closeModal('historyModal')">&times;</button>
+    </div>
+    <div class="modal-body" id="historyContent">
+      Loading...
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('historyModal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal-overlay" id="deleteModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Confirm Delete</h3>
+      <button class="modal-close" onclick="closeModal('deleteModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="deleteUserInfo">Are you sure you want to delete this user? This action cannot be undone.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('deleteModal')">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmDelete()">Delete User</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // State
+  let currentPage = 1;
+  let totalPages = 1;
+  let currentSearch = '';
+  let currentSort = 'points';
+  let currentSortDir = 'desc';
+  let selectedUserId = null;
+  let selectedUserEmail = '';
+  let selectedUserPoints = 0;
+
+  // Debounce helper
+  function debounce(func, wait) {
+    let timeout;
+    return function(...args) {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func.apply(this, args), wait);
+    };
+  }
+
+  // Format numbers with commas
+  function formatNumber(num) {
+    return num ? num.toLocaleString() : '0';
+  }
+
+  // Load stats
+  async function loadStats() {
+    try {
+      const res = await fetch('/api/referral/stats');
+      const data = await res.json();
+
+      if (data.success) {
+        document.getElementById('statTotalUsers').textContent = formatNumber(data.stats.total_users);
+        document.getElementById('statActiveUsers').textContent = formatNumber(data.stats.active_users);
+        document.getElementById('statTotalPoints').textContent = formatNumber(data.stats.total_points);
+        document.getElementById('statTotalReferrals').textContent = formatNumber(data.stats.total_referrals);
+      }
+    } catch (e) {
+      console.error('Error loading stats:', e);
+    }
+  }
+
+  // Load users
+  async function loadUsers() {
+    const tbody = document.getElementById('usersTableBody');
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><div class="loading-spinner"></div> Loading...</td></tr>';
+
+    try {
+      const params = new URLSearchParams({
+        page: currentPage,
+        per_page: 50,
+        search: currentSearch,
+        sort_by: currentSort,
+        sort_dir: currentSortDir
+      });
+
+      const res = await fetch(`/api/referral/users?${params}`);
+      const data = await res.json();
+
+      if (data.success) {
+        totalPages = data.total_pages;
+        updatePagination();
+        renderUsers(data.users);
+      } else {
+        tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Error: ${data.error}</td></tr>`;
+      }
+    } catch (e) {
+      console.error('Error loading users:', e);
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Error loading users</td></tr>';
+    }
+  }
+
+  // Render users table
+  function renderUsers(users) {
+    const tbody = document.getElementById('usersTableBody');
+
+    if (users.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No users found</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = users.map(user => {
+      const tierClass = user.tier ? `tier-${user.tier.toLowerCase()}` : '';
+      const totalSpent = user.total_spent ? `$${parseFloat(user.total_spent).toFixed(2)}` : '$0.00';
+      const displayName = [user.first_name, user.last_name].filter(Boolean).join(' ') || 'Unknown';
+
+      return `
+        <tr data-user-id="${user.user_id}">
+          <td>
+            <div><strong>${displayName}</strong></div>
+            <div style="font-size: 0.8rem; color: var(--text-muted);">${user.email}</div>
+          </td>
+          <td><span class="referral-code">${user.referral_code || '-'}</span></td>
+          <td><span class="points-display">${formatNumber(user.points)}</span></td>
+          <td>${user.tier ? `<span class="tier-badge ${tierClass}">${user.tier}</span>` : '-'}</td>
+          <td>${totalSpent}</td>
+          <td>${user.referral_count || 0}</td>
+          <td>
+            <div class="actions-cell">
+              <button class="action-btn add" onclick="openPointsModal(${user.user_id}, '${user.email}', ${user.points}, 'add')" title="Add Points">+</button>
+              <button class="action-btn remove" onclick="openPointsModal(${user.user_id}, '${user.email}', ${user.points}, 'remove')" title="Remove Points">-</button>
+              <button class="action-btn discount" onclick="openDiscountModal(${user.user_id}, '${user.email}', ${user.points})" title="Create Discount">$</button>
+              <button class="action-btn history" onclick="openHistoryModal(${user.user_id}, '${user.email}')" title="View History">H</button>
+              <button class="action-btn delete" onclick="openDeleteModal(${user.user_id}, '${user.email}')" title="Delete User">X</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  // Pagination
+  function updatePagination() {
+    document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${totalPages || 1}`;
+    document.getElementById('prevBtn').disabled = currentPage <= 1;
+    document.getElementById('nextBtn').disabled = currentPage >= totalPages;
+  }
+
+  function changePage(delta) {
+    const newPage = currentPage + delta;
+    if (newPage >= 1 && newPage <= totalPages) {
+      currentPage = newPage;
+      loadUsers();
+    }
+  }
+
+  // Modal helpers
+  function openModal(id) {
+    document.getElementById(id).classList.add('active');
+  }
+
+  function closeModal(id) {
+    document.getElementById(id).classList.remove('active');
+  }
+
+  // Points modal
+  function openPointsModal(userId, email, points, mode) {
+    selectedUserId = userId;
+    selectedUserEmail = email;
+    selectedUserPoints = points;
+    document.getElementById('pointsModalTitle').textContent = mode === 'add' ? 'Add Points' : 'Remove Points';
+    document.getElementById('pointsUserInfo').textContent = `User: ${email} (Current: ${formatNumber(points)} points)`;
+    document.getElementById('pointsAmount').value = mode === 'add' ? '100' : '-100';
+    document.getElementById('pointsReason').value = '';
+    openModal('pointsModal');
+  }
+
+  async function submitPointsAdjustment() {
+    const amount = parseInt(document.getElementById('pointsAmount').value);
+    const reason = document.getElementById('pointsReason').value || 'Admin adjustment';
+
+    if (isNaN(amount) || amount === 0) {
+      alert('Please enter a valid amount');
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/referral/users/${selectedUserId}/points`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount, reason })
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        closeModal('pointsModal');
+        loadUsers();
+        loadStats();
+        alert(`Points updated! New balance: ${formatNumber(data.new_points)}`);
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (e) {
+      alert('Error adjusting points');
+    }
+  }
+
+  // Discount modal
+  function openDiscountModal(userId, email, points) {
+    selectedUserId = userId;
+    selectedUserEmail = email;
+    selectedUserPoints = points;
+    document.getElementById('discountUserInfo').textContent = `Create discount code for: ${email}`;
+    document.getElementById('discountUserPoints').textContent = `Available points: ${formatNumber(points)}`;
+    document.getElementById('discountPoints').value = '500';
+    openModal('discountModal');
+  }
+
+  async function submitDiscountCreation() {
+    const pointsToRedeem = parseInt(document.getElementById('discountPoints').value);
+
+    if (pointsToRedeem > selectedUserPoints) {
+      alert(`Not enough points. User has ${formatNumber(selectedUserPoints)} points.`);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/referral/users/${selectedUserId}/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ points: pointsToRedeem })
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        closeModal('discountModal');
+        loadUsers();
+        loadStats();
+        alert(`Discount code created: ${data.discount_code}\n\nAmount: $${data.discount_value} off`);
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (e) {
+      alert('Error creating discount code');
+    }
+  }
+
+  // History modal
+  async function openHistoryModal(userId, email) {
+    selectedUserId = userId;
+    document.getElementById('historyModalTitle').textContent = `History: ${email}`;
+    document.getElementById('historyContent').innerHTML = '<div class="loading-spinner"></div> Loading...';
+    openModal('historyModal');
+
+    try {
+      const res = await fetch(`/api/referral/users/${userId}/actions`);
+      const data = await res.json();
+
+      if (data.success) {
+        if (data.actions.length === 0) {
+          document.getElementById('historyContent').innerHTML = '<p class="empty-state">No actions found</p>';
+        } else {
+          document.getElementById('historyContent').innerHTML = data.actions.map(a => {
+            const pointsClass = a.points_awarded > 0 ? 'positive' : (a.points_awarded < 0 ? 'negative' : '');
+            const pointsSign = a.points_awarded > 0 ? '+' : '';
+            return `
+              <div class="history-item">
+                <div><span class="type">${a.action_type}</span> - <span class="points ${pointsClass}">${pointsSign}${formatNumber(a.points_awarded)} pts</span></div>
+                ${a.action_ref ? `<div style="font-size: 0.8rem;">${a.action_ref}</div>` : ''}
+                <div class="date">${new Date(a.created_at).toLocaleString()}</div>
+              </div>
+            `;
+          }).join('');
+        }
+      }
+    } catch (e) {
+      document.getElementById('historyContent').innerHTML = 'Error loading history';
+    }
+  }
+
+  // Delete modal
+  function openDeleteModal(userId, email) {
+    selectedUserId = userId;
+    selectedUserEmail = email;
+    document.getElementById('deleteUserInfo').innerHTML = `
+      Are you sure you want to delete <strong>${email}</strong>?<br><br>
+      This will permanently remove the user and all their action history. This cannot be undone.
+    `;
+    openModal('deleteModal');
+  }
+
+  async function confirmDelete() {
+    try {
+      const res = await fetch(`/api/referral/users/${selectedUserId}`, {
+        method: 'DELETE'
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        closeModal('deleteModal');
+        loadUsers();
+        loadStats();
+        alert(`User deleted successfully`);
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (e) {
+      alert('Error deleting user');
+    }
+  }
+
+  // Event listeners
+  document.getElementById('searchInput').addEventListener('input', debounce(function(e) {
+    currentSearch = e.target.value;
+    currentPage = 1;
+    loadUsers();
+  }, 300));
+
+  document.getElementById('sortSelect').addEventListener('change', function(e) {
+    const [sort, dir] = e.target.value.split('-');
+    currentSort = sort;
+    currentSortDir = dir;
+    currentPage = 1;
+    loadUsers();
+  });
+
+  // Close modal on overlay click
+  document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', function(e) {
+      if (e.target === this) {
+        this.classList.remove('active');
+      }
+    });
+  });
+
+  // Init
+  document.addEventListener('DOMContentLoaded', function() {
+    loadStats();
+    loadUsers();
+  });
+</script>
+{% endblock %}
