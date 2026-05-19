@@ -1,0 +1,649 @@
+{% extends "base.html" %}
+
+{% block title %}Sticker Pre-Orders - H&O Parcel Scans{% endblock %}
+
+{% block extra_styles %}
+  .sp-section {
+    background: white;
+    padding: 24px;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    margin-bottom: 24px;
+  }
+  .sp-section h3 {
+    font-size: 1.15rem;
+    color: #34495e;
+    margin-bottom: 14px;
+  }
+  .sp-section .sp-section-sub {
+    font-size: 13px;
+    color: #7a7a7a;
+    margin-bottom: 16px;
+  }
+
+  .sp-upload-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+  }
+  .sp-upload-row input[type="file"] {
+    flex: 1 1 320px;
+    padding: 9px 10px;
+    border: 1px dashed #c8d0d8;
+    border-radius: 6px;
+    background: #fafbfc;
+  }
+
+  .sp-batch-selector {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  .sp-batch-selector select {
+    flex: 1 1 360px;
+    min-width: 240px;
+    padding: 8px 10px;
+    border: 1px solid #d9e0e6;
+    border-radius: 6px;
+    background: #fff;
+  }
+
+  .sp-batch-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    font-size: 13px;
+    color: #555;
+    margin-bottom: 18px;
+  }
+  .sp-batch-meta .sp-stat {
+    background: #f4f7fa;
+    border-radius: 6px;
+    padding: 8px 14px;
+  }
+  .sp-batch-meta .sp-stat strong {
+    display: block;
+    font-size: 18px;
+    color: #199b76;
+    margin-bottom: 2px;
+  }
+  .sp-batch-meta .sp-stat-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #888;
+  }
+
+  .sp-tally-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+  }
+  .sp-tally-table th,
+  .sp-tally-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #eef0f2;
+    text-align: left;
+    vertical-align: top;
+  }
+  .sp-tally-table th {
+    background: #fafbfc;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6b7280;
+  }
+  .sp-tally-qty {
+    font-weight: 700;
+    font-size: 16px;
+    color: #199b76;
+  }
+  .sp-tally-sku { font-family: monospace; font-size: 12px; color: #555; }
+
+  .sp-empty {
+    padding: 32px;
+    text-align: center;
+    color: #888;
+    background: #fafbfc;
+    border-radius: 6px;
+  }
+
+  .sp-collapsible-header {
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 20px;
+    background: #f4f7fa;
+    border-radius: 6px;
+    font-weight: 600;
+    color: #34495e;
+    margin-bottom: 0;
+    transition: background 0.15s;
+  }
+  .sp-collapsible-header:hover { background: #eaf0f5; }
+  .sp-collapsible-content {
+    background: #fff;
+    border: 1px solid #eef0f2;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    padding: 20px;
+    margin-bottom: 24px;
+  }
+  .sp-collapsible-content.hidden { display: none; }
+  .sp-caret { transition: transform 0.15s; }
+  .sp-collapsible-header.collapsed .sp-caret { transform: rotate(-90deg); }
+
+  .sp-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 14px 0 16px;
+  }
+  .sp-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: #fff;
+    border: 1px solid #E2E8E6;
+    color: #141f3d;
+    font-size: 12px;
+    font-weight: 500;
+    text-decoration: none;
+  }
+  .sp-chip:hover { background: #f9fafa; }
+  .sp-chip.active { background: #516aec; border-color: #516aec; color: #fff; }
+  .sp-chip .sp-chip-count {
+    background: rgba(0,0,0,0.06);
+    border-radius: 999px;
+    padding: 1px 7px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .sp-chip.active .sp-chip-count { background: rgba(255,255,255,0.25); }
+
+  .sp-status-pill {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .sp-status-needed    { background: #fff4e5; color: #b76e00; }
+  .sp-status-applied   { background: #e6f4ff; color: #1e6091; }
+  .sp-status-shipped   { background: #e6f7ee; color: #199b76; }
+  .sp-status-cancelled { background: #f1f1f1; color: #6b6b6b; text-decoration: line-through; }
+
+  .sp-row-action-btn {
+    padding: 5px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    background: #f9fafa;
+    color: #141f3d;
+    cursor: pointer;
+    font-weight: 500;
+    margin-right: 4px;
+  }
+  .sp-row-action-btn:hover { background: #e2e8e6; }
+  .sp-row-action-btn.primary { background: #199b76; color: #fff; }
+  .sp-row-action-btn.secondary { background: #516aec; color: #fff; }
+  .sp-row-action-btn.danger { background: #952746; color: #fff; }
+  .sp-row-action-btn.primary:hover,
+  .sp-row-action-btn.secondary:hover,
+  .sp-row-action-btn.danger:hover { opacity: 0.9; }
+
+  .sp-cell-muted { color: #888; font-size: 12px; }
+  .sp-meta-line  { font-size: 11px; color: #999; margin-top: 2px; }
+  .sp-notes {
+    font-size: 12px;
+    color: #555;
+    max-width: 260px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .sp-inline-actions { display: flex; flex-wrap: wrap; align-items: center; }
+
+  .sp-delete-batch-btn {
+    background: transparent;
+    color: #952746;
+    border: 1px solid #f0d0d8;
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .sp-delete-batch-btn:hover { background: #fff0f3; }
+{% endblock %}
+
+{% block content %}
+    <h2>Sticker Pre-Orders</h2>
+    <p style="margin-bottom: 20px; color: #666;">
+      Live view of synced Shopify orders containing line items whose product name matches
+      <strong>{{ sticker_keywords | join(', ') }}</strong>
+      (case-insensitive, substring match). Sync runs every 2 minutes.
+      Edit keywords in <a href="{{ url_for('settings_page') }}">Settings → Sticker Tracking</a>.
+    </p>
+
+    <!-- ─── LIVE FROM SHOPIFY ─────────────────────────────────────────────── -->
+    <div class="sp-section">
+      <h3>Live from Shopify</h3>
+      <p class="sp-section-sub">
+        Unshipped orders + anything shipped in the last 30 days. Click <strong>Mark Applied</strong> once a sticker is on the order.
+        Shipped status is inherited from Shopify fulfillment.
+      </p>
+
+      <div class="sp-filters">
+        {% set live_filters = [
+          ('needed', 'Needed'),
+          ('applied', 'Applied'),
+          ('shipped', 'Shipped'),
+          ('cancelled', 'Cancelled'),
+          ('all', 'All'),
+        ] %}
+        {% for key, label in live_filters %}
+          <a href="{{ url_for('sticker_preorders', live=key) }}"
+             class="sp-chip {% if live_filter == key %}active{% endif %}">
+            {{ label }}
+            <span class="sp-chip-count">{{ live_counts.get(key, 0) }}</span>
+          </a>
+        {% endfor %}
+      </div>
+
+      {% if live_filter in ('needed', 'all') and live_tally|length > 0 %}
+        {% set tally_total_qty = live_tally | sum(attribute='total_quantity') %}
+        <div class="sp-collapsible-header collapsed" onclick="spToggleSection('spTallyPanel', this)" style="margin-top: 18px;">
+          <span>Aggregated tally · {{ live_tally|length }} unique · {{ tally_total_qty }} total qty</span>
+          <svg class="sp-caret" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </div>
+        <div class="sp-collapsible-content hidden" id="spTallyPanel">
+          <table class="sp-tally-table">
+            <thead>
+              <tr>
+                <th style="width: 90px;">Qty</th>
+                <th>Product</th>
+                <th style="width: 180px;">SKU</th>
+                <th style="width: 130px;">Orders</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for t in live_tally %}
+                <tr>
+                  <td><span class="sp-tally-qty">{{ t.total_quantity }}</span></td>
+                  <td>
+                    <strong>{{ t.product_title }}</strong>
+                    {% if t.variant_title %}<div class="sp-meta-line">{{ t.variant_title }}</div>{% endif %}
+                  </td>
+                  <td><span class="sp-tally-sku">{{ t.sku }}</span></td>
+                  <td>{{ t.order_count }} order{{ '' if t.order_count == 1 else 's' }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+
+      <div class="sp-collapsible-header" onclick="spToggleSection('spLinesPanel', this)" style="margin-top: 14px;">
+        <span>Line items · {{ live_lines|length }} shown</span>
+        <svg class="sp-caret" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="sp-collapsible-content" id="spLinesPanel">
+      {% if live_lines|length == 0 %}
+        <div class="sp-empty">
+          {% if live_counts.get('all', 0) == 0 %}
+            <strong>No sticker line items in synced orders.</strong>
+            <div style="margin-top: 8px; font-size: 13px;">
+              Either no orders contain matching titles, or the Shopify sync hasn't run yet.
+            </div>
+          {% else %}
+            No items match the <strong>{{ live_filter }}</strong> filter.
+          {% endif %}
+        </div>
+      {% else %}
+        <table class="rules-table">
+          <thead>
+            <tr>
+              <th style="width: 90px;">Order #</th>
+              <th>Customer</th>
+              <th>Product</th>
+              <th style="width: 160px;">SKU</th>
+              <th style="width: 50px;">Qty</th>
+              <th style="width: 110px;">Status</th>
+              <th style="width: 200px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in live_lines %}
+              <tr>
+                <td>
+                  {% if r.order_number %}<strong>#{{ r.order_number }}</strong>{% else %}<span class="sp-cell-muted">—</span>{% endif %}
+                  <div class="sp-meta-line">
+                    {{ r.shopify_created_at.strftime('%Y-%m-%d') if r.shopify_created_at else '' }}
+                  </div>
+                </td>
+                <td>{{ r.customer_name or '' }}{% if not r.customer_name %}<span class="sp-cell-muted">—</span>{% endif %}</td>
+                <td>
+                  <strong>{{ r.product_title }}</strong>
+                  {% if r.variant_title %}<div class="sp-meta-line">{{ r.variant_title }}</div>{% endif %}
+                  {% if r.manual_updated_at and r.effective_status in ['applied','cancelled'] %}
+                    <div class="sp-meta-line">
+                      {{ r.effective_status | title }} {{ r.manual_updated_at.strftime('%Y-%m-%d %H:%M') }}
+                      {% if r.manual_updated_by %} by {{ r.manual_updated_by }}{% endif %}
+                    </div>
+                  {% endif %}
+                </td>
+                <td><span class="sp-tally-sku">{{ r.sku or '—' }}</span></td>
+                <td><strong>{{ r.quantity }}</strong></td>
+                <td><span class="sp-status-pill sp-status-{{ r.effective_status }}">{{ r.effective_status }}</span></td>
+                <td>
+                  <div class="sp-inline-actions">
+                    {% if r.effective_status == 'needed' %}
+                      <form method="post" action="{{ url_for('update_sticker_line_status') }}" style="display:inline;">
+                        <input type="hidden" name="shopify_line_item_id" value="{{ r.shopify_line_item_id }}">
+                        <input type="hidden" name="action" value="apply">
+                        <button type="submit" class="sp-row-action-btn secondary">Mark Applied</button>
+                      </form>
+                      <form method="post" action="{{ url_for('update_sticker_line_status') }}" style="display:inline;">
+                        <input type="hidden" name="shopify_line_item_id" value="{{ r.shopify_line_item_id }}">
+                        <input type="hidden" name="action" value="cancel">
+                        <button type="submit" class="sp-row-action-btn">Skip</button>
+                      </form>
+                    {% elif r.effective_status == 'applied' %}
+                      <form method="post" action="{{ url_for('update_sticker_line_status') }}" style="display:inline;">
+                        <input type="hidden" name="shopify_line_item_id" value="{{ r.shopify_line_item_id }}">
+                        <input type="hidden" name="action" value="unapply">
+                        <button type="submit" class="sp-row-action-btn">Undo</button>
+                      </form>
+                    {% elif r.effective_status == 'cancelled' %}
+                      <form method="post" action="{{ url_for('update_sticker_line_status') }}" style="display:inline;">
+                        <input type="hidden" name="shopify_line_item_id" value="{{ r.shopify_line_item_id }}">
+                        <input type="hidden" name="action" value="uncancel">
+                        <button type="submit" class="sp-row-action-btn">Restore</button>
+                      </form>
+                    {% else %}
+                      <span class="sp-cell-muted" style="font-size: 12px;">(from Shopify)</span>
+                    {% endif %}
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+      </div><!-- /spLinesPanel -->
+    </div>
+
+    <!-- ─── CSV UPLOAD (FALLBACK) ─────────────────────────────────────────── -->
+    <div class="sp-collapsible-header collapsed" onclick="spToggleSection('spCsvPanel', this)">
+      <span>CSV upload (fallback for ad-hoc batches) · {{ batches|length }} saved batch{{ '' if batches|length == 1 else 'es' }}</span>
+      <svg class="sp-caret" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="6 9 12 15 18 9"/>
+      </svg>
+    </div>
+    <div class="sp-collapsible-content hidden" id="spCsvPanel">
+
+    <!-- ─── UPLOAD ───────────────────────────────────────────────────────── -->
+    <div class="sp-section">
+      <h3>1. Upload ShipStation CSV</h3>
+      <p class="sp-section-sub">
+        Export your orders from ShipStation as CSV, then upload below. Each upload is stored as a separate batch so you can revisit past tallies.
+      </p>
+      <form method="post" action="{{ url_for('upload_sticker_preorders_csv') }}" enctype="multipart/form-data">
+        <div class="sp-upload-row">
+          <input type="file" name="csv_file" accept=".csv" required>
+          <button type="submit" class="add-btn">↑ Upload &amp; Tally</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- ─── BATCH SELECTOR + TALLY ───────────────────────────────────────── -->
+    <div class="sp-section">
+      <h3>2. Sticker tally</h3>
+      {% if batches|length == 0 %}
+        <div class="sp-empty">
+          <strong>No CSV uploads yet.</strong>
+          <div style="margin-top: 8px; font-size: 13px;">Upload your first ShipStation export above to see the sticker tally here.</div>
+        </div>
+      {% else %}
+        <div class="sp-batch-selector">
+          <form method="get" action="{{ url_for('sticker_preorders') }}" style="display:flex; flex:1 1 360px; gap:12px; align-items:center;">
+            <label for="batch_id" style="font-weight: 600; color: #34495e;">Batch:</label>
+            <select name="batch_id" id="batch_id" onchange="this.form.submit()" style="flex:1; min-width:240px; padding:8px 10px; border:1px solid #d9e0e6; border-radius:6px; background:#fff;">
+              {% for b in batches %}
+                <option value="{{ b.id }}" {% if selected_batch and b.id == selected_batch.id %}selected{% endif %}>
+                  {{ b.filename }} &nbsp;·&nbsp;
+                  {{ b.uploaded_at.strftime('%Y-%m-%d %H:%M') if b.uploaded_at else '—' }}
+                  {% if b.uploaded_by %} · {{ b.uploaded_by }}{% endif %}
+                  &nbsp;({{ b.total_sticker_qty }} stickers, {{ b.total_orders }} orders)
+                </option>
+              {% endfor %}
+            </select>
+          </form>
+          {% if selected_batch %}
+            <form method="post" action="{{ url_for('delete_sticker_upload_batch') }}" style="display:inline;"
+                  onsubmit="return confirm('Delete this entire upload batch and all its tallied stickers?');">
+              <input type="hidden" name="batch_id" value="{{ selected_batch.id }}">
+              <button type="submit" class="sp-delete-batch-btn">Delete batch</button>
+            </form>
+          {% endif %}
+        </div>
+
+        {% if selected_batch %}
+          <div class="sp-batch-meta">
+            <div class="sp-stat">
+              <strong>{{ selected_batch.total_sticker_qty }}</strong>
+              <span class="sp-stat-label">Total stickers</span>
+            </div>
+            <div class="sp-stat">
+              <strong>{{ selected_batch.unique_sticker_count }}</strong>
+              <span class="sp-stat-label">Unique stickers</span>
+            </div>
+            <div class="sp-stat">
+              <strong>{{ selected_batch.total_orders }}</strong>
+              <span class="sp-stat-label">Orders with stickers</span>
+            </div>
+            <div class="sp-stat">
+              <strong>{{ selected_batch.source_rows }}</strong>
+              <span class="sp-stat-label">CSV rows scanned</span>
+            </div>
+          </div>
+
+          {% if tally|length == 0 %}
+            <div class="sp-empty">No sticker line items in this batch.</div>
+          {% else %}
+            <table class="sp-tally-table">
+              <thead>
+                <tr>
+                  <th style="width: 90px;">Qty</th>
+                  <th>Product</th>
+                  <th style="width: 180px;">SKU</th>
+                  <th style="width: 130px;">Orders</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for t in tally %}
+                  <tr>
+                    <td><span class="sp-tally-qty">{{ t.total_quantity }}</span></td>
+                    <td><strong>{{ t.product_title }}</strong></td>
+                    <td><span class="sp-tally-sku">{{ t.sku }}</span></td>
+                    <td>{{ t.order_count }} order{{ '' if t.order_count == 1 else 's' }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endif %}
+        {% endif %}
+      {% endif %}
+    </div>
+
+    </div><!-- /spCsvPanel -->
+
+    <!-- ─── MANUAL ENTRY (COLLAPSED, FOR ONE-OFFS) ──────────────────────── -->
+    <div class="sp-collapsible-header collapsed" onclick="spToggleSection('spManualPanel', this)">
+      <span>Manual entries (for one-offs) · {{ counts.get('all', 0) }} total</span>
+      <svg class="sp-caret" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="6 9 12 15 18 9"/>
+      </svg>
+    </div>
+    <div class="sp-collapsible-content hidden" id="spManualPanel">
+      <p style="color: #666; font-size: 13px; margin-bottom: 14px;">
+        Use this for one-off pre-order notes not tied to a CSV upload.
+      </p>
+
+      <div class="add-form" style="box-shadow:none; padding: 0; margin-bottom: 16px;">
+        <form method="post" action="{{ url_for('add_sticker_preorder') }}">
+          <div class="form-row">
+            <div class="form-group narrow">
+              <label for="order_number">Order #</label>
+              <input type="text" name="order_number" id="order_number" placeholder="60430">
+            </div>
+            <div class="form-group">
+              <label for="customer_name">Customer</label>
+              <input type="text" name="customer_name" id="customer_name" placeholder="Auto-filled if order # found">
+            </div>
+            <div class="form-group narrow">
+              <label for="sku">SKU</label>
+              <input type="text" name="sku" id="sku">
+            </div>
+            <div class="form-group">
+              <label for="product_title">Product / Sticker <span style="color:#c62828">*</span></label>
+              <input type="text" name="product_title" id="product_title" required>
+            </div>
+            <div class="form-group narrow">
+              <label for="quantity">Qty</label>
+              <input type="number" name="quantity" id="quantity" min="1" value="1">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="notes">Notes</label>
+              <input type="text" name="notes" id="notes">
+            </div>
+            <div class="form-group" style="flex: 0;">
+              <button type="submit" class="add-btn">+ Add One-Off</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <div class="sp-filters">
+        {% set filters = [
+          ('active', 'Active'),
+          ('needed', 'Needed'),
+          ('applied', 'Applied'),
+          ('shipped', 'Shipped'),
+          ('cancelled', 'Cancelled'),
+          ('all', 'All'),
+        ] %}
+        {% for key, label in filters %}
+          <a href="{{ url_for('sticker_preorders', status=key, batch_id=(selected_batch.id if selected_batch else None)) }}"
+             class="sp-chip {% if status_filter == key %}active{% endif %}">
+            {{ label }}
+            <span class="sp-chip-count">{{ counts.get(key, 0) }}</span>
+          </a>
+        {% endfor %}
+      </div>
+
+      {% if preorders|length == 0 %}
+        <div class="sp-empty">No manual entries match this filter.</div>
+      {% else %}
+        <table class="rules-table">
+          <thead>
+            <tr>
+              <th style="width: 90px;">Order #</th>
+              <th>Customer</th>
+              <th>Product / Sticker</th>
+              <th style="width: 60px;">Qty</th>
+              <th style="width: 110px;">Status</th>
+              <th>Notes</th>
+              <th style="width: 240px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in preorders %}
+              <tr>
+                <td>
+                  {% if p.order_number %}<strong>#{{ p.order_number }}</strong>{% else %}<span class="sp-cell-muted">—</span>{% endif %}
+                </td>
+                <td>{{ p.customer_name or '' }}{% if not p.customer_name %}<span class="sp-cell-muted">—</span>{% endif %}</td>
+                <td>
+                  <strong>{{ p.product_title }}</strong>
+                  {% if p.sku %}<div class="sp-meta-line">SKU: <span style="font-family: monospace;">{{ p.sku }}</span></div>{% endif %}
+                  <div class="sp-meta-line">
+                    Added {{ p.created_at.strftime('%Y-%m-%d') if p.created_at else '' }}
+                    {% if p.created_by %} by {{ p.created_by }}{% endif %}
+                  </div>
+                </td>
+                <td><strong>{{ p.quantity }}</strong></td>
+                <td><span class="sp-status-pill sp-status-{{ p.status }}">{{ p.status }}</span></td>
+                <td><div class="sp-notes">{{ p.notes or '' }}</div></td>
+                <td>
+                  <div class="sp-inline-actions">
+                    {% if p.status == 'needed' %}
+                      <form method="post" action="{{ url_for('update_sticker_preorder_status') }}" style="display:inline;">
+                        <input type="hidden" name="id" value="{{ p.id }}">
+                        <input type="hidden" name="status" value="applied">
+                        <input type="hidden" name="return_filter" value="{{ status_filter }}">
+                        <button type="submit" class="sp-row-action-btn secondary">Applied</button>
+                      </form>
+                    {% endif %}
+                    {% if p.status in ['needed', 'applied'] %}
+                      <form method="post" action="{{ url_for('update_sticker_preorder_status') }}" style="display:inline;">
+                        <input type="hidden" name="id" value="{{ p.id }}">
+                        <input type="hidden" name="status" value="shipped">
+                        <input type="hidden" name="return_filter" value="{{ status_filter }}">
+                        <button type="submit" class="sp-row-action-btn primary">Shipped</button>
+                      </form>
+                      <form method="post" action="{{ url_for('update_sticker_preorder_status') }}" style="display:inline;">
+                        <input type="hidden" name="id" value="{{ p.id }}">
+                        <input type="hidden" name="status" value="cancelled">
+                        <input type="hidden" name="return_filter" value="{{ status_filter }}">
+                        <button type="submit" class="sp-row-action-btn">Cancel</button>
+                      </form>
+                    {% endif %}
+                    {% if p.status in ['shipped', 'cancelled'] %}
+                      <form method="post" action="{{ url_for('update_sticker_preorder_status') }}" style="display:inline;">
+                        <input type="hidden" name="id" value="{{ p.id }}">
+                        <input type="hidden" name="status" value="needed">
+                        <input type="hidden" name="return_filter" value="{{ status_filter }}">
+                        <button type="submit" class="sp-row-action-btn">Reopen</button>
+                      </form>
+                    {% endif %}
+                    <form method="post" action="{{ url_for('delete_sticker_preorder') }}" style="display:inline;"
+                          onsubmit="return confirm('Delete this manual entry?');">
+                      <input type="hidden" name="id" value="{{ p.id }}">
+                      <input type="hidden" name="return_filter" value="{{ status_filter }}">
+                      <button type="submit" class="sp-row-action-btn danger">Delete</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function spToggleSection(panelId, header) {
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+    const isHidden = panel.classList.toggle('hidden');
+    header.classList.toggle('collapsed', isHidden);
+  }
+</script>
+{% endblock %}

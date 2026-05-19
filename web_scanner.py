@@ -1435,6 +1435,111 @@ def update_canadapost_tracking_cache(tracking_numbers, force_refresh=False):
         conn.close()
 
 
+def init_sticker_preorders_table():
+    """
+    Initialize sticker_preorders table for the Extras → Sticker Pre-Orders page.
+    Lightweight log of items needing pre-order stickers applied.
+    """
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sticker_preorders (
+                id SERIAL PRIMARY KEY,
+                order_number TEXT,
+                customer_name TEXT,
+                sku TEXT,
+                product_title TEXT NOT NULL,
+                quantity INTEGER DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'needed',
+                notes TEXT,
+                created_by TEXT,
+                updated_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sticker_preorders_status ON sticker_preorders(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sticker_preorders_order_number ON sticker_preorders(order_number)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sticker_preorders_created_at ON sticker_preorders(created_at)")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✓ Sticker pre-orders table initialized")
+    except Exception as e:
+        print(f"❌ Error initializing sticker_preorders: {e}")
+
+
+def init_sticker_upload_tables():
+    """
+    Initialize tables for ShipStation CSV uploads and parsed sticker line items.
+    """
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sticker_upload_batches (
+                id SERIAL PRIMARY KEY,
+                filename TEXT,
+                uploaded_by TEXT,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                total_orders INTEGER DEFAULT 0,
+                total_sticker_qty INTEGER DEFAULT 0,
+                unique_sticker_count INTEGER DEFAULT 0,
+                source_rows INTEGER DEFAULT 0,
+                notes TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sticker_upload_lines (
+                id SERIAL PRIMARY KEY,
+                batch_id INTEGER NOT NULL REFERENCES sticker_upload_batches(id) ON DELETE CASCADE,
+                order_number TEXT,
+                customer_name TEXT,
+                sku TEXT,
+                product_title TEXT NOT NULL,
+                quantity INTEGER DEFAULT 1
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sticker_upload_lines_batch ON sticker_upload_lines(batch_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sticker_upload_lines_sku ON sticker_upload_lines(sku)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sticker_upload_batches_uploaded_at ON sticker_upload_batches(uploaded_at)")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✓ Sticker upload tables initialized")
+    except Exception as e:
+        print(f"❌ Error initializing sticker_upload tables: {e}")
+
+
+def init_sticker_line_status_table():
+    """
+    Per-line-item sticker status keyed by Shopify line item ID.
+    Rows only exist for items explicitly marked 'applied' or 'cancelled' by an operator.
+    Absence of a row => 'needed' (the default). 'shipped' is derived from orders.fulfillment_status.
+    """
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sticker_line_status (
+                shopify_line_item_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'applied',
+                updated_by TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                notes TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sticker_line_status_status ON sticker_line_status(status)")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("✓ Sticker line status table initialized")
+    except Exception as e:
+        print(f"❌ Error initializing sticker_line_status: {e}")
+
+
 # Initialize cache tables on startup
 init_shipments_cache()
 init_tracking_status_cache()
@@ -1442,6 +1547,9 @@ init_tracking_groups()
 init_carrier_accounts()
 init_product_likes_table()
 init_orders_tables(get_db_connection)
+init_sticker_preorders_table()
+init_sticker_upload_tables()
+init_sticker_line_status_table()
 normalize_table_collations()
 
 def sync_shipments_from_shipstation():
@@ -4784,6 +4892,628 @@ def delete_location_rule():
         conn.close()
 
     return redirect(url_for("item_locations"))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ── Extras: Sticker Pre-Orders ────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+
+STICKER_PREORDER_STATUSES = ("needed", "applied", "shipped", "cancelled")
+STICKER_LINE_STATUSES = ("applied", "cancelled")  # absence in table => 'needed'; 'shipped' is derived
+
+# Case-insensitive substring match against the product title.
+# "sticker" covers both "Sticker" and "Stickers"; "highlights" and "tabs" are
+# matched as given. Edit this list to tune detection.
+STICKER_TITLE_KEYWORDS = ("sticker", "highlights", "tabs")
+
+STICKER_TITLE_KEYWORDS_DEFAULT = STICKER_TITLE_KEYWORDS  # immutable fallback
+
+def get_sticker_keywords():
+    """Read sticker title keywords from app_settings.
+    Returns a tuple of lowercased keywords. Falls back to STICKER_TITLE_KEYWORDS_DEFAULT.
+    """
+    raw = get_setting("sticker_keywords", None)
+    if not raw:
+        return STICKER_TITLE_KEYWORDS_DEFAULT
+    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    return tuple(parts) if parts else STICKER_TITLE_KEYWORDS_DEFAULT
+
+
+# ShipStation column-name candidates (matched case-insensitively, in order)
+SHIPSTATION_COL_CANDIDATES = {
+    "order_number":  ["Order - Number", "Order Number", "OrderNumber", "Order #", "Order"],
+    "customer_name": ["Recipient - Name", "Recipient Name", "Ship To - Name", "Ship To Name", "ShipTo - Name", "Customer Name", "Bill To Name", "Buyer Name"],
+    "sku":           ["Item - SKU", "Item SKU", "ItemSKU", "SKU", "Product SKU"],
+    "product_title": ["Item - Name", "Item Name", "Product Name", "Item - Title", "Item Title", "Item Description", "Item"],
+    "quantity":      ["Item - Quantity", "Item Quantity", "Quantity", "Qty", "Item Qty"],
+}
+
+
+def _current_user_label():
+    return session.get("user_email") or session.get("user_name") or "unknown"
+
+
+def _pick_column(fieldnames, candidates):
+    """Return the actual header name from `fieldnames` that matches any candidate (case-insensitive)."""
+    if not fieldnames:
+        return None
+    lookup = {fn.strip().lower(): fn for fn in fieldnames if fn}
+    for cand in candidates:
+        actual = lookup.get(cand.strip().lower())
+        if actual:
+            return actual
+    return None
+
+
+def _title_is_sticker(title, keywords=None):
+    if not title:
+        return False
+    t = title.lower()
+    kws = keywords if keywords is not None else get_sticker_keywords()
+    return any(kw in t for kw in kws)
+
+
+@app.route("/sticker_preorders", methods=["GET"])
+def sticker_preorders():
+    """
+    Sticker Pre-Orders tracker page.
+    Primary view: live list of sticker line items pulled from synced Shopify orders
+    (unfulfilled OR fulfilled within last 30 days). Operators mark items 'applied'.
+    Fallback views: ShipStation CSV upload tally + manual one-off entries.
+    """
+    status_filter = (request.args.get("status") or "active").lower()
+    live_filter = (request.args.get("live") or "needed").lower()  # needed|applied|shipped|all
+
+    keywords = get_sticker_keywords()
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+
+        # ── LIVE: sticker line items from synced Shopify orders ──
+        # Title match via ILIKE ANY; scope to unfulfilled OR fulfilled within last 30 days.
+        title_patterns = [f"%{kw}%" for kw in keywords]
+        cursor.execute("""
+            SELECT
+                oli.id              AS line_item_id,
+                oli.shopify_line_item_id,
+                oli.sku,
+                oli.product_title,
+                oli.variant_title,
+                oli.quantity,
+                o.id                AS order_id,
+                o.order_number,
+                o.customer_name,
+                o.fulfillment_status,
+                o.shopify_created_at,
+                o.cancelled_at,
+                sls.status          AS manual_status,
+                sls.updated_by      AS manual_updated_by,
+                sls.updated_at      AS manual_updated_at
+            FROM order_line_items oli
+            JOIN orders o ON o.id = oli.order_id
+            LEFT JOIN sticker_line_status sls
+                   ON sls.shopify_line_item_id = oli.shopify_line_item_id
+            WHERE oli.shopify_line_item_id IS NOT NULL
+              AND LOWER(oli.product_title) ILIKE ANY (%s)
+              AND o.cancelled_at IS NULL
+              AND (
+                    o.fulfillment_status IS NULL
+                 OR LOWER(o.fulfillment_status) IN ('unfulfilled','partial','open')
+                 OR o.shopify_updated_at >= NOW() - INTERVAL '30 days'
+              )
+            ORDER BY o.shopify_created_at DESC, oli.id
+        """, (title_patterns,))
+        raw_lines = cursor.fetchall()
+
+        # Derive effective status per line + counts
+        def effective_status(row):
+            ful = (row.get("fulfillment_status") or "").lower()
+            if ful in ("fulfilled", "shipped"):
+                return "shipped"
+            ms = (row.get("manual_status") or "").lower()
+            if ms == "cancelled":
+                return "cancelled"
+            if ms == "applied":
+                return "applied"
+            return "needed"
+
+        live_lines = []
+        live_counts = {"needed": 0, "applied": 0, "shipped": 0, "cancelled": 0}
+        for row in raw_lines:
+            st = effective_status(row)
+            row["effective_status"] = st
+            live_counts[st] = live_counts.get(st, 0) + 1
+            live_lines.append(row)
+        live_counts["all"] = sum(live_counts.values())
+
+        # Apply live filter
+        if live_filter in ("needed", "applied", "shipped", "cancelled"):
+            live_lines_filtered = [r for r in live_lines if r["effective_status"] == live_filter]
+        else:
+            live_lines_filtered = live_lines
+
+        # Aggregated tally for current live view
+        # Group by (sku, product_title, variant_title) so e.g. "Monthly Tabs - January" and
+        # "Monthly Tabs - February" remain distinct rows. Excludes shipped/cancelled.
+        live_tally_map = {}
+        for r in live_lines:
+            if r["effective_status"] in ("shipped", "cancelled"):
+                continue
+            sku = (r.get("sku") or "").strip() or "—"
+            ptitle = r.get("product_title") or ""
+            vtitle = (r.get("variant_title") or "").strip()
+            key = (sku, ptitle, vtitle)
+            entry = live_tally_map.setdefault(
+                key,
+                {
+                    "sku": sku,
+                    "product_title": ptitle,
+                    "variant_title": vtitle,
+                    "display_title": f"{ptitle} — {vtitle}" if vtitle else ptitle,
+                    "total_quantity": 0,
+                    "order_count": 0,
+                    "_orders": set(),
+                }
+            )
+            entry["total_quantity"] += int(r.get("quantity") or 0)
+            ono = r.get("order_number")
+            if ono:
+                entry["_orders"].add(ono)
+        live_tally = []
+        for entry in live_tally_map.values():
+            entry["order_count"] = len(entry.pop("_orders"))
+            live_tally.append(entry)
+        live_tally.sort(key=lambda e: (-e["total_quantity"], e["product_title"], e["variant_title"]))
+
+        # ── Upload batches (most-recent first) ──
+        cursor.execute("""
+            SELECT id, filename, uploaded_by, uploaded_at,
+                   total_orders, total_sticker_qty, unique_sticker_count, source_rows, notes
+            FROM sticker_upload_batches
+            ORDER BY uploaded_at DESC
+        """)
+        batches = cursor.fetchall()
+
+        # Resolve which batch to show: ?batch_id=X or default to latest
+        requested_batch_id = request.args.get("batch_id", type=int)
+        selected_batch = None
+        if requested_batch_id:
+            for b in batches:
+                if b["id"] == requested_batch_id:
+                    selected_batch = b
+                    break
+        if selected_batch is None and batches:
+            selected_batch = batches[0]
+
+        # Aggregated tally for selected batch
+        tally = []
+        if selected_batch:
+            cursor.execute("""
+                SELECT
+                    COALESCE(NULLIF(TRIM(sku), ''), '—') AS sku,
+                    product_title,
+                    SUM(quantity)::int AS total_quantity,
+                    COUNT(DISTINCT order_number)::int AS order_count
+                FROM sticker_upload_lines
+                WHERE batch_id = %s
+                GROUP BY COALESCE(NULLIF(TRIM(sku), ''), '—'), product_title
+                ORDER BY total_quantity DESC, product_title
+            """, (selected_batch["id"],))
+            tally = cursor.fetchall()
+
+        # ── Manual entries (still supported, secondary section) ──
+        where_sql = ""
+        params = []
+        if status_filter == "active":
+            where_sql = "WHERE status IN ('needed', 'applied')"
+        elif status_filter in STICKER_PREORDER_STATUSES:
+            where_sql = "WHERE status = %s"
+            params.append(status_filter)
+        # "all" => no filter
+
+        cursor.execute(f"""
+            SELECT id, order_number, customer_name, sku, product_title, quantity,
+                   status, notes, created_by, updated_by,
+                   created_at, updated_at, completed_at
+            FROM sticker_preorders
+            {where_sql}
+            ORDER BY
+              CASE status
+                WHEN 'needed' THEN 0
+                WHEN 'applied' THEN 1
+                WHEN 'shipped' THEN 2
+                WHEN 'cancelled' THEN 3
+                ELSE 4
+              END,
+              created_at DESC
+        """, params)
+        rows = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT status, COUNT(*) AS n
+            FROM sticker_preorders
+            GROUP BY status
+        """)
+        count_rows = cursor.fetchall()
+        counts = {r["status"]: r["n"] for r in count_rows}
+        counts["active"] = counts.get("needed", 0) + counts.get("applied", 0)
+        counts["all"] = sum(r["n"] for r in count_rows)
+
+        return render_template(
+            "sticker_preorders.html",
+            preorders=rows,
+            counts=counts,
+            status_filter=status_filter,
+            batches=batches,
+            selected_batch=selected_batch,
+            tally=tally,
+            sticker_keywords=keywords,
+            live_lines=live_lines_filtered,
+            live_counts=live_counts,
+            live_tally=live_tally,
+            live_filter=live_filter,
+            version=__version__,
+            active_page="sticker_preorders"
+        )
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@app.route("/sticker_preorders/upload", methods=["POST"])
+def upload_sticker_preorders_csv():
+    """
+    Accept a ShipStation orders CSV export, scan it for sticker line items
+    (title contains any of STICKER_TITLE_KEYWORDS), and store as a new batch.
+    """
+    file = request.files.get("csv_file")
+    if not file or not file.filename:
+        flash("Please choose a CSV file to upload.", "error")
+        return redirect(url_for("sticker_preorders"))
+
+    filename = file.filename
+    if not filename.lower().endswith(".csv"):
+        flash("File must be a .csv export.", "error")
+        return redirect(url_for("sticker_preorders"))
+
+    # Read raw bytes, decode with BOM-safe utf-8 fallback to latin-1
+    raw = file.read()
+    text = None
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        flash("Could not decode the CSV file. Try saving it as UTF-8.", "error")
+        return redirect(url_for("sticker_preorders"))
+
+    # Sniff dialect (delimiter) — fallback to comma
+    sample = text[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    fieldnames = reader.fieldnames or []
+
+    col_order = _pick_column(fieldnames, SHIPSTATION_COL_CANDIDATES["order_number"])
+    col_cust  = _pick_column(fieldnames, SHIPSTATION_COL_CANDIDATES["customer_name"])
+    col_sku   = _pick_column(fieldnames, SHIPSTATION_COL_CANDIDATES["sku"])
+    col_title = _pick_column(fieldnames, SHIPSTATION_COL_CANDIDATES["product_title"])
+    col_qty   = _pick_column(fieldnames, SHIPSTATION_COL_CANDIDATES["quantity"])
+
+    if not col_title:
+        flash(
+            "Could not find a product/item name column in the CSV. "
+            f"Detected columns: {', '.join(fieldnames) or '(none)'}",
+            "error"
+        )
+        return redirect(url_for("sticker_preorders"))
+
+    sticker_lines = []   # (order_number, customer_name, sku, product_title, qty)
+    source_rows = 0
+    for row in reader:
+        source_rows += 1
+        title = (row.get(col_title) or "").strip()
+        if not title or not _title_is_sticker(title):
+            continue
+        try:
+            qty = int(float((row.get(col_qty) or "1").strip() or "1"))
+        except (TypeError, ValueError):
+            qty = 1
+        if qty < 1:
+            qty = 1
+        order_number = ((row.get(col_order) or "").strip().lstrip("#")) if col_order else ""
+        customer     = (row.get(col_cust) or "").strip() if col_cust else ""
+        sku          = (row.get(col_sku) or "").strip() if col_sku else ""
+        sticker_lines.append((order_number or None, customer or None, sku or None, title, qty))
+
+    if not sticker_lines:
+        flash(
+            f"No sticker line items found in {filename} "
+            f"(searched {source_rows} rows for keywords: {', '.join(get_sticker_keywords())}). "
+            "Nothing was saved.",
+            "error"
+        )
+        return redirect(url_for("sticker_preorders"))
+
+    total_qty = sum(r[4] for r in sticker_lines)
+    unique_titles = len({(r[2] or "", r[3]) for r in sticker_lines})
+    unique_orders = len({r[0] for r in sticker_lines if r[0]})
+
+    user = _current_user_label()
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO sticker_upload_batches
+              (filename, uploaded_by, total_orders, total_sticker_qty, unique_sticker_count, source_rows)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (filename, user, unique_orders, total_qty, unique_titles, source_rows))
+        batch_id = cursor.fetchone()["id"]
+
+        psycopg2.extras.execute_values(
+            cursor,
+            """
+            INSERT INTO sticker_upload_lines
+              (batch_id, order_number, customer_name, sku, product_title, quantity)
+            VALUES %s
+            """,
+            [(batch_id, *line) for line in sticker_lines]
+        )
+        conn.commit()
+        flash(
+            f"✅ Imported {len(sticker_lines)} sticker line items "
+            f"({total_qty} qty across {unique_orders} order(s), {unique_titles} unique sticker(s)) from {filename}.",
+            "success"
+        )
+        return redirect(url_for("sticker_preorders", batch_id=batch_id))
+    except Exception as e:
+        flash(f"Error importing CSV: {str(e)}", "error")
+        return redirect(url_for("sticker_preorders"))
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@app.route("/sticker_preorders/delete_batch", methods=["POST"])
+def delete_sticker_upload_batch():
+    """Delete an entire CSV upload batch (cascades to lines)."""
+    batch_id = request.form.get("batch_id")
+    if not batch_id:
+        flash("Invalid batch ID.", "error")
+        return redirect(url_for("sticker_preorders"))
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM sticker_upload_batches WHERE id = %s", (batch_id,))
+        conn.commit()
+        if cursor.rowcount > 0:
+            flash("✅ Upload batch deleted.", "success")
+        else:
+            flash("Batch not found.", "error")
+    except Exception as e:
+        flash(f"Error deleting batch: {str(e)}", "error")
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+    return redirect(url_for("sticker_preorders"))
+
+
+@app.route("/sticker_preorders/add", methods=["POST"])
+def add_sticker_preorder():
+    """Add a new sticker pre-order entry."""
+    order_number = (request.form.get("order_number") or "").strip().lstrip("#")
+    customer_name = (request.form.get("customer_name") or "").strip()
+    sku = (request.form.get("sku") or "").strip()
+    product_title = (request.form.get("product_title") or "").strip()
+    quantity_raw = (request.form.get("quantity") or "1").strip()
+    notes = (request.form.get("notes") or "").strip()
+
+    if not product_title:
+        flash("Product/sticker description is required.", "error")
+        return redirect(url_for("sticker_preorders"))
+
+    try:
+        quantity = max(1, int(quantity_raw))
+    except ValueError:
+        quantity = 1
+
+    # If customer_name wasn't provided but order_number was, try to auto-fill from orders table.
+    if order_number and not customer_name:
+        try:
+            conn_lookup = get_mysql_connection()
+            try:
+                cur_lookup = conn_lookup.cursor()
+                cur_lookup.execute(
+                    "SELECT customer_name FROM orders WHERE order_number = %s ORDER BY shopify_created_at DESC LIMIT 1",
+                    (order_number,)
+                )
+                row = cur_lookup.fetchone()
+                if row and row.get("customer_name"):
+                    customer_name = row["customer_name"]
+            finally:
+                try:
+                    cur_lookup.close()
+                except Exception:
+                    pass
+                conn_lookup.close()
+        except Exception as e:
+            print(f"⚠️ Sticker pre-order customer lookup failed: {e}")
+
+    user = _current_user_label()
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO sticker_preorders
+              (order_number, customer_name, sku, product_title, quantity, notes, created_by, updated_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            order_number or None,
+            customer_name or None,
+            sku or None,
+            product_title,
+            quantity,
+            notes or None,
+            user,
+            user,
+        ))
+        conn.commit()
+        flash(f"✅ Added sticker pre-order: {product_title}", "success")
+    except Exception as e:
+        flash(f"Error adding pre-order: {str(e)}", "error")
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+    return redirect(url_for("sticker_preorders"))
+
+
+@app.route("/sticker_preorders/update_status", methods=["POST"])
+def update_sticker_preorder_status():
+    """Change the status of a sticker pre-order entry."""
+    preorder_id = request.form.get("id")
+    new_status = (request.form.get("status") or "").strip().lower()
+
+    if not preorder_id or new_status not in STICKER_PREORDER_STATUSES:
+        flash("Invalid status update.", "error")
+        return redirect(url_for("sticker_preorders"))
+
+    user = _current_user_label()
+    completed_at_sql = "CURRENT_TIMESTAMP" if new_status in ("shipped", "cancelled") else "NULL"
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            UPDATE sticker_preorders
+               SET status = %s,
+                   updated_by = %s,
+                   updated_at = CURRENT_TIMESTAMP,
+                   completed_at = {completed_at_sql}
+             WHERE id = %s
+        """, (new_status, user, preorder_id))
+        conn.commit()
+
+        if cursor.rowcount > 0:
+            flash(f"✅ Status updated to {new_status}.", "success")
+        else:
+            flash("Pre-order not found.", "error")
+    except Exception as e:
+        flash(f"Error updating status: {str(e)}", "error")
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+    return redirect(url_for("sticker_preorders", status=request.form.get("return_filter") or "active"))
+
+
+@app.route("/sticker_preorders/delete", methods=["POST"])
+def delete_sticker_preorder():
+    """Delete a sticker pre-order entry."""
+    preorder_id = request.form.get("id")
+    if not preorder_id:
+        flash("Invalid pre-order ID.", "error")
+        return redirect(url_for("sticker_preorders"))
+
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM sticker_preorders WHERE id = %s", (preorder_id,))
+        conn.commit()
+        if cursor.rowcount > 0:
+            flash("✅ Pre-order deleted.", "success")
+        else:
+            flash("Pre-order not found.", "error")
+    except Exception as e:
+        flash(f"Error deleting pre-order: {str(e)}", "error")
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+    return redirect(url_for("sticker_preorders", status=request.form.get("return_filter") or "active"))
+
+
+@app.route("/sticker_preorders/line_status", methods=["POST"])
+def update_sticker_line_status():
+    """
+    Toggle status for a live-from-Shopify sticker line item.
+
+    Form fields:
+      shopify_line_item_id (required)
+      action: 'apply' | 'unapply' | 'cancel' | 'uncancel'
+      ajax: '1' for JSON response, else flash + redirect
+    """
+    line_id = (request.form.get("shopify_line_item_id") or "").strip()
+    action = (request.form.get("action") or "").strip().lower()
+    is_ajax = request.form.get("ajax") == "1" or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+    if not line_id or action not in ("apply", "unapply", "cancel", "uncancel"):
+        if is_ajax:
+            return jsonify({"success": False, "error": "Invalid request"}), 400
+        flash("Invalid line status update.", "error")
+        return redirect(url_for("sticker_preorders"))
+
+    user = _current_user_label()
+    conn = get_mysql_connection()
+    try:
+        cursor = conn.cursor()
+        if action in ("unapply", "uncancel"):
+            # Remove the row -> falls back to 'needed' (default)
+            cursor.execute("DELETE FROM sticker_line_status WHERE shopify_line_item_id = %s", (line_id,))
+            new_status = "needed"
+        else:
+            new_status = "applied" if action == "apply" else "cancelled"
+            cursor.execute("""
+                INSERT INTO sticker_line_status (shopify_line_item_id, status, updated_by, updated_at)
+                VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (shopify_line_item_id) DO UPDATE
+                SET status = EXCLUDED.status,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (line_id, new_status, user))
+        conn.commit()
+
+        if is_ajax:
+            return jsonify({"success": True, "shopify_line_item_id": line_id, "status": new_status})
+        flash(f"✅ Status updated to {new_status}.", "success")
+    except Exception as e:
+        if is_ajax:
+            return jsonify({"success": False, "error": str(e)}), 500
+        flash(f"Error updating status: {str(e)}", "error")
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+    return redirect(url_for("sticker_preorders"))
 
 
 @app.route("/check_shipments", methods=["GET"])

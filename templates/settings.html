@@ -542,6 +542,7 @@
 <div class="settings-tabs">
   <button class="settings-tab active" onclick="switchSettingsTab('carriers')">Carrier Accounts</button>
   <button class="settings-tab" onclick="switchSettingsTab('packing')">Packing Slips</button>
+  <button class="settings-tab" onclick="switchSettingsTab('sticker')">Sticker Tracking</button>
 </div>
 
 <!-- Carrier Accounts Section -->
@@ -834,6 +835,35 @@
   </div>
 </div>
 </div><!-- End packing-section -->
+
+<!-- Sticker Tracking Section -->
+<div id="sticker-section" class="settings-section">
+  <div class="settings-card" style="max-width: 800px;">
+    <div class="card-header">
+      <h3>Sticker Tracking Keywords</h3>
+      <span style="font-size: 0.8rem; color: var(--text-muted);">
+        Line items whose product title contains any of these words show up on the Sticker Pre-Orders page.
+      </span>
+    </div>
+    <div class="card-body">
+      <div class="form-group">
+        <label for="sticker-keywords-input">Keywords (comma-separated, case-insensitive)</label>
+        <input type="text"
+               id="sticker-keywords-input"
+               placeholder="sticker, highlights, tabs"
+               value="{{ settings.get('sticker_keywords', 'sticker, highlights, tabs') }}">
+        <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">
+          Matched anywhere in the product title (substring). Default: <code>sticker, highlights, tabs</code>.
+        </div>
+      </div>
+      <div style="margin-top: 16px; display: flex; gap: 10px; align-items: center;">
+        <button type="button" class="btn btn-primary" onclick="saveStickerKeywords()">Save Keywords</button>
+        <button type="button" class="btn" onclick="resetStickerKeywords()">Reset to default</button>
+        <span id="sticker-save-status" style="font-size: 13px; color: var(--text-muted);"></span>
+      </div>
+    </div>
+  </div>
+</div>
 
 {% raw %}
 <script>
@@ -1343,6 +1373,41 @@
       }
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Sticker Tracking Keywords
+  // ═══════════════════════════════════════════════════════════════════════════
+  function saveStickerKeywords() {
+    const input = document.getElementById('sticker-keywords-input');
+    const status = document.getElementById('sticker-save-status');
+    const value = (input.value || '').trim();
+    status.textContent = 'Saving…';
+    status.style.color = 'var(--text-muted)';
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sticker_keywords: value })
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        status.textContent = '✓ Saved';
+        status.style.color = '#199b76';
+      } else {
+        status.textContent = 'Error: ' + (data.error || 'unknown');
+        status.style.color = '#952746';
+      }
+    })
+    .catch(err => {
+      status.textContent = 'Error: ' + err.message;
+      status.style.color = '#952746';
+    });
+  }
+
+  function resetStickerKeywords() {
+    document.getElementById('sticker-keywords-input').value = 'sticker, highlights, tabs';
+    saveStickerKeywords();
+  }
 </script>
 {% endraw %}
 {% endblock %}

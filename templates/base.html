@@ -187,6 +187,21 @@
               </a>
             </li>
           </ul>
+
+          <div class="text-[10px] font-bold uppercase tracking-widest px-4 mb-3 mt-8 text-text-muted opacity-60">
+            Extras
+          </div>
+          <ul class="space-y-1">
+            <li>
+              <a href="{{ url_for('sticker_preorders') }}"
+                 class="sidebar-item flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 group {% if active_page == 'sticker_preorders' %}bg-accent/15 text-accent{% else %}text-text-muted hover:bg-bg-main{% endif %}">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-[18px] h-[18px] {% if active_page == 'sticker_preorders' %}text-accent{% endif %}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M15 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9z"/><polyline points="15 3 15 9 21 9"/>
+                </svg>
+                <span class="text-sm tracking-wide">Sticker Pre-Orders</span>
+              </a>
+            </li>
+          </ul>
         </nav>
       </div>
 
